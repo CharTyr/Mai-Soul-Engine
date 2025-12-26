@@ -88,6 +88,8 @@ bind_blackbox_to_dream = true
 ```toml
 [debug]
 enabled = true
+# admin_only = true
+# admin_user_ids = ["qq:123456"]  # 注意要带引号；也可以只写 ["123456"]
 ```
 
 2) 重启 MaiBot 后，在群里发送：

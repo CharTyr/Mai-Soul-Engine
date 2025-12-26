@@ -24,7 +24,7 @@ enabled = true
 
 # 默认作用域：group(群独立) / global(跨所有群共享)
 # 说明：当 default_scope="global" 时，思维阁内化会变成“跨群共享底色偏移”。
-default_scope = "group"
+default_scope = "global"
 
 # 是否启用 global 聚合态（仅在 default_scope=global 时有意义）
 enable_global = true
@@ -68,10 +68,10 @@ max_tokens = 256
 update_mode = "dream_window"
 
 # dream_window：每群最多缓存多少条消息用于下一次 Dream 批处理
-dream_window_max_messages = 120
+dream_window_max_messages = 200
 
 # dream_window：单条消息进入窗口时的最大截断长度（字符）
-dream_window_max_chars_per_message = 160
+dream_window_max_chars_per_message = 300
 
 # dream_window：窗口规模强度缩放（越大越保守，越小越容易产生明显位移）
 window_strength_scale = 12.0
@@ -107,7 +107,7 @@ enabled = true
 mode = "ideology_lab"
 
 # 最多同时存在的槽位数（太大容易“人格发散”）
-max_slots = 3
+max_slots = 6
 
 # --- 5.1 内化策略（新手常用） ---
 # 成熟后是否自动内化（关闭则需要手动批准 /api/v1/soul/cabinet/decision）
@@ -341,16 +341,19 @@ plugin_dir = ""
 [debug]
 
 # 是否启用 /soul 调试命令（生产环境建议关闭）
-enabled = false
+enabled = true
 
 # 是否仅允许管理员使用调试命令
 admin_only = true
 
-# 允许使用调试命令的用户列表（格式：platform:user_id，例如 qq:123456）
-admin_user_ids = []
+# 允许使用调试命令的用户列表
+# - 推荐写法：["platform:user_id"]，例如 ["qq:123456"] / ["telegram:123456789"]
+# - 兼容写法：["123456"]（仅写 user_id，忽略平台）
+# 注意：数组元素必须是字符串（要带引号），否则会导致 TOML 解析失败。
+admin_user_ids = ["qq:768295235"]
 
 # 是否允许在私聊中使用调试命令
-allow_in_private = false
+allow_in_private = true
 
 # /soul simulate 的参数最大长度（字符）
 max_text_chars = 300

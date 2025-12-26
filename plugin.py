@@ -5253,20 +5253,39 @@ class SoulDebugCommand(BaseCommand):
         platform = str(getattr(self.message.message_info, "platform", "") or "")
         user_info = getattr(self.message.message_info, "user_info", None)
         user_id = str(getattr(user_info, "user_id", "") or "")
-        needle = f"{platform}:{user_id}"
+        needle_full = f"{platform}:{user_id}" if platform and user_id else ""
+        needle_uid = user_id
 
         allowed = self.get_config("debug.admin_user_ids", [])
         if not isinstance(allowed, list):
             allowed = []
-        allowed = [str(x).strip() for x in allowed if str(x).strip()]
-        if needle in allowed:
+        allowed_set: set[str] = set()
+        for x in allowed:
+            s = str(x).strip()
+            if not s:
+                continue
+            allowed_set.add(s)
+            if ":" in s:
+                allowed_set.add(s.split(":")[-1].strip())
+        if needle_uid and needle_uid in allowed_set:
+            return True, "ok"
+        if needle_full and needle_full in allowed_set:
             return True, "ok"
 
         # 兼容：如果用户已经在 influence.admin_user_ids，也视为有权限
         influence_admins = self.get_config("influence.admin_user_ids", [])
         if isinstance(influence_admins, list):
-            influence_admins = [str(x).strip() for x in influence_admins if str(x).strip()]
-            if needle in influence_admins:
+            admin_set: set[str] = set()
+            for x in influence_admins:
+                s = str(x).strip()
+                if not s:
+                    continue
+                admin_set.add(s)
+                if ":" in s:
+                    admin_set.add(s.split(":")[-1].strip())
+            if needle_uid and needle_uid in admin_set:
+                return True, "ok"
+            if needle_full and needle_full in admin_set:
                 return True, "ok"
 
         return False, "not_admin"
@@ -5287,7 +5306,22 @@ class SoulDebugCommand(BaseCommand):
             if reason == "private_not_allowed":
                 await self.send_text("调试命令默认只允许在群聊使用（可在 [debug].allow_in_private 开启私聊）。")
                 return True, "private_not_allowed", 1
-            await self.send_text("你没有权限使用 Soul 调试命令（可在 [debug].admin_user_ids 放行）。")
+            platform = str(getattr(self.message.message_info, "platform", "") or "")
+            user_info = getattr(self.message.message_info, "user_info", None)
+            user_id = str(getattr(user_info, "user_id", "") or "")
+            hint = f"{platform}:{user_id}" if platform and user_id else ""
+            if hint:
+                await self.send_text(
+                    "\n".join(
+                        [
+                            "你没有权限使用 Soul 调试命令。",
+                            f"把你的账号加入配置：`[debug].admin_user_ids = [\\\"{hint}\\\"]`（注意要带引号）",
+                            "或者只填 user_id：`[debug].admin_user_ids = [\"你的user_id\"]`",
+                        ]
+                    )
+                )
+            else:
+                await self.send_text("你没有权限使用 Soul 调试命令（可在 [debug].admin_user_ids 放行）。")
             return True, "not_allowed", 1
 
         sub = str(self.matched_groups.get("sub") or "").strip().lower()
