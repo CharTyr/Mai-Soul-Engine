@@ -51,6 +51,7 @@ token = "改成你自己的token"
 interval_minutes = 20.0
 window_minutes = 30.0
 rounds = 4
+min_messages_to_run = 30
 ```
 
 4) “麦麦自己”的账号识别（自动）

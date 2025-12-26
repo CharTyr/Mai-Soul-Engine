@@ -1123,15 +1123,20 @@ class SoulEngine:
             interval_min = max(1.0, min(interval_min, 24 * 60.0))
             quiet = float(self.get_config("introspection.quiet_period_seconds", 20.0))
             quiet = max(0.0, min(quiet, 3600.0))
+            min_msgs = int(self.get_config("introspection.min_messages_to_run", 30))
+            min_msgs = max(1, min(min_msgs, 2000))
             for sid, st in self._groups.items():
                 lock = self._get_lock(sid)
                 async with lock:
                     last = float(st.last_introspection_ts or 0.0)
                     due = (now - last) >= interval_min * 60.0
                     quiet_ok = (quiet <= 0.0) or ((now - float(st.last_activity_ts or 0.0)) >= quiet)
-                    has_new = bool(st.pending_messages) and (float(st.last_activity_ts or 0.0) > last)
                     has_seeds = bool(st.seed_queue)
-                    if (has_new or has_seeds) and due and quiet_ok and not self._introspection_task_active(sid):
+
+                    _from_ts, window_items = self._extract_window_locked(st, now=now)
+                    enough_msgs = len(window_items) >= min_msgs
+
+                    if (has_seeds or enough_msgs) and due and quiet_ok and not self._introspection_task_active(sid):
                         candidates.append((sid, float(st.last_activity_ts or 0.0)))
 
             # persistence
@@ -1881,15 +1886,16 @@ class MaiSoulEnginePlugin(BasePlugin):
             "interval_minutes": ConfigField(type=float, default=20.0, description="内省触发间隔（分钟）", min=1.0, max=24 * 60.0, order=0),
             "window_minutes": ConfigField(type=float, default=30.0, description="回看聊天时间窗（分钟）", min=1.0, max=24 * 60.0, order=1),
             "rounds": ConfigField(type=int, default=4, description="内省轮数（>=2）", min=2, max=8, order=2),
-            "max_messages_per_group": ConfigField(type=int, default=500, description="单次内省最多读取消息条数", min=20, max=2000, order=3),
-            "quiet_period_seconds": ConfigField(type=float, default=20.0, description="静默窗口（秒）：避免边聊边回想", min=0.0, max=3600.0, order=4),
-            "max_groups_per_tick": ConfigField(type=int, default=1, description="每次 tick 最多启动几个群的内省任务", min=1, max=50, order=5),
-            "temperature": ConfigField(type=float, default=0.7, description="内省温度", min=0.0, max=2.0, order=6),
-            "max_tokens": ConfigField(type=int, default=700, description="内省最大 tokens", min=128, max=4096, order=7),
-            "window_strength_scale": ConfigField(type=float, default=12.0, description="窗口规模强度缩放（越大越保守）", min=1.0, max=200.0, order=8),
-            "use_main_personality": ConfigField(type=bool, default=True, description="是否读取主程序人格设定参与内省/内化", order=9),
-            "pending_max_messages": ConfigField(type=int, default=600, description="每群最多缓存多少条待回想消息", min=50, max=2000, order=10),
-            "max_log_items": ConfigField(type=int, default=300, description="最多保留多少条内省日志", min=50, max=5000, order=11),
+            "min_messages_to_run": ConfigField(type=int, default=30, description="触发一次内省所需最少消息条数（有种子则可绕过）", min=1, max=2000, order=3),
+            "max_messages_per_group": ConfigField(type=int, default=500, description="单次内省最多读取消息条数", min=20, max=2000, order=4),
+            "quiet_period_seconds": ConfigField(type=float, default=20.0, description="静默窗口（秒）：避免边聊边回想", min=0.0, max=3600.0, order=5),
+            "max_groups_per_tick": ConfigField(type=int, default=1, description="每次 tick 最多启动几个群的内省任务", min=1, max=50, order=6),
+            "temperature": ConfigField(type=float, default=0.7, description="内省温度", min=0.0, max=2.0, order=7),
+            "max_tokens": ConfigField(type=int, default=700, description="内省最大 tokens", min=128, max=4096, order=8),
+            "window_strength_scale": ConfigField(type=float, default=12.0, description="窗口规模强度缩放（越大越保守）", min=1.0, max=200.0, order=9),
+            "use_main_personality": ConfigField(type=bool, default=True, description="是否读取主程序人格设定参与内省/内化", order=10),
+            "pending_max_messages": ConfigField(type=int, default=600, description="每群最多缓存多少条待回想消息", min=50, max=2000, order=11),
+            "max_log_items": ConfigField(type=int, default=300, description="最多保留多少条内省日志", min=50, max=5000, order=12),
         },
         "injection": {
             "enabled": ConfigField(type=bool, default=True, description="是否在回复前注入光谱与固化思想（POST_LLM）", order=0),
