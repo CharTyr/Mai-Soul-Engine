@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "Mai-Soul-Engine",
   "version": "0.1.0",
-  "description": "为 MaiBot 提供基于社会化学习的动态意识形态系统（光谱/思维阁/黑盒），并暴露 /api/v1/soul/* 用于外部前端展示。",
+  "description": "为 MaiBot 提供基于“思维内省”的动态意识形态系统（思想光谱/思维阁），并暴露 /api/v1/soul/* 用于外部前端展示。",
   "author": {
     "name": "CharTyr"
   },
@@ -12,7 +12,7 @@
     "ideology",
     "spectrum",
     "thought-cabinet",
-    "blackbox"
+    "introspection"
   ],
   "categories": [
     "persona",
