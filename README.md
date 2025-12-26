@@ -154,7 +154,10 @@ npm run build
 [debug]
 enabled = true
 admin_only = true
-admin_user_ids = ["qq:123456"] # 或只写 ["123456"]
+# admin_user_ids 允许两种格式：
+# - 仅 user_id：["123456"]
+# - platform:user_id：["qq:123456"]（推荐：多平台/防冲突）
+admin_user_ids = ["qq:123456"]
 ```
 
 群里发送：

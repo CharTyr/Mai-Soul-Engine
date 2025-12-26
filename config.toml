@@ -113,5 +113,15 @@ plugin_dir = ""
 enabled = false
 # admin_only=true 时，仅 admin_user_ids 可执行调试命令
 admin_only = true
-# 允许执行调试命令的用户 ID 列表
+# 允许执行调试命令的用户 ID 列表（TOML 数组，元素为字符串）
+# 支持两种格式（二选一即可）：
+# 1) 仅 user_id：`"123456"`
+# 2) platform:user_id：`"qq:123456"`（推荐：多平台/防冲突）
+#
+# 其中：
+# - `platform` 来自主程序消息里的 `message_info.platform`（以实际平台名为准）
+# - `user_id` 来自 `message_info.user_info.user_id`
+#
+# 示例：
+# admin_user_ids = ["123456", "qq:987654321", "telegram:123456789"]
 admin_user_ids = []
