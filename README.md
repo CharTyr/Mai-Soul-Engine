@@ -53,10 +53,18 @@ window_minutes = 30.0
 rounds = 4
 ```
 
-4) 设置麦麦自己的 user_id（用于区分“自己发言 vs 他人发言”）
+4) “麦麦自己”的账号识别（自动）
+
+插件会自动读取主程序 `config/bot_config.toml` 中的：
+- `[bot].qq_account`
+- `[bot].platforms = ["platform:account", ...]`
+
+用于区分“自己发言 vs 他人发言”，无需在插件里额外配置。
+
+可选：是否把主程序人格设定用于内省/内化：
 ```toml
 [introspection]
-self_user_ids = ["123456"]
+use_main_personality = true
 ```
 
 ---

@@ -9,7 +9,7 @@
 # 3) `[introspection].interval_minutes`：内省间隔（越小越频繁、越耗模型/资源）
 # 4) `[introspection].window_minutes`：每次内省回顾多长时间的聊天
 # 5) `[introspection].rounds`：每次内省几轮（轮数越多越“像人回想”，也越耗）
-# 6) `[introspection].self_user_ids`：把“麦麦自己的发言”识别出来（重要：会影响回想与归因）
+# 6) `[introspection].use_main_personality`：是否读取主程序人格设定参与内省（推荐开启）
 #
 # 重要说明：
 # - 插件对外 API Header：`X-Soul-Token: <token>`（见 `[api].token`）
@@ -45,15 +45,15 @@ max_slots = 6
 # 候选思想种子队列上限（避免无限增长）
 max_seed_queue = 30
 # 种子阈值：内省末轮生成的候选议题，能量低于阈值则丢弃（0~1）
-seed_energy_threshold = 0.25
+seed_energy_threshold = 0.5
 # 每次内省最多内化多少个种子（建议 1~2，太高会很耗）
 internalize_seeds_per_run = 1
 # 每个种子内化需要几轮（越高越“深入”，也越耗）
 internalization_rounds = 3
 # 内化阶段模型温度（越高越发散；0.3~0.5 推荐）
 temperature = 0.35
-# 内化阶段 token 上限（越高越详细，也越贵）
-max_tokens = 900
+# 内化阶段 token 上限：非常高会显著增加耗时与成本（同时也更“深入”）
+max_tokens = 60000
 
 [introspection]
 # 触发间隔（分钟）：达到间隔且满足静默/有新消息等条件后，会运行一次“思维内省”
@@ -63,25 +63,23 @@ window_minutes = 30.0
 # 内省轮数：模拟“回想 → 理解 → 意识形态分析 → 结论”的多轮过程
 rounds = 4
 # 每个会话最多纳入多少条脱敏消息（避免提示词过长/成本爆炸）
-max_messages_per_group = 120
+max_messages_per_group = 500
 # 静默期（秒）：群里刚说完一阵子先别内省，等“冷却”后再总结
 quiet_period_seconds = 20.0
 # 每次 tick 最多处理多少个群/会话（保护性能）
 max_groups_per_tick = 1
-# 内省阶段模型温度（越高越发散；0.2~0.4 推荐）
-temperature = 0.35
+# 内省阶段模型温度（越高越发散）
+temperature = 0.7
 # 内省阶段 token 上限（越高越详细，也越贵）
 max_tokens = 700
 # 消息量强度缩放：聊天越多，偏移越可能被放大（建议保持默认）
 window_strength_scale = 12.0
-# “麦麦自己”的 user_id 列表（强烈建议填写）
-# - 用途：把“我的发言”与“他人发言”分开，避免把别人观点当成自己的立场
-# - 例：self_user_ids = ["123456789", "bot_qq_uid"]
-self_user_ids = []
-# 人格补充提示：用于把“主程序的人格设定”补进内省/内化提示词（可留空）
-persona_hint = ""
+# 是否读取主程序 `config/bot_config.toml` 的 `[personality].personality` 作为“人格设定补充”
+# - true：使用主程序人格设定（推荐）
+# - false：不额外注入人格设定（仍会正常内省/内化）
+use_main_personality = true
 # 脱敏消息缓冲区上限（ON_MESSAGE 收集的摘要，等待被内省消费）
-pending_max_messages = 400
+pending_max_messages = 600
 # 内省日志条目上限（用于前端展示的“内心独白/轮次结果”）
 max_log_items = 300
 

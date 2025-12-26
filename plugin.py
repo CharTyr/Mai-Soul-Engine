@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, Response
 
 from src.common.logger import get_logger
 from src.common.server import get_global_server
-from src.config.config import model_config
+from src.config.config import global_config, model_config
 from src.manager.async_task_manager import AsyncTask, async_task_manager
 from src.plugin_system import (
     BaseCommand,
@@ -195,7 +195,7 @@ class SoulEngine:
         return s[:max_chars]
 
     def _pending_cap(self) -> int:
-        n = int(self.get_config("introspection.pending_max_messages", 400))
+        n = int(self.get_config("introspection.pending_max_messages", 600))
         return max(50, min(n, 2000))
 
     def _log_cap(self) -> int:
@@ -339,19 +339,51 @@ class SoulEngine:
     # -------------------------
     def _self_ids(self) -> set[str]:
         ids: set[str] = set()
-        raw = self.get_config("introspection.self_user_ids", [])
-        if isinstance(raw, list):
-            for x in raw:
-                s = str(x).strip()
-                if s:
+        try:
+            bot_cfg = getattr(global_config, "bot", None)
+            if not bot_cfg:
+                return ids
+
+            qq_account = str(getattr(bot_cfg, "qq_account", "") or "").strip()
+            if qq_account:
+                ids.add(qq_account)
+                ids.add(f"qq:{qq_account}")
+
+            platforms = getattr(bot_cfg, "platforms", None) or []
+            if isinstance(platforms, list):
+                for item in platforms:
+                    s = str(item or "").strip()
+                    if not s:
+                        continue
                     ids.add(s)
+                    if ":" in s:
+                        p, uid = s.split(":", 1)
+                        p = p.strip()
+                        uid = uid.strip()
+                        if uid:
+                            ids.add(uid)
+                            if p:
+                                ids.add(f"{p}:{uid}")
+        except Exception as e:
+            logger.debug(f"[soul] read bot_config self ids failed: {e}")
         return ids
+
+    def _main_personality_hint(self) -> str:
+        if not bool(self.get_config("introspection.use_main_personality", True)):
+            return ""
+        try:
+            p = getattr(global_config, "personality", None)
+            hint = str(getattr(p, "personality", "") or "").strip()
+            return hint[:1200]
+        except Exception as e:
+            logger.debug(f"[soul] read bot_config personality failed: {e}")
+            return ""
 
     def _extract_window_locked(self, state: GroupState, *, now: float) -> Tuple[float, List[Dict[str, Any]]]:
         window_minutes = float(self.get_config("introspection.window_minutes", 30.0))
         window_minutes = max(1.0, min(window_minutes, 24 * 60.0))
-        max_messages = int(self.get_config("introspection.max_messages_per_group", 120))
-        max_messages = max(20, min(max_messages, 800))
+        max_messages = int(self.get_config("introspection.max_messages_per_group", 500))
+        max_messages = max(20, min(max_messages, 2000))
 
         from_ts = max(0.0, now - window_minutes * 60.0)
         if state.last_introspection_ts > 0:
@@ -381,7 +413,7 @@ class SoulEngine:
             model_config=task_config,
             request_type=request_type,
             temperature=float(_clamp(float(temperature), 0.0, 2.0)),
-            max_tokens=max(128, min(int(max_tokens), 4096)),
+            max_tokens=max(128, min(int(max_tokens), 200_000)),
         )
         if not ok:
             logger.debug(f"[soul] llm failed model={model_name}: {content[:80]}")
@@ -392,8 +424,8 @@ class SoulEngine:
         rounds = int(self.get_config("cabinet.internalization_rounds", 3))
         rounds = max(2, min(rounds, 6))
         temperature = float(self.get_config("cabinet.temperature", 0.35))
-        max_tokens = int(self.get_config("cabinet.max_tokens", 900))
-        persona_hint = str(self.get_config("introspection.persona_hint", "") or "").strip()[:1200]
+        max_tokens = int(self.get_config("cabinet.max_tokens", 60000))
+        persona_hint = self._main_personality_hint()
 
         lock = self._get_lock(stream_id)
         async with lock:
@@ -576,9 +608,9 @@ class SoulEngine:
         # 2) 对聊天窗口做多轮内省
         rounds = int(self.get_config("introspection.rounds", 4))
         rounds = max(2, min(rounds, 8))
-        temperature = float(self.get_config("introspection.temperature", 0.35))
+        temperature = float(self.get_config("introspection.temperature", 0.7))
         max_tokens = int(self.get_config("introspection.max_tokens", 700))
-        persona_hint = str(self.get_config("introspection.persona_hint", "") or "").strip()[:1200]
+        persona_hint = self._main_personality_hint()
 
         async with lock:
             state = self._get_group(stream_id)
@@ -702,7 +734,7 @@ class SoulEngine:
             )
 
             # 生成候选思想种子：进入队列，等下一次内省内化
-            seed_threshold = float(self.get_config("cabinet.seed_energy_threshold", 0.25))
+            seed_threshold = float(self.get_config("cabinet.seed_energy_threshold", 0.5))
             seed_threshold = float(_clamp(seed_threshold, 0.0, 1.0))
             seed_cap = int(self.get_config("cabinet.max_seed_queue", 30))
             seed_cap = max(0, min(seed_cap, 200))
@@ -1505,26 +1537,25 @@ class MaiSoulEnginePlugin(BasePlugin):
         "cabinet": {
             "max_slots": ConfigField(type=int, default=6, description="思维阁槽位数（固化思想上限）", min=1, max=20, order=0),
             "max_seed_queue": ConfigField(type=int, default=30, description="思想种子队列上限", min=0, max=200, order=1),
-            "seed_energy_threshold": ConfigField(type=float, default=0.25, description="生成思想种子所需最低 energy（0~1）", min=0.0, max=1.0, order=2),
+            "seed_energy_threshold": ConfigField(type=float, default=0.5, description="生成思想种子所需最低 energy（0~1）", min=0.0, max=1.0, order=2),
             "internalize_seeds_per_run": ConfigField(type=int, default=1, description="每次内省最多内化几个种子", min=0, max=5, order=3),
             "internalization_rounds": ConfigField(type=int, default=3, description="内化轮数（>=2）", min=2, max=6, order=4),
             "temperature": ConfigField(type=float, default=0.35, description="内化温度", min=0.0, max=2.0, order=5),
-            "max_tokens": ConfigField(type=int, default=900, description="内化最大 tokens", min=128, max=4096, order=6),
+            "max_tokens": ConfigField(type=int, default=60000, description="内化最大 tokens", min=128, max=200_000, order=6),
         },
         "introspection": {
             "interval_minutes": ConfigField(type=float, default=20.0, description="内省触发间隔（分钟）", min=1.0, max=24 * 60.0, order=0),
             "window_minutes": ConfigField(type=float, default=30.0, description="回看聊天时间窗（分钟）", min=1.0, max=24 * 60.0, order=1),
             "rounds": ConfigField(type=int, default=4, description="内省轮数（>=2）", min=2, max=8, order=2),
-            "max_messages_per_group": ConfigField(type=int, default=120, description="单次内省最多读取消息条数", min=20, max=800, order=3),
+            "max_messages_per_group": ConfigField(type=int, default=500, description="单次内省最多读取消息条数", min=20, max=2000, order=3),
             "quiet_period_seconds": ConfigField(type=float, default=20.0, description="静默窗口（秒）：避免边聊边回想", min=0.0, max=3600.0, order=4),
             "max_groups_per_tick": ConfigField(type=int, default=1, description="每次 tick 最多启动几个群的内省任务", min=1, max=50, order=5),
-            "temperature": ConfigField(type=float, default=0.35, description="内省温度", min=0.0, max=2.0, order=6),
+            "temperature": ConfigField(type=float, default=0.7, description="内省温度", min=0.0, max=2.0, order=6),
             "max_tokens": ConfigField(type=int, default=700, description="内省最大 tokens", min=128, max=4096, order=7),
             "window_strength_scale": ConfigField(type=float, default=12.0, description="窗口规模强度缩放（越大越保守）", min=1.0, max=200.0, order=8),
-            "self_user_ids": ConfigField(type=list, default=[], description="麦麦自身 user_id（用于区分 self/other）", item_type="string", order=9),
-            "persona_hint": ConfigField(type=str, default="", description="人格设定补充（可选；不要包含隐私）", order=10),
-            "pending_max_messages": ConfigField(type=int, default=400, description="每群最多缓存多少条待回想消息", min=50, max=2000, order=11),
-            "max_log_items": ConfigField(type=int, default=300, description="最多保留多少条内省日志", min=50, max=5000, order=12),
+            "use_main_personality": ConfigField(type=bool, default=True, description="是否读取主程序人格设定参与内省/内化", order=9),
+            "pending_max_messages": ConfigField(type=int, default=600, description="每群最多缓存多少条待回想消息", min=50, max=2000, order=10),
+            "max_log_items": ConfigField(type=int, default=300, description="最多保留多少条内省日志", min=50, max=5000, order=11),
         },
         "injection": {
             "enabled": ConfigField(type=bool, default=True, description="是否在回复前注入光谱与固化思想（POST_LLM）", order=0),
