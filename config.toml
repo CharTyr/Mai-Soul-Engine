@@ -101,6 +101,10 @@ save_interval_seconds = 15.0
 [performance]
 # 单条消息摘要最大长度（会先脱敏再截断）；过长会抬高提示词成本
 max_message_chars = 800
+# 提示词总字符预算：聊天窗口过大时会自动“分段总结/降级”，防止超上下文导致失败
+prompt_budget_chars = 120000
+# 分段总结：每段输入字符预算（越大越少段，但单次请求更大更慢）
+summary_chunk_chars = 7000
 
 [runtime]
 # 运行时注入：一般不需要改。留空表示自动使用插件目录。

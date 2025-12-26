@@ -177,5 +177,7 @@ admin_user_ids = ["qq:123456"]
 ## 生产环境注意事项
 
 - 不要提交密钥到仓库；务必设置 `api.token`。
-- 插件会持久化人格状态到 `plugins/MaiBot_Soul_Engine/data/state.json`，建议放到持久化磁盘并定期备份。
+- 插件会持久化人格状态到 `plugins/MaiBot_Soul_Engine/data/state.json`（原子写入），并保留 `state.json.bak` 作为上一次可用备份。
+- `pending_messages` 不落盘真实用户名/账号：用户与群的标识会被哈希化；聊天内容会进行更强脱敏（链接/邮箱/手机号/身份证/长数字等）。
+- 聊天窗口过大时会自动“分段总结/降级”以避免超上下文：可用 `performance.prompt_budget_chars` / `performance.summary_chunk_chars` 调整。
 - 内省日志/思想 fragments 已做脱敏与截断，但仍建议结合你的隐私要求调整 `introspection.pending_max_messages` 与 `introspection.max_log_items`。

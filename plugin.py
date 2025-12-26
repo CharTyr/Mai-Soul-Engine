@@ -1,7 +1,10 @@
 import asyncio
+import hashlib
 import json
 import math
+import os
 import re
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -14,6 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from src.common.logger import get_logger
 from src.common.server import get_global_server
 from src.config.config import global_config, model_config
+from src.config.api_ada_configs import TaskConfig
 from src.manager.async_task_manager import AsyncTask, async_task_manager
 from src.plugin_system import (
     BaseCommand,
@@ -43,6 +47,24 @@ AXES_FRONTEND: Dict[str, str] = {
     "normies_otakuism": "normies-otakuism",
     "traditionalism_radicalism": "traditionalism-radicalism",
     "heroism_nihilism": "heroism-nihilism",
+}
+
+POLES_ENUM: Dict[str, Tuple[str, str]] = {
+    "sincerity_absurdism": ("sincerity", "absurdism"),
+    "normies_otakuism": ("normies", "otakuism"),
+    "traditionalism_radicalism": ("traditionalism", "radicalism"),
+    "heroism_nihilism": ("heroism", "nihilism"),
+}
+
+POLES_CN: Dict[str, str] = {
+    "sincerity": "严肃建构",
+    "absurdism": "抽象解构",
+    "normies": "现充主义",
+    "otakuism": "二次元沉溺",
+    "traditionalism": "传统保守",
+    "radicalism": "赛博激进",
+    "heroism": "热血英雄主义",
+    "nihilism": "虚无主义",
 }
 
 POLES: Dict[str, Tuple[str, str]] = {
@@ -139,6 +161,8 @@ class GroupState:
     seed_queue: List[ThoughtSeed] = field(default_factory=list)
     thoughts: List[Thought] = field(default_factory=list)
 
+    last_major_shift_ts: float = 0.0
+
 
 class SoulEngine:
     def __init__(self, plugin_dir: Path):
@@ -154,6 +178,7 @@ class SoulEngine:
         self._api_router = APIRouter()
         self._state_file = self.plugin_dir / "data" / "state.json"
         self._last_persist_ts = 0.0
+        self._salt = secrets.token_hex(16)
 
     def set_config(self, config: Dict[str, Any]) -> None:
         self._config = config or {}
@@ -184,12 +209,31 @@ class SoulEngine:
     # -------------------------
     # Privacy / Sanitization
     # -------------------------
+    def _sha256_short(self, text: str, *, n: int = 10) -> str:
+        h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return h[: max(6, min(int(n), 32))]
+
+    def _hash_user_id(self, platform: str, user_id: str) -> str:
+        key = f"{self._salt}|u|{platform}:{user_id}"
+        return f"u_{self._sha256_short(key, n=12)}"
+
+    def _hash_group_id(self, platform: str, group_id: str) -> str:
+        key = f"{self._salt}|g|{platform}:{group_id}"
+        return f"g_{self._sha256_short(key, n=12)}"
+
     def _sanitize_text(self, text: str, *, max_chars: int) -> str:
         s = (text or "").replace("\n", " ").replace("\r", " ").strip()
         s = re.sub(r"\s+", " ", s)
         s = re.sub(r"https?://\\S+", "<url>", s, flags=re.IGNORECASE)
         s = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<email>", s)
         s = re.sub(r"@\\S+", "@某人", s)
+        # 电话（含可选 +86 / 空格 / 连字符）
+        s = re.sub(r"(?:\\+?86[-\\s]?)?1[3-9]\\d{9}", "<phone>", s)
+        # 身份证（18 位，末位可能是 X）
+        s = re.sub(r"\\b\\d{17}[\\dXx]\\b", "<id>", s)
+        # 显式 QQ/群号标记
+        s = re.sub(r"(?:QQ群|群号|群|QQ|qq)\\s*[:：]?\\s*([1-9]\\d{4,11})", "<qq>", s)
+        # 通用长数字（QQ/群号/手机号以外）
         s = re.sub(r"\\b\\d{5,}\\b", "<num>", s)
         max_chars = max(40, min(int(max_chars), 800))
         return s[:max_chars]
@@ -205,6 +249,28 @@ class SoulEngine:
     def _fluctuation_window(self) -> int:
         n = int(self.get_config("spectrum.fluctuation_window", 30))
         return max(10, min(n, 500))
+
+    def _dominant_poles(self, state: GroupState) -> Tuple[str, Optional[str], float]:
+        # 使用 EMA 作为“底色”更稳定
+        axis_scores: List[Tuple[str, float]] = []
+        for axis in AXES:
+            v = float(state.ema.get(axis, 0.0) or 0.0)
+            axis_scores.append((axis, abs(v)))
+        axis_scores.sort(key=lambda x: x[1], reverse=True)
+        if not axis_scores:
+            return "sincerity", None, 0.0
+
+        def pole(axis: str, v: float) -> str:
+            left, right = POLES_ENUM.get(axis, ("sincerity", "absurdism"))
+            return left if v < 0 else right
+
+        primary_axis, primary_abs = axis_scores[0]
+        primary_pole = pole(primary_axis, float(state.ema.get(primary_axis, 0.0) or 0.0))
+        secondary_pole: Optional[str] = None
+        if len(axis_scores) > 1 and axis_scores[1][1] >= 0.05:
+            secondary_axis, _sec_abs = axis_scores[1]
+            secondary_pole = pole(secondary_axis, float(state.ema.get(secondary_axis, 0.0) or 0.0))
+        return primary_pole, secondary_pole, float(primary_abs)
 
     def _append_log_locked(self, state: GroupState, *, kind: str, content: str, tags: Optional[List[str]] = None, extra: Optional[dict] = None) -> None:
         item = IntrospectionLogItem(
@@ -231,17 +297,19 @@ class SoulEngine:
         if not text2:
             return
 
+        uid = self._hash_user_id(str(platform or ""), str(user_id or ""))
+        gid = self._hash_group_id(str(platform or ""), str(group_id or ""))
+
         lock = self._get_lock(stream_id)
         async with lock:
             state = self._get_group(stream_id)
-            state.target = f"{platform}:{group_id}:group"
+            state.target = f"{platform}:group:{gid}"
             state.message_count = int(state.message_count or 0) + 1
             state.last_activity_ts = _now_ts()
             state.pending_messages.append(
                 {
                     "ts": state.last_activity_ts,
-                    "user_id": str(user_id),
-                    "user_name": str(user_name or user_id)[:32],
+                    "uid": uid,
                     "text": text2,
                 }
             )
@@ -355,15 +423,13 @@ class SoulEngine:
                     s = str(item or "").strip()
                     if not s:
                         continue
-                    ids.add(s)
                     if ":" in s:
                         p, uid = s.split(":", 1)
                         p = p.strip()
                         uid = uid.strip()
-                        if uid:
-                            ids.add(uid)
-                            if p:
-                                ids.add(f"{p}:{uid}")
+                        if p and uid:
+                            ids.add(self._hash_user_id(p, uid))
+                    # 未带平台前缀的情况无法安全映射，忽略
         except Exception as e:
             logger.debug(f"[soul] read bot_config self ids failed: {e}")
         return ids
@@ -378,6 +444,29 @@ class SoulEngine:
         except Exception as e:
             logger.debug(f"[soul] read bot_config personality failed: {e}")
             return ""
+
+    def _estimate_prompt_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        # 保守估算：中文基本 ~1 char/token，混合内容取偏大
+        return max(len(text), int(len(text.encode("utf-8")) / 3))
+
+    def _effective_max_tokens(self, *, requested: int, task_config: TaskConfig, prompt: str) -> int:
+        req = int(requested)
+        req = max(128, min(req, 200_000))
+        task_cap = int(getattr(task_config, "max_tokens", 4096) or 4096)
+        task_cap = max(128, min(task_cap, 200_000))
+        base = min(req, task_cap)
+
+        # 提示词长度预算（纯启发式）：避免 prompt 太大时还给超大输出，导致超上下文失败
+        prompt_chars = len(prompt)
+        total_budget_chars = int(self.get_config("performance.prompt_budget_chars", 120_000))
+        total_budget_chars = max(20_000, min(total_budget_chars, 800_000))
+        remain_chars = max(1, total_budget_chars - prompt_chars)
+        # 以 2 chars/token 粗略换算（偏保守）
+        by_budget = max(256, int(remain_chars / 2))
+
+        return max(128, min(base, by_budget))
 
     def _extract_window_locked(self, state: GroupState, *, now: float) -> Tuple[float, List[Dict[str, Any]]]:
         window_minutes = float(self.get_config("introspection.window_minutes", 30.0))
@@ -408,17 +497,134 @@ class SoulEngine:
     async def _llm_json(self, *, prompt: str, temperature: float, max_tokens: int, request_type: str) -> Optional[dict]:
         models = llm_api.get_available_models()
         task_config = models.get("utils") or model_config.model_task_config.utils
-        ok, content, _reasoning, model_name = await llm_api.generate_with_model(
-            prompt,
-            model_config=task_config,
-            request_type=request_type,
-            temperature=float(_clamp(float(temperature), 0.0, 2.0)),
-            max_tokens=max(128, min(int(max_tokens), 200_000)),
-        )
-        if not ok:
-            logger.debug(f"[soul] llm failed model={model_name}: {content[:80]}")
+
+        temp = float(_clamp(float(temperature), 0.0, 2.0))
+        effective = self._effective_max_tokens(requested=int(max_tokens), task_config=task_config, prompt=prompt)
+
+        # 自动降级：若解析失败，重试一次（更严格 JSON + 更小输出）
+        attempts = [
+            (prompt, effective),
+            (
+                (prompt + "\n\n再次强调：只输出严格 JSON（不要 Markdown 代码块、不要解释文字）。").strip(),
+                max(256, min(effective, 2048)),
+            ),
+        ]
+
+        last_model = ""
+        last_content = ""
+        for p, mt in attempts:
+            ok, content, _reasoning, model_name = await llm_api.generate_with_model(
+                p,
+                model_config=task_config,
+                request_type=request_type,
+                temperature=temp,
+                max_tokens=int(mt),
+            )
+            last_model = model_name or last_model
+            last_content = content or last_content
+            if not ok:
+                continue
+            obj = _extract_json_object(content)
+            if isinstance(obj, dict):
+                return obj
+
+        logger.debug(f"[soul] llm_json failed model={last_model}: {str(last_content)[:120]}")
+        return None
+
+    async def _summarize_chat_window(
+        self,
+        *,
+        stream_id: str,
+        context_lines: List[str],
+        temperature: float,
+        max_tokens: int,
+        request_type: str,
+    ) -> Optional[dict]:
+        # 分段总结：chunk -> summaries -> merge
+        if not context_lines:
             return None
-        return _extract_json_object(content)
+
+        chunk_char_budget = int(self.get_config("performance.summary_chunk_chars", 7000))
+        chunk_char_budget = max(2000, min(chunk_char_budget, 50_000))
+
+        chunks: List[List[str]] = []
+        cur: List[str] = []
+        cur_len = 0
+        for line in context_lines:
+            ln = len(line) + 1
+            if cur and (cur_len + ln > chunk_char_budget):
+                chunks.append(cur)
+                cur = []
+                cur_len = 0
+            cur.append(line)
+            cur_len += ln
+        if cur:
+            chunks.append(cur)
+
+        chunk_summaries: List[dict] = []
+        for idx, ch in enumerate(chunks, start=1):
+            schema = {
+                "chunk": idx,
+                "summary": ["要点（1~8条，抽象概括，禁止复刻原句）"],
+                "topics": ["热议话题（0~6）"],
+                "conflicts": ["争议点（0~6）"],
+            }
+            prompt = (
+                "你是“麦麦的思维内省”，请把一段群聊记录做脱敏、抽象化的总结。\n"
+                "硬性要求：\n"
+                "- 不要输出任何可识别个人信息、链接/号码/邮箱。\n"
+                "- 不要复刻聊天原句（必须转述）。\n"
+                "- 只输出严格 JSON。\n\n"
+                f"输入（第 {idx}/{len(chunks)} 段）：\n"
+                + "\n".join(ch[:300])
+                + "\n\nJSON schema 示例：\n"
+                + json.dumps(schema, ensure_ascii=False)
+            )
+            obj = await self._llm_json(
+                prompt=prompt,
+                temperature=temperature,
+                max_tokens=max(512, min(int(max_tokens), 8000)),
+                request_type=f"{request_type}.chunk.{idx}",
+            )
+            if not isinstance(obj, dict):
+                return None
+            chunk_summaries.append(obj)
+
+        merge_schema = {
+            "summary": "总体摘要（200~600字，抽象概括，禁止复刻原句）",
+            "topics": ["热议话题（0~10）"],
+            "conflicts": ["争议点（0~10）"],
+            "participants": ["参与者代号（如 U1/U2，仅用于区分，不要真实姓名）"],
+        }
+        merge_prompt = (
+            "你是“麦麦的思维内省”，请把多段摘要合并为一个总体摘要。\n"
+            "硬性要求：\n"
+            "- 不要输出任何可识别个人信息、链接/号码/邮箱。\n"
+            "- 不要复刻聊天原句（必须转述）。\n"
+            "- 只输出严格 JSON。\n\n"
+            f"分段摘要：\n{json.dumps(chunk_summaries, ensure_ascii=False)}\n\n"
+            f"JSON schema 示例：\n{json.dumps(merge_schema, ensure_ascii=False)}"
+        )
+        merged = await self._llm_json(
+            prompt=merge_prompt,
+            temperature=temperature,
+            max_tokens=max(512, min(int(max_tokens), 8000)),
+            request_type=f"{request_type}.merge",
+        )
+        if not isinstance(merged, dict):
+            return None
+
+        lock = self._get_lock(stream_id)
+        async with lock:
+            state = self._get_group(stream_id)
+            self._append_log_locked(
+                state,
+                kind="context_summary",
+                content="【聊天窗口分段总结】\n" + str(merged.get("summary", "") or "")[:1800],
+                tags=["introspection", "summary"],
+                extra={"chunks": len(chunks)},
+            )
+        return merged
 
     async def _internalize_seed(self, stream_id: str, seed: ThoughtSeed) -> Optional[Thought]:
         rounds = int(self.get_config("cabinet.internalization_rounds", 3))
@@ -604,6 +810,7 @@ class SoulEngine:
                         tags=["introspection", "cabinet"],
                         extra={"thought_id": thought.thought_id, "topic": thought.topic},
                     )
+                    state.last_major_shift_ts = max(float(state.last_major_shift_ts or 0.0), now)
 
         # 2) 对聊天窗口做多轮内省
         rounds = int(self.get_config("introspection.rounds", 4))
@@ -619,10 +826,47 @@ class SoulEngine:
             self_ids = self._self_ids()
 
         context: List[Dict[str, Any]] = []
+        speaker_map: Dict[str, str] = {}
+        speaker_seq = 0
         for m in window_items:
-            uid = str(m.get("user_id", "") or "")
+            uid = str(m.get("uid", "") or m.get("user_id", "") or "").strip()
             role = "self" if (uid and uid in self_ids) else "other"
-            context.append({"role": role, "user_id": uid, "name": str(m.get("user_name", "") or "")[:32], "text": str(m.get("text", "") or "")})
+            if uid not in speaker_map:
+                speaker_seq += 1
+                speaker_map[uid] = f"U{speaker_seq}"
+            speaker = speaker_map.get(uid, "U?")
+            context.append({"role": role, "speaker": speaker, "text": str(m.get("text", "") or "")})
+
+        # 提示词预算：context 过大时先做分段总结，再把摘要喂给多轮内省
+        context_lines = [f"{c['speaker']}<{c['role']}>: {c['text']}" for c in context if str(c.get("text", "")).strip()]
+        context_json = json.dumps(context, ensure_ascii=False)
+        prompt_budget_chars = int(self.get_config("performance.prompt_budget_chars", 120_000))
+        prompt_budget_chars = max(20_000, min(prompt_budget_chars, 800_000))
+        need_summary = (len(context) >= 180) or (len(context_json) >= int(prompt_budget_chars * 0.55))
+
+        summary_obj: Optional[dict] = None
+        if need_summary:
+            summary_obj = await self._summarize_chat_window(
+                stream_id=stream_id,
+                context_lines=context_lines,
+                temperature=min(temperature, 0.5),
+                max_tokens=max_tokens,
+                request_type="mai_soul_engine.introspection.summary",
+            )
+
+        if isinstance(summary_obj, dict):
+            tail = context_lines[-40:] if context_lines else []
+            context_block = json.dumps(
+                {
+                    "summary": str(summary_obj.get("summary", "") or "")[:2000],
+                    "topics": summary_obj.get("topics", []) if isinstance(summary_obj.get("topics"), list) else [],
+                    "conflicts": summary_obj.get("conflicts", []) if isinstance(summary_obj.get("conflicts"), list) else [],
+                    "recent": tail,
+                },
+                ensure_ascii=False,
+            )
+        else:
+            context_block = context_json
 
         carry: List[str] = []
         final: Optional[dict] = None
@@ -655,7 +899,7 @@ class SoulEngine:
 已固化思想名（不要复述）：{json.dumps(thought_names, ensure_ascii=False)}
 
 本次回想时间窗：from_ts={from_ts} to_ts={now}
-聊天记录（已脱敏/截断；禁止复刻原句）：{json.dumps(context, ensure_ascii=False)}
+聊天记录（已脱敏/截断；可能已被分段总结；禁止复刻原句）：{context_block}
 
 上一轮累计要点：{prev}
 
@@ -732,6 +976,8 @@ class SoulEngine:
                 confidence=confidence,
                 window_size=len(window_items) if window_items else 1,
             )
+            if any(abs(float(applied.get(a, 0.0) or 0.0)) >= 10.0 for a in AXES):
+                state.last_major_shift_ts = max(float(state.last_major_shift_ts or 0.0), now)
 
             # 生成候选思想种子：进入队列，等下一次内省内化
             seed_threshold = float(self.get_config("cabinet.seed_energy_threshold", 0.5))
@@ -907,10 +1153,51 @@ class SoulEngine:
     # -------------------------
     # Persistence
     # -------------------------
+    def _fsync_dir(self, dir_path: Path) -> None:
+        try:
+            fd = os.open(str(dir_path), os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except Exception:
+            return
+
+    def _atomic_write_json(self, path: Path, payload: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+        bak = path.with_suffix(path.suffix + ".bak")
+
+        data = json.dumps(payload, ensure_ascii=False)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # 先把旧文件挪到 .bak，再原子替换（失败则尝试回滚）
+            had_old = path.exists()
+            if had_old:
+                os.replace(path, bak)
+            os.replace(tmp, path)
+            self._fsync_dir(path.parent)
+        except Exception:
+            # 回滚：如果新文件没落下，但 bak 存在，则恢复
+            try:
+                if not path.exists() and bak.exists():
+                    os.replace(bak, path)
+            except Exception:
+                pass
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            raise
+
     async def persist(self) -> None:
         try:
-            self._state_file.parent.mkdir(parents=True, exist_ok=True)
-            payload: Dict[str, Any] = {"version": 1, "groups": {}}
+            payload: Dict[str, Any] = {"version": 2, "salt": self._salt, "groups": {}}
             for sid, st in self._groups.items():
                 lock = self._get_lock(sid)
                 async with lock:
@@ -924,6 +1211,7 @@ class SoulEngine:
                         "ema": st.ema,
                         "recent_deltas": st.recent_deltas,
                         "last_introspection_ts": float(st.last_introspection_ts or 0.0),
+                        "last_major_shift_ts": float(st.last_major_shift_ts or 0.0),
                         "introspection_logs": [
                             {"ts": it.ts, "kind": it.kind, "content": it.content, "tags": it.tags, "extra": it.extra}
                             for it in (st.introspection_logs or [])[-self._log_cap():]
@@ -931,17 +1219,33 @@ class SoulEngine:
                         "seed_queue": [s.__dict__ for s in (st.seed_queue or [])[-200:]],
                         "thoughts": [t.__dict__ for t in (st.thoughts or [])[-200:]],
                     }
-            tmp = self._state_file.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(self._state_file)
+            self._atomic_write_json(self._state_file, payload)
         except Exception as e:
             logger.debug(f"[soul] persist failed: {e}")
 
     def load_persisted(self) -> None:
-        if not self._state_file.exists():
+        if not self._state_file.exists() and not self._state_file.with_suffix(self._state_file.suffix + ".bak").exists():
             return
+
+        def try_load(path: Path) -> Optional[dict]:
+            try:
+                if not path.exists():
+                    return None
+                obj = json.loads(path.read_text(encoding="utf-8"))
+                return obj if isinstance(obj, dict) else None
+            except Exception:
+                return None
+
+        raw = try_load(self._state_file)
+        if raw is None:
+            raw = try_load(self._state_file.with_suffix(self._state_file.suffix + ".bak"))
+        if raw is None:
+            return
+
         try:
-            raw = json.loads(self._state_file.read_text(encoding="utf-8"))
+            salt = str(raw.get("salt", "") or "").strip()
+            if salt:
+                self._salt = salt
             groups = raw.get("groups", {})
             if not isinstance(groups, dict):
                 return
@@ -953,7 +1257,22 @@ class SoulEngine:
                 st.message_count = int(obj.get("message_count", 0) or 0)
                 st.last_activity_ts = float(obj.get("last_activity_ts", 0.0) or 0.0)
                 pm = obj.get("pending_messages", [])
-                st.pending_messages = pm if isinstance(pm, list) else []
+                pending: List[Dict[str, Any]] = []
+                if isinstance(pm, list):
+                    for m in pm[-self._pending_cap():]:
+                        if not isinstance(m, dict):
+                            continue
+                        ts = float(m.get("ts", 0.0) or 0.0)
+                        text = str(m.get("text", "") or "").strip()
+                        if not text:
+                            continue
+                        uid = str(m.get("uid", "") or "").strip()
+                        if not uid:
+                            legacy_uid = str(m.get("user_id", "") or "").strip()
+                            if legacy_uid:
+                                uid = f"u_legacy_{self._sha256_short(f'{self._salt}|legacy|{legacy_uid}', n=10)}"
+                        pending.append({"ts": ts, "uid": uid, "text": text[:800]})
+                st.pending_messages = pending
 
                 bt = obj.get("base_tone", {})
                 if isinstance(bt, dict):
@@ -969,6 +1288,7 @@ class SoulEngine:
                     st.recent_deltas = {a: [float(x) for x in (rd.get(a, []) or []) if isinstance(x, (int, float))][-500:] for a in AXES}
 
                 st.last_introspection_ts = float(obj.get("last_introspection_ts", 0.0) or 0.0)
+                st.last_major_shift_ts = float(obj.get("last_major_shift_ts", 0.0) or 0.0)
 
                 logs = obj.get("introspection_logs", [])
                 if isinstance(logs, list):
@@ -1072,6 +1392,13 @@ class SoulEngine:
             st = self._get_group(stream_id)
             dims = []
             for axis in AXES:
+                # 用 recent_deltas 简单估计波动：RMS 后缩放到 0~1
+                ds = [float(x) for x in (st.recent_deltas.get(axis, []) or []) if isinstance(x, (int, float))]
+                if ds:
+                    rms = math.sqrt(sum(x * x for x in ds) / float(len(ds)))
+                    volatility = float(_clamp(rms * 6.0, 0.0, 1.0))
+                else:
+                    volatility = 0.0
                 dims.append(
                     {
                         "axis": AXES_FRONTEND.get(axis, axis),
@@ -1080,14 +1407,21 @@ class SoulEngine:
                             "ema": float(_clamp(float(st.ema.get(axis, 0.0) or 0.0), -1.0, 1.0)) * 100.0,
                             "baseline": float(_clamp(float(st.base_tone.get(axis, 0.0) or 0.0), -1.0, 1.0)) * 100.0,
                         },
-                        "volatility": 0.0,
+                        "volatility": volatility,
                     }
                 )
+            primary, secondary, primary_abs = self._dominant_poles(st)
+            primary_points = float(_clamp(primary_abs * 100.0, 0.0, 100.0))
+            tier = self._tier_by_points_abs(primary_points)
+            tier_cn = {0: "中立", 1: "轻微", 2: "偏向", 3: "明显", 4: "强烈"}.get(int(tier), "中立")
+            dominant_trait = "中立" if tier == 0 else f"{POLES_CN.get(primary, primary)}（{tier_cn}）"
+            last_major_shift = _to_iso(float(st.last_major_shift_ts or 0.0)) if float(st.last_major_shift_ts or 0.0) > 0 else ""
+
         return {
             "dimensions": dims,
-            "base_tone": {"primary": "sincerity", "secondary": "normies"},
-            "dominant_trait": "",
-            "last_major_shift": "",
+            "base_tone": {"primary": primary, **({"secondary": secondary} if secondary else {})},
+            "dominant_trait": dominant_trait,
+            "last_major_shift": last_major_shift,
             "updated_at": _to_iso(now),
         }
 
@@ -1568,6 +1902,8 @@ class MaiSoulEnginePlugin(BasePlugin):
         },
         "performance": {
             "max_message_chars": ConfigField(type=int, default=800, description="单条消息最大字符数（入库前截断）", min=100, max=5000, order=0),
+            "prompt_budget_chars": ConfigField(type=int, default=120_000, description="提示词总字符预算（超出会分段总结/降级）", min=20_000, max=800_000, order=1),
+            "summary_chunk_chars": ConfigField(type=int, default=7000, description="分段总结：每段输入字符预算", min=2000, max=50_000, order=2),
         },
         "debug": {
             "enabled": ConfigField(type=bool, default=False, description="是否启用 /soul 调试命令（生产建议关闭）", order=0),
