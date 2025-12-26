@@ -1,0 +1,356 @@
+# MaiBot_Soul_Engine 配置（手动整理版）
+#
+# 新手推荐只改这 4 个地方：
+# 1) [plugin].enabled                    是否启用插件
+# 2) [scope].default_scope               默认作用域（group / global）
+# 3) [api].token                         给前端/API 用（强烈建议设置）
+# 4) [cabinet]/[blackbox]/[injection]    这三个模块开关与强度
+#
+# 其余配置都可以先不动：文件底部是“可选增强”和“高级/运维”。
+
+
+# =========================
+# 0) 插件总开关
+# =========================
+[plugin]
+config_version = "0.1.0"
+enabled = true
+
+
+# =========================
+# 1) 作用域（重要）
+# =========================
+[scope]
+
+# 默认作用域：group(群独立) / global(跨所有群共享)
+# 说明：当 default_scope="global" 时，思维阁内化会变成“跨群共享底色偏移”。
+default_scope = "group"
+
+# 是否启用 global 聚合态（仅在 default_scope=global 时有意义）
+enable_global = true
+
+# global 聚合时的时间半衰期（分钟，越小越偏向最近活跃群）
+global_half_life_minutes = 60.0
+
+
+# =========================
+# 2) API（给前端展示用）
+# =========================
+[api]
+
+# API Token（留空则不鉴权；建议设置）
+token = ""
+
+# 是否允许 API 变更状态（/reset、/base_tone、/cabinet/decision）；建议仅本机使用并设置 token
+allow_mutations = false
+
+# 允许跨域的 Origin 列表（设置为 ['*'] 表示全部允许）
+cors_allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+# =========================
+# 3) 语义评分模型（核心依赖）
+# =========================
+[llm]
+
+# 用于“语义位移分析/打分”的模型任务名（见 model_task_config），建议 utils
+model_task = "utils"
+temperature = 0.2
+max_tokens = 256
+
+
+# =========================
+# 4) 光谱动力学（核心）
+# =========================
+[spectrum]
+
+# 光谱更新模式：dream_window(从上次Dream到本次Dream批处理) / per_message(逐条消息)
+update_mode = "dream_window"
+
+# dream_window：每群最多缓存多少条消息用于下一次 Dream 批处理
+dream_window_max_messages = 120
+
+# dream_window：单条消息进入窗口时的最大截断长度（字符）
+dream_window_max_chars_per_message = 160
+
+# dream_window：窗口规模强度缩放（越大越保守，越小越容易产生明显位移）
+window_strength_scale = 12.0
+
+# 回归阻力：越大越快回到 base_tone（防止短时间刷屏把人格带跑）
+regression_rate = 0.01
+
+# EMA 平滑系数（用于触发旧版 axis_pressure 或作为稳定参考）
+ema_alpha = 0.15
+
+clamp_abs = 1.0
+fluctuation_window = 30
+
+# 首次见到一个群时，是否用 base_tone 初始化 values/ema（否则从 0 开始）
+initialize_from_base_tone = true
+
+# Base Tone 默认值 JSON（四轴 -1~1），例：{"sincerity_absurdism":0.2}
+base_tone_default_json = "{}"
+
+# 按 target 覆盖 Base Tone 的 JSON：{"qq:123:group": {"heroism_nihilism": -0.3}}
+base_tone_overrides_json = "{}"
+
+
+# =========================
+# 5) 思维阁（意识形态实验室，核心）
+# =========================
+[cabinet]
+
+# 总开关
+enabled = true
+
+# 思维阁模式：ideology_lab(意识形态实验室) / axis_pressure(旧版轴向压力)
+mode = "ideology_lab"
+
+# 最多同时存在的槽位数（太大容易“人格发散”）
+max_slots = 3
+
+# --- 5.1 内化策略（新手常用） ---
+# 成熟后是否自动内化（关闭则需要手动批准 /api/v1/soul/cabinet/decision）
+auto_assimilate = true
+
+# 强制手动批准（即使 auto_assimilate=true 也会停在 awaiting_approval）
+require_manual_approval = false
+
+# 种子出现后是否先等待批准，再开始品鉴（避免未批准就消耗 LLM）
+seed_require_manual_approval = false
+
+# 内化周期（分钟）：axis_pressure 模式会用到；ideology_lab 作为“概念时间”保留
+internalization_minutes = 30.0
+
+# --- 5.2 热点触发（种子出现） ---
+# 最近多少秒无新消息才算“静默时刻”（只有静默才会后台品鉴）
+quiet_period_seconds = 20.0
+
+# 采样窗口：用于判断“话题集中度”
+context_window_messages = 60
+
+# 单条消息最低能量（intensity×confidence）才会参与触发/喂养
+seed_min_message_energy = 0.15
+
+# 话题种子触发阈值（集中度×能量×log(频次)）
+seed_energy_threshold = 0.25
+
+# 种子热度计算的时间半衰期（秒，越小越偏向最近发言）
+seed_time_half_life_seconds = 180.0
+
+# 触发种子所需的最少出现次数（在采样窗口内）
+seed_min_occurrences = 4
+
+# 同一话题种子触发冷却时间（秒）
+seed_cooldown_seconds = 600.0
+
+# seed_recent_ts 清理 TTL（秒，防止内部字典长期增长）
+seed_recent_ttl_seconds = 86400.0
+
+seed_max_tags = 5
+seed_fragment_count = 12
+max_fragments_per_slot = 40
+
+# 新消息喂养到已有槽位的最小标签相似度(Jaccard)
+slot_match_min_jaccard = 0.2
+
+# --- 5.3 品鉴（多轮发酵） ---
+mastication_required_runs = 5
+mastication_interval_seconds = 30.0
+mastication_min_fragments = 6
+mastication_fragment_feed = 12
+
+# --- 5.4 品鉴器模型 ---
+evaluator_model_task = "utils"
+evaluator_temperature = 0.35
+evaluator_max_tokens = 512
+
+# --- 5.5 内化强度（把判决投射到四轴） ---
+assimilation_scale = 1.0
+max_assimilation_shift_abs = 0.5
+assimilation_energy_boost = 0.0
+
+# --- 5.5.1 global 作用域安全护栏（推荐开启） ---
+# 每天每轴最大累计偏移（绝对值，0 表示不限制）
+global_daily_shift_cap_abs = 0.25
+
+# 允许影响全局人格的群白名单（target，如 qq:123:group；留空表示不限制）
+global_whitelist_targets = []
+
+# 参与全局内化所需的最小话题能量（0 表示不限制）
+global_min_slot_energy = 0.0
+
+# 参与全局内化所需的最小平均置信度（0 表示不限制）
+global_min_avg_confidence = 0.0
+
+# 是否改长期底色（base_tone）与是否立刻改变当前坐标（values/ema）
+assimilation_apply_to_base_tone = true
+assimilation_apply_to_values = true
+
+# --- 5.6 可观测性（API 展示） ---
+api_fragments_tail = 12
+
+# --- 5.7 认知失调（可选） ---
+enable_dissonance = true
+dissonance_threshold = 0.6
+dissonance_ttl_seconds = 120.0
+
+# --- 5.8 Trait 风格化（可选，高级） ---
+enrich_traits_with_llm = false
+enrich_model_task = "utils"
+enrich_temperature = 0.9
+enrich_max_tokens = 256
+
+# --- 5.8.1 Trait 内化结果（推荐，增强“可感知的人格底色”） ---
+# 固化后额外用 LLM 生成“思想定义/内化结果”，并在命中相关话题时注入到回复提示词里
+digest_with_llm = true
+digest_model_task = "utils"
+digest_temperature = 0.35
+digest_max_tokens = 512
+
+# --- 5.8.2 重新反思（高级，可选） ---
+# 已固化思维在后续会基于“当下立场”重新生成思想定义/内化结果（可能变化）
+rethink_enabled = false
+rethink_interval_minutes = 720.0
+rethink_max_history = 6
+
+# --- 5.9 旧版 axis_pressure（兼容/高级，平时不用） ---
+pressure_threshold_abs = 0.65
+pressure_required_messages = 30
+
+
+# =========================
+# 6) 黑盒模式（潜意识片段，核心/可选）
+# =========================
+[blackbox]
+enabled = true
+# 是否把 Dream 周期中的“思考过程/品鉴结果”也写入黑盒流（前端图4）
+include_dream_trace = true
+# 最多保留多少条 Dream 思考日志（过大可能导致 state.json 变大）
+max_trace_items = 200
+fragment_interval_minutes = 60.0
+model_task = "utils"
+temperature = 0.8
+max_tokens = 256
+max_fragments = 30
+retry_backoff_seconds = 300.0
+
+
+# =========================
+# 7) 回复注入（让回复“被影响”，核心/可选）
+# =========================
+[injection]
+enabled = true
+
+# 命中话题时，最多注入几条“固化思维的内化结果”
+max_trait_details = 2
+
+# 注入块最大长度（字符，过长会被截断）
+max_chars = 1600
+
+
+# =========================
+# 8) 可选增强：社会化学习（影响力/派系/标签云）
+# =========================
+[influence]
+base_user_weight = 1.0
+admin_user_ids = []
+admin_weight_multiplier = 1.8
+weight_decay = 0.995
+
+[social]
+enable_prototypes = true
+prototype_k = 3
+min_messages_per_user = 5
+prototype_recompute_interval_seconds = 120.0
+max_quote_bank = 200
+max_tag_cloud = 200
+
+
+# =========================
+# 9) 可选增强：群体语言画像（反向喂给回复）
+# =========================
+[sociolect]
+enabled = false
+inject_in_reply = false
+recompute_interval_minutes = 30.0
+failure_backoff_seconds = 600.0
+min_quote_samples = 30
+min_unique_users = 5
+quote_sample_size = 40
+tag_sample_size = 50
+model_task = "utils"
+temperature = 0.3
+max_tokens = 512
+max_age_minutes = 360.0
+max_rules = 6
+max_taboos = 3
+max_lexicon = 10
+max_examples = 2
+max_injection_chars = 500
+
+
+# =========================
+# 10) 可选增强：Dream 联动（不改主程序，运行时 hook）
+# =========================
+[dream]
+# 是否与主程序 Dream 模块联动（运行时 hook，不修改主程序文件）
+integrate_with_dream = true
+
+# 完全绑定模式：思维阁品鉴与黑盒片段只在 Dream 周期触发
+full_bind = true
+
+# 绑定到 Dream：思维阁（品鉴/内化）
+bind_cabinet_to_dream = true
+
+# Dream 周期：最多为多少个群执行“光谱窗口批处理”
+spectrum_groups_per_cycle = 3
+
+# Dream 周期：每个群最多取多少条窗口消息参与一次批处理
+spectrum_max_messages_per_group = 80
+cabinet_steps_per_cycle = 2
+enrich_steps_per_cycle = 1
+rethink_steps_per_cycle = 1
+
+# 绑定到 Dream：黑盒模式（潜意识片段）
+bind_blackbox_to_dream = true
+blackbox_groups_per_cycle = 1
+force_blackbox_on_dream = false
+
+
+# =========================
+# 11) 高级/运维（一般不用动）
+# =========================
+[persistence]
+enabled = true
+save_interval_seconds = 15.0
+
+[performance]
+queue_maxsize = 200
+queue_drop_policy = "drop_new"
+per_group_min_interval_seconds = 0.5
+max_message_chars = 800
+
+[runtime]
+plugin_dir = ""
+
+
+# =========================
+# 12) 调试（高级，按需开启）
+# =========================
+[debug]
+
+# 是否启用 /soul 调试命令（生产环境建议关闭）
+enabled = false
+
+# 是否仅允许管理员使用调试命令
+admin_only = true
+
+# 允许使用调试命令的用户列表（格式：platform:user_id，例如 qq:123456）
+admin_user_ids = []
+
+# 是否允许在私聊中使用调试命令
+allow_in_private = false
+
+# /soul simulate 的参数最大长度（字符）
+max_text_chars = 300

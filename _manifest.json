@@ -1,0 +1,29 @@
+{
+  "manifest_version": 1,
+  "name": "Mai-Soul-Engine",
+  "version": "0.1.0",
+  "description": "为 MaiBot 提供基于社会化学习的动态意识形态系统（光谱/思维阁/黑盒），并暴露 /api/v1/soul/* 用于外部前端展示。",
+  "author": {
+    "name": "CharTyr"
+  },
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "soul",
+    "ideology",
+    "spectrum",
+    "thought-cabinet",
+    "blackbox"
+  ],
+  "categories": [
+    "persona",
+    "analytics",
+    "web"
+  ],
+  "host_application": {
+    "min_version": "0.11.0"
+  },
+  "plugin_info": {
+    "is_built_in": false,
+    "plugin_type": "general"
+  }
+}
