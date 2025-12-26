@@ -1,66 +1,117 @@
-# Mai‑Soul‑Engine 配置
+# Mai‑Soul‑Engine 配置（思维内省 / 思想光谱 / 思维阁）
 #
-# 新手建议先改：
-# 1) [plugin].enabled
-# 2) [api].token
-# 3) [introspection].interval_minutes / window_minutes / rounds
-# 4) [introspection].self_user_ids
+# 这份配置文件是给“非开发者”也能看懂的：
+# - 每个字段尽量写清楚“它影响什么”“推荐怎么填”“填错会怎样”
+#
+# 新手建议按顺序设置（从必须 → 可选）：
+# 1) `[plugin].enabled`：是否启用插件
+# 2) `[api].token`：WebUI/前端访问 API 的 token（生产环境必填）
+# 3) `[introspection].interval_minutes`：内省间隔（越小越频繁、越耗模型/资源）
+# 4) `[introspection].window_minutes`：每次内省回顾多长时间的聊天
+# 5) `[introspection].rounds`：每次内省几轮（轮数越多越“像人回想”，也越耗）
+# 6) `[introspection].self_user_ids`：把“麦麦自己的发言”识别出来（重要：会影响回想与归因）
+#
+# 重要说明：
+# - 插件对外 API Header：`X-Soul-Token: <token>`（见 `[api].token`）
+# - 本插件只持久化脱敏后的摘要与状态到 JSON（默认 `data/state.json`），不会保存原始聊天全文
+# - 生产环境请务必设置 token，并限制 CORS
 
 [plugin]
+# 总开关：false 时插件不做任何内省/注入/存储（但仍可被加载）
 enabled = true
 
 [api]
-# 生产环境强烈建议设置
+# WebUI/API 访问控制：
+# - 留空：任何能访问到后端端口的人都能读 API（不建议）
+# - 建议：设置一串随机长字符串（例如 32~64 位）
 token = ""
+# CORS 白名单（给浏览器前端用）。生产环境请只留你的 WebUI 域名。
 cors_allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 [spectrum]
+# 思想光谱内部是 -1~+1（对外展示会映射为 -100~+100）
+# clamp_abs：每个轴的硬上限（1.0 表示最多到 ±100）
 clamp_abs = 1.0
+# 回归率：每轮内省后，立场会向“基线”回归一点点（越大越不容易被带跑）
 regression_rate = 0.01
+# EMA 平滑：越大越跟手，越小越稳定（0.1~0.2 较常用）
 ema_alpha = 0.15
+# 波动窗口：用于温度等统计的采样窗口（越大越平滑）
 fluctuation_window = 30
 
 [cabinet]
+# 思维阁槽位数（固化思想的展示/注入上限）。默认 6。
 max_slots = 6
+# 候选思想种子队列上限（避免无限增长）
 max_seed_queue = 30
+# 种子阈值：内省末轮生成的候选议题，能量低于阈值则丢弃（0~1）
 seed_energy_threshold = 0.25
+# 每次内省最多内化多少个种子（建议 1~2，太高会很耗）
 internalize_seeds_per_run = 1
+# 每个种子内化需要几轮（越高越“深入”，也越耗）
 internalization_rounds = 3
+# 内化阶段模型温度（越高越发散；0.3~0.5 推荐）
 temperature = 0.35
+# 内化阶段 token 上限（越高越详细，也越贵）
 max_tokens = 900
 
 [introspection]
+# 触发间隔（分钟）：达到间隔且满足静默/有新消息等条件后，会运行一次“思维内省”
 interval_minutes = 20.0
+# 回顾窗口（分钟）：每次内省回看最近多少分钟的聊天摘要
 window_minutes = 30.0
+# 内省轮数：模拟“回想 → 理解 → 意识形态分析 → 结论”的多轮过程
 rounds = 4
+# 每个会话最多纳入多少条脱敏消息（避免提示词过长/成本爆炸）
 max_messages_per_group = 120
+# 静默期（秒）：群里刚说完一阵子先别内省，等“冷却”后再总结
 quiet_period_seconds = 20.0
+# 每次 tick 最多处理多少个群/会话（保护性能）
 max_groups_per_tick = 1
+# 内省阶段模型温度（越高越发散；0.2~0.4 推荐）
 temperature = 0.35
+# 内省阶段 token 上限（越高越详细，也越贵）
 max_tokens = 700
+# 消息量强度缩放：聊天越多，偏移越可能被放大（建议保持默认）
 window_strength_scale = 12.0
+# “麦麦自己”的 user_id 列表（强烈建议填写）
+# - 用途：把“我的发言”与“他人发言”分开，避免把别人观点当成自己的立场
+# - 例：self_user_ids = ["123456789", "bot_qq_uid"]
 self_user_ids = []
+# 人格补充提示：用于把“主程序的人格设定”补进内省/内化提示词（可留空）
 persona_hint = ""
+# 脱敏消息缓冲区上限（ON_MESSAGE 收集的摘要，等待被内省消费）
 pending_max_messages = 400
+# 内省日志条目上限（用于前端展示的“内心独白/轮次结果”）
 max_log_items = 300
 
 [injection]
+# 是否在回复时注入“档位倾向 + 固化思想摘要”
+# - 关闭后仍会运行内省/持久化，但不会改变 replyer 的提示词
 enabled = true
+# 注入最多带上多少条固化思想（越大越强影响，也越容易变啰嗦）
 max_thought_details = 2
+# 注入内容最大字符数（防止把提示词撑爆）
 max_chars = 1400
 
 [persistence]
+# 是否持久化状态到 JSON（建议开启，否则重启即丢立场/思维阁）
 enabled = true
+# 写盘间隔（秒）：越小越安全但更频繁 IO
 save_interval_seconds = 15.0
 
 [performance]
+# 单条消息摘要最大长度（会先脱敏再截断）；过长会抬高提示词成本
 max_message_chars = 800
 
 [runtime]
+# 运行时注入：一般不需要改。留空表示自动使用插件目录。
 plugin_dir = ""
 
 [debug]
+# 调试开关：开启后允许使用 `/soul status`、`/soul introspect`（以主程序命令体系为准）
 enabled = false
+# admin_only=true 时，仅 admin_user_ids 可执行调试命令
 admin_only = true
+# 允许执行调试命令的用户 ID 列表
 admin_user_ids = []
-
