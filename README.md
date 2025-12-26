@@ -99,6 +99,54 @@ Base：`/api/v1/soul`
 
 ---
 
+## 可选：前端 WebUI（推荐）
+
+本插件只提供后端能力与 API。如果你希望可视化查看“光谱 / 思维阁 / 内省日志”，可以选装配套前端：
+
+前端仓库：`https://github.com/CharTyr/mai-soul-archive`
+
+### 方式 A：本地开发预览（最简单）
+
+1) 克隆并安装依赖：
+```bash
+git clone https://github.com/CharTyr/mai-soul-archive.git
+cd mai-soul-archive
+npm install
+```
+
+2) 配置前端环境变量（创建 `.env.local`）：
+```bash
+VITE_SOUL_API_URL=http://127.0.0.1:<MaiBot端口>/api/v1/soul
+VITE_SOUL_API_TOKEN=<填你在 config.toml 里设置的 api.token>
+VITE_USE_MOCK_DATA=false
+```
+
+3) 启动前端：
+```bash
+npm run dev
+```
+
+同时在后端 `config.toml` 中把你的前端地址加入 CORS 白名单（示例）：
+```toml
+[api]
+cors_allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+```
+
+### 方式 B：生产部署（静态站点）
+
+1) 构建静态文件：
+```bash
+npm run build
+```
+
+2) 用任意静态服务器部署 `dist/`（Nginx / Caddy / CDN 均可）。
+
+3) 后端与前端不在同域时：
+   - 后端必须设置 `api.token`
+   - 后端 `api.cors_allow_origins` 只放你的前端域名（不要 `*`）
+
+---
+
 ## 调试命令（可选）
 
 在 `config.toml` 打开：
@@ -120,4 +168,3 @@ admin_user_ids = ["qq:123456"] # 或只写 ["123456"]
 - 不要提交密钥到仓库；务必设置 `api.token`。
 - 插件会持久化人格状态到 `plugins/MaiBot_Soul_Engine/data/state.json`，建议放到持久化磁盘并定期备份。
 - 内省日志/思想 fragments 已做脱敏与截断，但仍建议结合你的隐私要求调整 `introspection.pending_max_messages` 与 `introspection.max_log_items`。
-
