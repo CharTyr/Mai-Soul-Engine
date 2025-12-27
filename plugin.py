@@ -195,6 +195,8 @@ class SoulEngine:
         self._last_persist_ts = 0.0
         self._salt = secrets.token_hex(16)
         self._memory_tools_registered = False
+        self._startup_logged = False
+        self._api_seen_non_preflight = False
 
     def set_config(self, config: Dict[str, Any]) -> None:
         self._config = config or {}
@@ -211,6 +213,49 @@ class SoulEngine:
 
     def is_enabled(self) -> bool:
         return bool(self.get_config("plugin.enabled", True))
+
+    def log_startup_once(self) -> None:
+        if self._startup_logged:
+            return
+        self._startup_logged = True
+
+        enabled = self.is_enabled()
+        token_set = bool(str(self.get_config("api.token", "") or "").strip())
+        persistence = bool(self.get_config("persistence.enabled", True))
+        injection = bool(self.get_config("injection.enabled", True))
+        apply_to_planner = bool(self.get_config("injection.apply_to_planner", True))
+
+        intro_interval = float(self.get_config("introspection.interval_minutes", 20.0) or 20.0)
+        intro_window = float(self.get_config("introspection.window_minutes", 30.0) or 30.0)
+        intro_rounds = int(self.get_config("introspection.rounds", 4) or 4)
+        intro_min_msgs = int(self.get_config("introspection.min_messages_to_run", 30) or 30)
+
+        groups_loaded = len(self._groups)
+        state_hint = str(self._state_file)
+
+        logger.info(
+            "[soul] Mai-Soul-Engine started: enabled=%s groups=%d api=/api/v1/soul token=%s persistence=%s injection=%s planner_injection=%s",
+            enabled,
+            groups_loaded,
+            "set" if token_set else "empty",
+            persistence,
+            injection,
+            apply_to_planner,
+        )
+        logger.info(
+            "[soul] Introspection: interval=%.1fm window=%.1fm rounds=%d min_messages=%d",
+            intro_interval,
+            intro_window,
+            intro_rounds,
+            intro_min_msgs,
+        )
+        logger.info("[soul] State file: %s", state_hint)
+
+        if not token_set:
+            logger.warning("[soul] api.token is empty: /api/v1/soul is unauthenticated (production not recommended)")
+
+        if bool(self.get_config("debug.log_api_calls", False)):
+            logger.info("[soul] debug.log_api_calls=true: will log every /api/v1/soul request (WebUI polls /pulse frequently)")
 
     def _get_lock(self, stream_id: str) -> asyncio.Lock:
         if stream_id not in self._locks:
@@ -500,6 +545,7 @@ class SoulEngine:
             ],
             execute_func=soul_get_thought,
         )
+        logger.info("[soul] Registered memory retrieval tools: soul_search_thoughts, soul_get_thought")
 
     def _pending_cap(self) -> int:
         n = int(self.get_config("introspection.pending_max_messages", 600))
@@ -2068,18 +2114,63 @@ class SoulEngine:
             return origin
         return None
 
+    def _origin_for_log(self, request: Request) -> str:
+        origin = request.headers.get("origin", "") or request.headers.get("Origin", "")
+        origin = str(origin or "").strip()
+        if origin and len(origin) > 120:
+            origin = origin[:117] + "..."
+        return origin
+
+    def _log_api_call(self, request: Request, *, status_code: int, dur_ms: int) -> None:
+        path = str(getattr(request.url, "path", "") or "")
+        method = str(getattr(request, "method", "") or "").upper()
+        if not path.startswith("/api/v1/soul"):
+            return
+        if method == "OPTIONS":
+            return
+
+        log_all = bool(self.get_config("debug.log_api_calls", False))
+        origin = self._origin_for_log(request)
+        origin_hint = f" origin={origin}" if origin else ""
+
+        if not self._api_seen_non_preflight:
+            self._api_seen_non_preflight = True
+            if not log_all and status_code < 400:
+                logger.info("[soul] API first request: %s %s -> %d (%dms)%s", method, path, status_code, dur_ms, origin_hint)
+
+        if status_code >= 500:
+            logger.error("[soul] API %s %s -> %d (%dms)%s", method, path, status_code, dur_ms, origin_hint)
+        elif status_code >= 400:
+            logger.warning("[soul] API %s %s -> %d (%dms)%s", method, path, status_code, dur_ms, origin_hint)
+        elif log_all:
+            logger.info("[soul] API %s %s -> %d (%dms)%s", method, path, status_code, dur_ms, origin_hint)
+
     def _register_cors_middleware(self, app) -> None:
         @app.middleware("http")
         async def soul_cors_middleware(request: Request, call_next):
-            if request.url.path.startswith("/api/v1/soul") and request.method.upper() == "OPTIONS":
-                return self._cors_preflight_response(request)
-            response = await call_next(request)
-            if request.url.path.startswith("/api/v1/soul"):
+            path = str(getattr(request.url, "path", "") or "")
+            method = str(getattr(request, "method", "") or "").upper()
+
+            if path.startswith("/api/v1/soul") and method == "OPTIONS":
+                resp = self._cors_preflight_response(request)
+                self._log_api_call(request, status_code=int(resp.status_code), dur_ms=0)
+                return resp
+
+            t0 = _now_ts()
+            try:
+                response = await call_next(request)
+            except HTTPException as e:
+                response = JSONResponse({"detail": e.detail}, status_code=int(e.status_code))
+
+            dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
+
+            if path.startswith("/api/v1/soul"):
                 origin = request.headers.get("origin", "") or request.headers.get("Origin", "")
                 allow = self._cors_allow_origin(origin)
                 if allow:
                     response.headers["Access-Control-Allow-Origin"] = allow
                     response.headers["Vary"] = "Origin"
+                self._log_api_call(request, status_code=int(getattr(response, "status_code", 0) or 0), dur_ms=dur_ms)
             return response
 
     def _resolve_stream_id(self, *, stream_id: Optional[str], target: Optional[str]) -> str:
@@ -2451,6 +2542,7 @@ class SoulEngine:
         if not self._cors_registered:
             self._register_cors_middleware(server.get_app())
             self._cors_registered = True
+        logger.info("[soul] API routes registered: /api/v1/soul/* (CORS auto, token=%s)", "set" if str(self.get_config("api.token", "") or "").strip() else "empty")
 
 
 class SoulBackgroundTask(AsyncTask):
@@ -2491,6 +2583,7 @@ class SoulOnStartEventHandler(BaseEventHandler):
                 engine.load_persisted()
             await engine.try_import_on_start()
             engine.register_api_routes()
+            engine.log_startup_once()
             await async_task_manager.add_task(SoulBackgroundTask(engine))
             return True, True, None, None, None
         except Exception as e:
@@ -2854,6 +2947,7 @@ class MaiSoulEnginePlugin(BasePlugin):
             "allow_force_introspect": ConfigField(type=bool, default=False, description="是否允许 /soul introspect 强制内省（写状态；默认关闭）", order=3),
             "audit_enabled": ConfigField(type=bool, default=True, description="是否记录调试/导入等操作的审计日志（data/audit.jsonl）", order=4),
             "audit_max_bytes": ConfigField(type=int, default=2_000_000, description="审计日志最大字节数（超出自动轮转）", min=50_000, max=50_000_000, order=5),
+            "log_api_calls": ConfigField(type=bool, default=False, description="是否记录 /api/v1/soul API 调用日志（可能很频繁）", order=6),
         },
         "runtime": {"plugin_dir": ConfigField(type=str, default="", description="运行时注入：插件目录（一般不用填）", order=0)},
     }

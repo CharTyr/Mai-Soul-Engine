@@ -184,3 +184,7 @@ allow_force_introspect = false
 audit_enabled = true
 # 审计日志最大字节数（超出会轮转到 `audit.jsonl.bak`）
 audit_max_bytes = 2000000
+# 是否记录 API 调用日志（默认关闭；打开后日志可能非常频繁）
+# - WebUI 会定时轮询 `/api/v1/soul/pulse`
+# - 推荐仅在排查“前端连不上/鉴权失败/跨域问题”等场景时短期开启
+log_api_calls = false
