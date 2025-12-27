@@ -116,6 +116,12 @@ min_thought_score = 0.0
 max_thought_details = 2
 # 注入内容最大字符数（防止把提示词撑爆）
 max_chars = 1400
+# 是否在 planner 阶段也注入“思想光谱倾向”（让 planner 的动作选择/回复策略与立场联动）
+# - true：planner 在选择 reply/no_reply 等动作时会参考当前光谱倾向
+# - false：只影响 replyer，不影响 planner
+apply_to_planner = true
+# planner 注入块最大字符数（建议保持较小，避免影响 planner prompt）
+planner_max_chars = 900
 
 [persistence]
 # 是否持久化状态到 JSON（建议开启，否则重启即丢立场/思维阁）

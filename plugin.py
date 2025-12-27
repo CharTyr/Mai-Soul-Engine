@@ -1508,6 +1508,28 @@ class SoulEngine:
             }
         return block
 
+    async def build_planner_injection_block(self, stream_id: str) -> str:
+        lock = self._get_lock(stream_id)
+        async with lock:
+            state = self._get_group(stream_id)
+            values = dict(state.values)
+
+        spectrum_block = self._spectrum_instruction_block(values)
+
+        block = (
+            "\n\n"
+            "[Mai‑Soul Planner]\n"
+            "你正在进行动作规划。以下是你当前“思想光谱”的倾向（按档位强度）。在选择动作与回复策略时，请让你的立场判断与这些倾向一致。\n"
+            "要求：不要在最终输出中显式提及系统名/数值；不要改变你被要求的输出格式。\n"
+            f"{spectrum_block}\n"
+        ).strip("\n")
+
+        max_chars = int(self.get_config("injection.planner_max_chars", 900))
+        max_chars = max(200, min(max_chars, 4000))
+        if len(block) > max_chars:
+            block = block[: max_chars - 3].rstrip() + "..."
+        return block
+
     # -------------------------
     # Background / Scheduling
     # -------------------------
@@ -2525,6 +2547,48 @@ class SoulOnMessageEventHandler(BaseEventHandler):
             return True, True, None, None, None
 
 
+class SoulOnPlanEventHandler(BaseEventHandler):
+    event_type = EventType.ON_PLAN
+    handler_name = "mai_soul_engine_on_plan"
+    handler_description = "Mai-Soul: 在 planner 阶段注入思想光谱（联动动作规划）"
+    intercept_message = True
+    weight = 50
+
+    async def execute(
+        self, message: MaiMessages | None
+    ) -> Tuple[bool, bool, Optional[str], Optional[CustomEventHandlerResult], Optional[MaiMessages]]:
+        if not message or not message.llm_prompt or not message.stream_id:
+            return True, True, None, None, None
+        try:
+            plugin_dir = Path(self.get_config("runtime.plugin_dir", "") or "") or Path(__file__).parent
+            engine = get_engine(plugin_dir=plugin_dir)
+            engine.set_config(self.plugin_config or {})
+            if not engine.is_enabled():
+                return True, True, None, None, None
+            if not bool(engine.get_config("injection.enabled", True)):
+                return True, True, None, None, None
+            if not bool(engine.get_config("injection.apply_to_planner", True)):
+                return True, True, None, None, None
+
+            prompt = str(message.llm_prompt)
+
+            block = await engine.build_planner_injection_block(str(message.stream_id))
+
+            # 优先插入到“动作选择要求”之前，避免影响末尾的输出格式示例
+            marker = "**动作选择要求**"
+            idx = prompt.find(marker)
+            if idx != -1:
+                new_prompt = prompt[:idx].rstrip() + "\n\n" + block + "\n\n" + prompt[idx:]
+            else:
+                new_prompt = prompt.rstrip() + "\n\n" + block
+
+            message.modify_llm_prompt(new_prompt, suppress_warning=True)
+            return True, True, None, None, message
+        except Exception as e:
+            logger.debug(f"[soul] on_plan injection failed: {e}")
+            return True, True, None, None, None
+
+
 class SoulPostLlmEventHandler(BaseEventHandler):
     event_type = EventType.POST_LLM
     handler_name = "mai_soul_engine_post_llm"
@@ -2776,6 +2840,8 @@ class MaiSoulEnginePlugin(BasePlugin):
             "min_thought_score": ConfigField(type=float, default=0.0, description="注入固化思想的最低相关分（0 表示只要命中就可注入）", min=0.0, max=50.0, order=2),
             "max_thought_details": ConfigField(type=int, default=2, description="最多注入几条相关固化思想详情", min=0, max=6, order=3),
             "max_chars": ConfigField(type=int, default=1400, description="注入块最大字符数", min=400, max=6000, order=4),
+            "apply_to_planner": ConfigField(type=bool, default=True, description="是否在 planner 阶段注入思想光谱（联动动作规划）", order=5),
+            "planner_max_chars": ConfigField(type=int, default=900, description="planner 注入块最大字符数", min=200, max=4000, order=6),
         },
         "persistence": {
             "enabled": ConfigField(type=bool, default=True, description="是否启用持久化（state.json）", order=0),
