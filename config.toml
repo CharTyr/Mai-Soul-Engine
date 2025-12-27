@@ -36,7 +36,7 @@ clamp_abs = 1.0
 regression_rate = 0.01
 # EMA 平滑：越大越跟手，越小越稳定（0.1~0.2 较常用）
 ema_alpha = 0.15
-# 波动窗口：用于温度等统计的采样窗口（越大越平滑）
+# 波动窗口：用于“波动率 volatility”的统计窗口（最近 N 次内省；越大越平滑，越小越敏感）
 fluctuation_window = 30
 
 [cabinet]

@@ -88,6 +88,31 @@ use_main_personality = true
 - `50~75`：第 3 档（明显）
 - `75~100`：第 4 档（强烈）
 
+### 光谱稳定性参数（高级调参）
+
+在 `GET /api/v1/soul/spectrum` 的每个维度里，你会看到三类数：
+- `values.current`：当前立场（-100~100）
+- `values.ema`：平滑后的“长期底色”（-100~100）
+- `volatility`：最近一段时间的波动率（0~1，仅用于展示）
+
+对应 `config.toml` 里的两个关键参数：
+
+1) `spectrum.ema_alpha`（EMA 平滑系数）  
+EMA（指数移动平均）会把“每次思维内省后的 current”平滑成更稳定的 `ema`，用于展示底色、以及推导 `base_tone / dominant_trait`。  
+公式直观理解：`ema = (1-α)*ema_prev + α*current`  
+- `α` 越大：越“跟手”，立场/特质变化更快，但更容易抖动  
+- `α` 越小：越“稳定”，变化更慢、更像长期塑造  
+
+2) `spectrum.fluctuation_window`（波动窗口）  
+插件会记录每次内省产生的有效偏移，并只保留“最近 N 次内省”的偏移作为采样窗口，用来计算 `/spectrum` 的 `volatility`。  
+- `N` 越大：波动率更平滑（但更滞后）  
+- `N` 越小：波动率更敏感（但更跳）  
+注意：这里的 N 指“最近 N 次内省”，不是分钟/小时。
+
+调参建议：
+- 觉得界面上的 `dominant_trait/base_tone` 变化太快：把 `ema_alpha` 调小（例如 `0.10`）；变化太慢：调大（例如 `0.20`）
+- 觉得 `volatility` 太跳：把 `fluctuation_window` 调大（例如 `50`）；太钝：调小（例如 `20`）
+
 ---
 
 ## API（给前端）
