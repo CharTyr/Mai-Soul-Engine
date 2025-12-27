@@ -197,6 +197,7 @@ class SoulEngine:
         self._memory_tools_registered = False
         self._startup_logged = False
         self._api_seen_non_preflight = False
+        self._log_rate: Dict[str, float] = {}
 
     def set_config(self, config: Dict[str, Any]) -> None:
         self._config = config or {}
@@ -213,6 +214,20 @@ class SoulEngine:
 
     def is_enabled(self) -> bool:
         return bool(self.get_config("plugin.enabled", True))
+
+    def _sid_hint(self, stream_id: str) -> str:
+        try:
+            return f"s_{self._sha256_short(f'{self._salt}|sid|{stream_id}', n=10)}"
+        except Exception:
+            return "s_?"
+
+    def _should_log(self, key: str, *, interval_sec: float) -> bool:
+        now = _now_ts()
+        last = float(self._log_rate.get(key, 0.0) or 0.0)
+        if (now - last) >= float(interval_sec):
+            self._log_rate[key] = float(now)
+            return True
+        return False
 
     def log_startup_once(self) -> None:
         if self._startup_logged:
@@ -1095,14 +1110,35 @@ class SoulEngine:
         if not self.is_enabled():
             return False
 
+        t0 = _now_ts()
+        sid_hint = self._sid_hint(stream_id)
+        internalized_ok = 0
+        internalized_fail = 0
+        seeds_added = 0
+        seeds_merged = 0
+        major_shift = False
+        applied_points: Dict[str, float] = {a: 0.0 for a in AXES}
+
         now = _now_ts()
         lock = self._get_lock(stream_id)
         async with lock:
             state = self._get_group(stream_id)
             from_ts, window_items = self._extract_window_locked(state, now=now)
+            window_count = len(window_items)
+            seed_queue_before = len(state.seed_queue or [])
             if not window_items and not state.seed_queue:
                 state.last_introspection_ts = max(float(state.last_introspection_ts or 0.0), now)
+                dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
+                logger.info("[soul] Introspection noop: sid=%s dur=%dms (empty window & no seeds)", sid_hint, dur_ms)
                 return False
+
+        logger.info(
+            "[soul] Introspection start%s: sid=%s window_msgs=%d seed_queue=%d",
+            " (forced)" if force else "",
+            sid_hint,
+            int(window_count),
+            int(seed_queue_before),
+        )
 
         # 1) 内化候选思想（若有）
         internalize_n = int(self.get_config("cabinet.internalize_seeds_per_run", 1))
@@ -1116,6 +1152,15 @@ class SoulEngine:
                     break
                 seed.attempts = int(getattr(seed, "attempts", 0) or 0)
                 seed.last_attempt_ts = float(_now_ts())
+                max_attempts = int(self.get_config("cabinet.max_internalize_attempts", 3))
+                max_attempts = max(1, min(max_attempts, 20))
+                logger.info(
+                    "[soul] Internalize start: sid=%s seed_id=%s attempt=%d/%d",
+                    sid_hint,
+                    str(getattr(seed, "seed_id", "") or ""),
+                    int(seed.attempts) + 1,
+                    int(max_attempts),
+                )
                 thought = await self._internalize_seed(stream_id, seed)
                 if not thought:
                     async with lock:
@@ -1126,11 +1171,26 @@ class SoulEngine:
                             content=f"【思想内化失败】topic={seed.topic} attempts={seed.attempts + 1}",
                             tags=["introspection", "cabinet"],
                         )
-                        max_attempts = int(self.get_config("cabinet.max_internalize_attempts", 3))
-                        max_attempts = max(1, min(max_attempts, 20))
                         seed.attempts = int(seed.attempts) + 1
                         if seed.attempts < max_attempts:
                             state.seed_queue.append(seed)
+                            internalized_fail += 1
+                            logger.warning(
+                                "[soul] Internalize failed: sid=%s seed_id=%s attempt=%d/%d action=retry",
+                                sid_hint,
+                                str(getattr(seed, "seed_id", "") or ""),
+                                int(seed.attempts),
+                                int(max_attempts),
+                            )
+                        else:
+                            internalized_fail += 1
+                            logger.warning(
+                                "[soul] Internalize failed: sid=%s seed_id=%s attempt=%d/%d action=drop",
+                                sid_hint,
+                                str(getattr(seed, "seed_id", "") or ""),
+                                int(seed.attempts),
+                                int(max_attempts),
+                            )
                     continue
 
                 async with lock:
@@ -1157,6 +1217,17 @@ class SoulEngine:
                         extra={"thought_id": thought.thought_id, "topic": thought.topic},
                     )
                     state.last_major_shift_ts = max(float(state.last_major_shift_ts or 0.0), now)
+                    internalized_ok += 1
+                    try:
+                        impact = {a: round(float(thought.impact_points.get(a, 0.0) or 0.0), 2) for a in AXES}
+                    except Exception:
+                        impact = {}
+                    logger.info(
+                        "[soul] Thought crystallized: sid=%s thought_id=%s impact=%s",
+                        sid_hint,
+                        str(getattr(thought, "thought_id", "") or ""),
+                        json.dumps(impact, ensure_ascii=False),
+                    )
 
         # 2) 对聊天窗口做多轮内省
         rounds = int(self.get_config("introspection.rounds", 4))
@@ -1295,6 +1366,15 @@ class SoulEngine:
             async with lock:
                 state = self._get_group(stream_id)
                 state.last_introspection_ts = max(float(state.last_introspection_ts or 0.0), now)
+            dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
+            logger.warning(
+                "[soul] Introspection failed: sid=%s dur=%dms window_msgs=%d internalized=%d/%d (LLM output missing/invalid)",
+                sid_hint,
+                dur_ms,
+                int(window_count),
+                int(internalized_ok),
+                int(internalized_ok + internalized_fail),
+            )
             return False
 
         # 应用最终偏移 & 生成种子
@@ -1324,8 +1404,10 @@ class SoulEngine:
                 confidence=confidence,
                 window_size=len(window_items) if window_items else 1,
             )
+            applied_points = {a: float(applied.get(a, 0.0) or 0.0) for a in AXES}
             if any(abs(float(applied.get(a, 0.0) or 0.0)) >= 10.0 for a in AXES):
                 state.last_major_shift_ts = max(float(state.last_major_shift_ts or 0.0), now)
+                major_shift = True
 
             rationale = final.get("shift_rationale", [])
             if isinstance(rationale, list):
@@ -1406,8 +1488,10 @@ class SoulEngine:
                     s.fragments = merged_frags[:seed_frag_cap] if seed_frag_cap else []
                     if float(s.created_ts or 0.0) <= 0:
                         s.created_ts = float(new_seed.created_ts or now)
+                    seeds_merged += 1
                 else:
                     state.seed_queue.append(new_seed)
+                    seeds_added += 1
 
                 if seed_cap and len(state.seed_queue) > seed_cap:
                     state.seed_queue = state.seed_queue[-seed_cap:]
@@ -1422,6 +1506,20 @@ class SoulEngine:
                 tags=["introspection"],
                 extra={"applied_points": applied, "window_size": len(window_items)},
             )
+        dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
+        logger.info(
+            "[soul] Introspection done: sid=%s ok=%s dur=%dms window_msgs=%d internalized=%d/%d new_seeds=%d merged=%d major_shift=%s shift=%s",
+            sid_hint,
+            True,
+            dur_ms,
+            int(window_count),
+            int(internalized_ok),
+            int(internalized_ok + internalized_fail),
+            int(seeds_added),
+            int(seeds_merged),
+            bool(major_shift),
+            json.dumps({a: round(float(applied_points.get(a, 0.0) or 0.0), 2) for a in AXES}, ensure_ascii=False),
+        )
         return True
 
     # -------------------------
@@ -1622,6 +1720,7 @@ class SoulEngine:
         candidates: List[Tuple[str, float]] = []
 
         async with self._tick_lock:
+            debug_sched = bool(self.get_config("debug.log_scheduler", False))
             interval_min = float(self.get_config("introspection.interval_minutes", 20.0))
             interval_min = max(1.0, min(interval_min, 24 * 60.0))
             quiet = float(self.get_config("introspection.quiet_period_seconds", 20.0))
@@ -1641,6 +1740,24 @@ class SoulEngine:
 
                     if (has_seeds or enough_msgs) and due and quiet_ok and not self._introspection_task_active(sid):
                         candidates.append((sid, float(st.last_activity_ts or 0.0)))
+                    elif debug_sched and due:
+                        reason = ""
+                        if self._introspection_task_active(sid):
+                            reason = "task_active"
+                        elif (has_seeds or enough_msgs) and not quiet_ok:
+                            reason = "not_quiet"
+                        elif (not has_seeds) and (not enough_msgs) and quiet_ok:
+                            reason = "not_enough_msgs"
+                        if reason and self._should_log(f"sched:{sid}:{reason}", interval_sec=60.0):
+                            logger.info(
+                                "[soul] Scheduler skip: sid=%s reason=%s window_msgs=%d/%d seeds=%d quiet_ok=%s",
+                                self._sid_hint(sid),
+                                reason,
+                                int(len(window_items)),
+                                int(min_msgs),
+                                int(len(st.seed_queue or [])),
+                                bool(quiet_ok),
+                            )
 
             # persistence
             if bool(self.get_config("persistence.enabled", True)):
@@ -1849,9 +1966,11 @@ class SoulEngine:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             await self.append_audit_event({"action": "import_state", "ok": False, "reason": f"invalid_json:{e}"})
+            logger.warning("[soul] Import state failed: invalid json (%s)", str(path))
             return
         if not isinstance(raw, dict):
             await self.append_audit_event({"action": "import_state", "ok": False, "reason": "not_object"})
+            logger.warning("[soul] Import state failed: not a JSON object (%s)", str(path))
             return
 
         raw = self._migrate_state_payload(raw)
@@ -1862,6 +1981,7 @@ class SoulEngine:
         imported_salt = str(raw.get("salt", "") or "").strip()
         if mode == "merge" and imported_salt and imported_salt != self._salt and self._groups:
             await self.append_audit_event({"action": "import_state", "ok": False, "reason": "salt_mismatch"})
+            logger.warning("[soul] Import state blocked: salt mismatch (mode=merge)")
             return
         if mode == "overwrite" and imported_salt:
             self._salt = imported_salt
@@ -1871,6 +1991,7 @@ class SoulEngine:
         groups = raw.get("groups", {})
         if not isinstance(groups, dict):
             await self.append_audit_event({"action": "import_state", "ok": False, "reason": "no_groups"})
+            logger.warning("[soul] Import state failed: missing groups")
             return
 
         imported: Dict[str, GroupState] = {}
@@ -1881,8 +2002,10 @@ class SoulEngine:
 
         if not imported:
             await self.append_audit_event({"action": "import_state", "ok": False, "reason": "empty"})
+            logger.warning("[soul] Import state failed: empty groups")
             return
 
+        before_groups = len(self._groups)
         if mode == "overwrite":
             self._groups = imported
         else:
@@ -1928,12 +2051,20 @@ class SoulEngine:
                     st.message_count = max(int(st.message_count or 0), int(st_new.message_count or 0))
                     st.last_activity_ts = max(float(st.last_activity_ts or 0.0), float(st_new.last_activity_ts or 0.0))
 
+        after_groups = len(self._groups)
         try:
             ts = int(_now_ts())
             path.rename(path.with_suffix(path.suffix + f".imported.{ts}"))
         except Exception:
             pass
         await self.append_audit_event({"action": "import_state", "ok": True, "mode": mode, "groups": len(imported)})
+        logger.info(
+            "[soul] Imported state on start: mode=%s imported_groups=%d total_groups=%d (+%d)",
+            mode,
+            int(len(imported)),
+            int(after_groups),
+            int(max(0, after_groups - before_groups)),
+        )
 
     def _fsync_dir(self, dir_path: Path) -> None:
         try:
@@ -2013,8 +2144,14 @@ class SoulEngine:
                         "thoughts": [t.__dict__ for t in (st.thoughts or [])[-200:]],
                     }
             self._atomic_write_json(self._state_file, payload)
+            if bool(self.get_config("debug.log_persistence", False)):
+                try:
+                    size = int(self._state_file.stat().st_size) if self._state_file.exists() else 0
+                except Exception:
+                    size = 0
+                logger.info("[soul] State saved: groups=%d bytes=%d", int(len(self._groups)), int(size))
         except Exception as e:
-            logger.debug(f"[soul] persist failed: {e}")
+            logger.warning(f"[soul] persist failed: {e}")
 
     def load_persisted(self) -> None:
         if not self._state_file.exists() and not self._state_file.with_suffix(self._state_file.suffix + ".bak").exists():
@@ -2029,9 +2166,11 @@ class SoulEngine:
             except Exception:
                 return None
 
+        loaded_from = self._state_file
         raw = try_load(self._state_file)
         if raw is None:
-            raw = try_load(self._state_file.with_suffix(self._state_file.suffix + ".bak"))
+            loaded_from = self._state_file.with_suffix(self._state_file.suffix + ".bak")
+            raw = try_load(loaded_from)
         if raw is None:
             # 两份都坏掉：保留现场但不阻止启动
             try:
@@ -2041,6 +2180,7 @@ class SoulEngine:
                         p.rename(p.with_suffix(p.suffix + f".corrupt.{ts}"))
             except Exception:
                 pass
+            logger.warning("[soul] Failed to load persisted state: both state.json and backup are corrupt")
             return
 
         raw = self._migrate_state_payload(raw)
@@ -2056,8 +2196,9 @@ class SoulEngine:
                 if not isinstance(obj, dict):
                     continue
                 self._groups[str(sid)] = self._parse_group_state(obj)
+            logger.info("[soul] Loaded persisted state: groups=%d from=%s", int(len(self._groups)), str(loaded_from.name))
         except Exception as e:
-            logger.debug(f"[soul] load_persisted failed: {e}")
+            logger.warning(f"[soul] load_persisted failed: {e}")
 
     # -------------------------
     # API
@@ -2673,6 +2814,12 @@ class SoulOnPlanEventHandler(BaseEventHandler):
                 new_prompt = prompt.rstrip() + "\n\n" + block
 
             message.modify_llm_prompt(new_prompt, suppress_warning=True)
+            if bool(engine.get_config("debug.log_injection", False)):
+                logger.info(
+                    "[soul] Planner injection applied: sid=%s chars=%d",
+                    engine._sid_hint(str(message.stream_id)),
+                    int(len(block)),
+                )
             return True, True, None, None, message
         except Exception as e:
             logger.debug(f"[soul] on_plan injection failed: {e}")
@@ -2716,11 +2863,29 @@ class SoulPostLlmEventHandler(BaseEventHandler):
                     st = engine._get_group(str(message.stream_id))
                     st.last_injection_ts = _now_ts()
                     st.last_injection = {"ts": _to_iso(st.last_injection_ts), "skipped": True, "reason": "prompt_budget"}
+                if engine._should_log(f"injection_skip_budget:{str(message.stream_id)}", interval_sec=60.0):
+                    logger.warning(
+                        "[soul] Reply injection skipped: sid=%s reason=prompt_budget prompt_chars=%d budget=%d safety=%d allow=%d",
+                        engine._sid_hint(str(message.stream_id)),
+                        int(len(prompt)),
+                        int(reply_budget),
+                        int(safety),
+                        int(allow),
+                    )
                 return True, True, None, None, message
 
             trigger_text = str(getattr(message, "plain_text", "") or "")
             block = await engine.build_injection_block(message.stream_id, trigger_text=trigger_text)
+            trimmed = False
             if len(block) > allow:
+                trimmed = True
+                if engine._should_log(f"injection_trim_budget:{str(message.stream_id)}", interval_sec=60.0):
+                    logger.warning(
+                        "[soul] Reply injection trimmed: sid=%s block_chars=%d allow=%d",
+                        engine._sid_hint(str(message.stream_id)),
+                        int(len(block)),
+                        int(allow),
+                    )
                 block = block[: max(0, allow - 3)].rstrip() + "..."
 
             marker = "现在，你说："
@@ -2731,6 +2896,31 @@ class SoulPostLlmEventHandler(BaseEventHandler):
                 new_prompt = prompt.rstrip() + "\n\n" + block
 
             message.modify_llm_prompt(new_prompt, suppress_warning=True)
+            if bool(engine.get_config("debug.log_injection", False)):
+                lock = engine._get_lock(str(message.stream_id))
+                async with lock:
+                    st = engine._get_group(str(message.stream_id))
+                    inj = dict(st.last_injection or {}) if isinstance(st.last_injection, dict) else {}
+                picked = inj.get("picked", [])
+                if not isinstance(picked, list):
+                    picked = []
+                thought_ids = []
+                for it in picked:
+                    if not isinstance(it, dict):
+                        continue
+                    tid = str(it.get("thought_id", "") or "").strip()
+                    if tid:
+                        thought_ids.append(tid)
+                logger.info(
+                    "[soul] Reply injection applied: sid=%s policy=%s picked=%d chars=%d allow=%d trimmed=%s thought_ids=%s",
+                    engine._sid_hint(str(message.stream_id)),
+                    str(inj.get("policy", "") or ""),
+                    int(len(picked)),
+                    int(len(block)),
+                    int(allow),
+                    bool(trimmed),
+                    ",".join(thought_ids[:3]),
+                )
             return True, True, None, None, message
         except Exception as e:
             logger.debug(f"[soul] post_llm injection failed: {e}")
@@ -2948,6 +3138,9 @@ class MaiSoulEnginePlugin(BasePlugin):
             "audit_enabled": ConfigField(type=bool, default=True, description="是否记录调试/导入等操作的审计日志（data/audit.jsonl）", order=4),
             "audit_max_bytes": ConfigField(type=int, default=2_000_000, description="审计日志最大字节数（超出自动轮转）", min=50_000, max=50_000_000, order=5),
             "log_api_calls": ConfigField(type=bool, default=False, description="是否记录 /api/v1/soul API 调用日志（可能很频繁）", order=6),
+            "log_scheduler": ConfigField(type=bool, default=False, description="是否记录内省调度跳过原因（用于排查为何不触发；可能较频繁）", order=7),
+            "log_injection": ConfigField(type=bool, default=False, description="是否记录注入摘要日志（planner/replyer；可能较频繁）", order=8),
+            "log_persistence": ConfigField(type=bool, default=False, description="是否记录每次状态保存日志（可能较频繁）", order=9),
         },
         "runtime": {"plugin_dir": ConfigField(type=str, default="", description="运行时注入：插件目录（一般不用填）", order=0)},
     }

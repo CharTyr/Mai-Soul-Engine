@@ -188,3 +188,13 @@ audit_max_bytes = 2000000
 # - WebUI 会定时轮询 `/api/v1/soul/pulse`
 # - 推荐仅在排查“前端连不上/鉴权失败/跨域问题”等场景时短期开启
 log_api_calls = false
+# 是否记录内省调度日志（默认关闭）
+# - 用于排查“为什么一直不触发内省”（会输出 scheduler skip 原因）
+# - 频率：每个群/会话每 60 秒最多 1 条
+log_scheduler = false
+# 是否记录注入摘要日志（默认关闭）
+# - 开启后会输出 planner/replyer 注入摘要（每次注入都会打，可能很频繁）
+log_injection = false
+# 是否记录持久化日志（默认关闭）
+# - 开启后每次保存 `data/state.json` 都会输出一条摘要（频率由 save_interval_seconds 决定）
+log_persistence = false
