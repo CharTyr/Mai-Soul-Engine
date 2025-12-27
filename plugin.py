@@ -32,8 +32,11 @@ from src.plugin_system import (
 from src.plugin_system.apis import llm_api
 from src.plugin_system.base.config_types import section_meta
 from src.plugin_system.base.component_types import CustomEventHandlerResult, MaiMessages
+from src.memory_system.retrieval_tools.tool_registry import register_memory_retrieval_tool
 
 logger = get_logger("mai_soul_engine")
+
+STATE_SCHEMA_VERSION = 3
 
 AXES: Tuple[str, ...] = (
     "sincerity_absurdism",
@@ -118,6 +121,8 @@ class ThoughtSeed:
     energy: float = 0.0
     fragments: List[str] = field(default_factory=list)
     created_ts: float = 0.0
+    attempts: int = 0
+    last_attempt_ts: float = 0.0
 
 
 @dataclass
@@ -162,6 +167,13 @@ class GroupState:
     thoughts: List[Thought] = field(default_factory=list)
 
     last_major_shift_ts: float = 0.0
+    last_injection_ts: float = 0.0
+    last_injection: Dict[str, Any] = field(default_factory=dict)
+    introspection_runs_total: int = 0
+    introspection_failures_total: int = 0
+    last_introspection_duration_ms: int = 0
+    last_introspection_ok: bool = True
+    last_introspection_error: str = ""
 
 
 class SoulEngine:
@@ -177,8 +189,11 @@ class SoulEngine:
         self._cors_registered = False
         self._api_router = APIRouter()
         self._state_file = self.plugin_dir / "data" / "state.json"
+        self._audit_file = self.plugin_dir / "data" / "audit.jsonl"
+        self._audit_lock = asyncio.Lock()
         self._last_persist_ts = 0.0
         self._salt = secrets.token_hex(16)
+        self._memory_tools_registered = False
 
     def set_config(self, config: Dict[str, Any]) -> None:
         self._config = config or {}
@@ -237,6 +252,253 @@ class SoulEngine:
         s = re.sub(r"\\b\\d{5,}\\b", "<num>", s)
         max_chars = max(40, min(int(max_chars), 800))
         return s[:max_chars]
+
+    def _tokenize(self, text: str, *, max_tokens: int = 80) -> List[str]:
+        s = (text or "").lower()
+        parts = re.findall(r"[\\u4e00-\\u9fff]+|[a-z0-9]+", s)
+        out: List[str] = []
+        for p in parts:
+            if not p:
+                continue
+            if re.fullmatch(r"[\\u4e00-\\u9fff]+", p):
+                # 中文：用 2-gram 提升区分度，并保留原片段
+                if len(p) == 1:
+                    out.append(p)
+                else:
+                    out.append(p)
+                    for i in range(0, len(p) - 1):
+                        out.append(p[i : i + 2])
+            else:
+                out.append(p)
+            if len(out) >= max_tokens:
+                break
+        return out[:max_tokens]
+
+    def _jaccard(self, a: List[str], b: List[str]) -> float:
+        sa = {x for x in a if str(x).strip()}
+        sb = {x for x in b if str(x).strip()}
+        if not sa or not sb:
+            return 0.0
+        inter = len(sa & sb)
+        union = len(sa | sb)
+        return float(inter) / float(union or 1)
+
+    def _seed_similarity(self, *, topic: str, tags: List[str], other: ThoughtSeed) -> float:
+        t1 = self._tokenize((topic or "") + " " + " ".join([str(x) for x in (tags or [])]), max_tokens=120)
+        t2 = self._tokenize((other.topic or "") + " " + " ".join([str(x) for x in (other.tags or [])]), max_tokens=120)
+        sim = self._jaccard(t1, t2)
+        if {str(x).strip() for x in (tags or []) if str(x).strip()} & {str(x).strip() for x in (other.tags or []) if str(x).strip()}:
+            sim += 0.12
+        return float(_clamp(sim, 0.0, 1.0))
+
+    def _bm25_scores(self, *, query: str, docs: List[Tuple[str, str]]) -> Dict[str, float]:
+        # docs: [(doc_id, doc_text)]
+        k1 = 1.2
+        b = 0.75
+        q_tokens = self._tokenize(query, max_tokens=80)
+        if not q_tokens:
+            return {}
+
+        doc_terms: Dict[str, Dict[str, int]] = {}
+        doc_lens: Dict[str, int] = {}
+        df: Dict[str, int] = {}
+
+        for doc_id, text in docs:
+            tf: Dict[str, int] = {}
+            tokens = self._tokenize(text, max_tokens=240)
+            for t in tokens:
+                tf[t] = tf.get(t, 0) + 1
+            doc_terms[doc_id] = tf
+            doc_lens[doc_id] = len(tokens)
+            seen = set(tokens)
+            for t in seen:
+                df[t] = df.get(t, 0) + 1
+
+        n = max(1, len(docs))
+        avgdl = sum(doc_lens.values()) / float(len(doc_lens) or 1)
+
+        scores: Dict[str, float] = {}
+        for doc_id, _text in docs:
+            tf = doc_terms.get(doc_id, {})
+            dl = float(doc_lens.get(doc_id, 0) or 0)
+            score = 0.0
+            for term in q_tokens:
+                freq = float(tf.get(term, 0) or 0)
+                if freq <= 0:
+                    continue
+                dfi = float(df.get(term, 0) or 0)
+                # BM25+ 常见写法：log(1 + (N - df + 0.5)/(df + 0.5))
+                idf = math.log(1.0 + (n - dfi + 0.5) / (dfi + 0.5))
+                denom = freq + k1 * (1.0 - b + b * (dl / max(1e-6, avgdl)))
+                score += idf * (freq * (k1 + 1.0) / max(1e-6, denom))
+            if score > 0:
+                scores[doc_id] = float(score)
+        return scores
+
+    def _thought_doc_text(self, t: Thought) -> str:
+        return "\n".join(
+            [
+                str(t.topic or ""),
+                str(t.name or ""),
+                " ".join([str(x) for x in (t.tags or []) if str(x).strip()]),
+                str(t.definition or ""),
+                str(t.digest or ""),
+                str(t.style_hint or ""),
+            ]
+        ).strip()
+
+    def _score_thoughts(self, *, thoughts: List[Thought], query: str, now: float) -> List[Dict[str, Any]]:
+        q = (query or "").strip()
+        if not q:
+            return []
+        docs: List[Tuple[str, str]] = []
+        meta: Dict[str, Thought] = {}
+        for t in thoughts:
+            docs.append((t.thought_id, self._thought_doc_text(t)))
+            meta[t.thought_id] = t
+
+        scores = self._bm25_scores(query=q, docs=docs)
+        if not scores:
+            return []
+
+        half_life_days = float(self.get_config("cabinet.thought_half_life_days", 30.0))
+        half_life_days = max(0.0, min(half_life_days, 3650.0))
+        min_decay = float(self.get_config("cabinet.thought_min_decay", 0.25))
+        min_decay = float(_clamp(min_decay, 0.0, 1.0))
+
+        out: List[Dict[str, Any]] = []
+        for tid, s in scores.items():
+            t = meta.get(tid)
+            if not t:
+                continue
+            w = 1.0
+            if half_life_days > 0:
+                age_days = max(0.0, (now - float(t.created_ts or now)) / 86400.0)
+                decay = 2 ** (-age_days / max(1e-6, half_life_days))
+                w = float(_clamp(decay, min_decay, 1.0))
+            out.append({"thought": t, "score": float(s) * w, "raw_score": float(s), "decay": w})
+        out.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+        return out
+
+    async def _search_thoughts(self, *, stream_id: Optional[str], query: str, top_k: int, min_score: float) -> List[Dict[str, Any]]:
+        q = (query or "").strip()
+        if not q:
+            return []
+        top_k = max(1, min(int(top_k), 10))
+        min_score = float(_clamp(float(min_score), 0.0, 999.0))
+
+        now = _now_ts()
+        groups: List[Tuple[str, List[Thought]]] = []
+        if stream_id:
+            lock = self._get_lock(stream_id)
+            async with lock:
+                st = self._get_group(stream_id)
+                groups.append((stream_id, list(st.thoughts or [])))
+        else:
+            for sid in list(self._groups.keys()):
+                lock = self._get_lock(sid)
+                async with lock:
+                    st = self._get_group(sid)
+                    groups.append((sid, list(st.thoughts or [])))
+
+        hits: List[Dict[str, Any]] = []
+        for sid, thoughts in groups:
+            scored = self._score_thoughts(thoughts=thoughts, query=q, now=now)
+            for h in scored:
+                final_score = float(h.get("score", 0.0) or 0.0)
+                if final_score < min_score:
+                    continue
+                hits.append({"stream_id": sid, **h})
+
+        hits.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+        return hits[:top_k]
+
+    def register_memory_tools(self) -> None:
+        if self._memory_tools_registered:
+            return
+        self._memory_tools_registered = True
+
+        async def soul_search_thoughts(query: str, top_k: int = 3, min_score: float = 0.0, chat_id: str = "") -> str:
+            q = str(query or "").strip()
+            if not q:
+                return "query 为空。"
+            hits = await self._search_thoughts(stream_id=str(chat_id or "").strip() or None, query=q, top_k=int(top_k), min_score=float(min_score))
+            if not hits:
+                return "未找到相关固化思想。"
+            lines: List[str] = []
+            for h in hits:
+                t: Thought = h["thought"]
+                score = float(h.get("score", 0.0) or 0.0)
+                digest = self._sanitize_text(str(t.digest or ""), max_chars=240)
+                definition = self._sanitize_text(str(t.definition or ""), max_chars=180)
+                lines.append(f"- id={t.thought_id} score={score:.2f} 思想={t.name} 定义={definition} 结论={digest}")
+            return "\n".join(lines)[:1600]
+
+        async def soul_get_thought(thought_id: str, chat_id: str = "") -> str:
+            tid = str(thought_id or "").strip()
+            if not tid:
+                return "thought_id 为空。"
+            candidates: List[Tuple[str, Thought]] = []
+            sid = str(chat_id or "").strip()
+            if sid:
+                lock = self._get_lock(sid)
+                async with lock:
+                    st = self._get_group(sid)
+                    for t in (st.thoughts or []):
+                        if t.thought_id == tid:
+                            candidates.append((sid, t))
+                            break
+            if not candidates:
+                for sid2 in list(self._groups.keys()):
+                    lock = self._get_lock(sid2)
+                    async with lock:
+                        st = self._get_group(sid2)
+                        for t in (st.thoughts or []):
+                            if t.thought_id == tid:
+                                candidates.append((sid2, t))
+                                break
+                    if candidates:
+                        break
+            if not candidates:
+                return "未找到该 thought_id 对应的固化思想。"
+            sid3, t = candidates[0]
+            definition = self._sanitize_text(str(t.definition or ""), max_chars=600)
+            digest = self._sanitize_text(str(t.digest or ""), max_chars=900)
+            tags = [str(x)[:32] for x in (t.tags or []) if str(x).strip()][:12]
+            impact = {a: round(float(t.impact_points.get(a, 0.0) or 0.0), 2) for a in AXES} if isinstance(t.impact_points, dict) else {}
+            return (
+                "\n".join(
+                    [
+                        f"thought_id: {t.thought_id}",
+                        f"name: {t.name}",
+                        f"topic: {t.topic}",
+                        f"tags: {json.dumps(tags, ensure_ascii=False)}",
+                        f"created_at: {_to_iso(float(t.created_ts or _now_ts()))}",
+                        f"impact_points: {json.dumps(impact, ensure_ascii=False)}",
+                        f"definition: {definition}",
+                        f"digest: {digest}",
+                    ]
+                )[:2400]
+            )
+
+        register_memory_retrieval_tool(
+            name="soul_search_thoughts",
+            description="检索麦麦在当前群聊已固化的思想/观点/立场（用于回答“麦麦怎么看/麦麦的观点/你之前的立场是什么”一类问题）。优先用于群内长期形成的‘固化思想’，不要用来复刻原句。",
+            parameters=[
+                {"name": "query", "type": "string", "description": "要检索的问题/关键词（尽量短）", "required": True},
+                {"name": "top_k", "type": "integer", "description": "返回条数（1~10）", "required": False},
+                {"name": "min_score", "type": "float", "description": "最低相关分（可选）", "required": False},
+            ],
+            execute_func=soul_search_thoughts,
+        )
+        register_memory_retrieval_tool(
+            name="soul_get_thought",
+            description="获取某条固化思想的详细定义与内化结论（给出 thought_id 后返回详情）。",
+            parameters=[
+                {"name": "thought_id", "type": "string", "description": "固化思想 id（来自 soul_search_thoughts 的结果）", "required": True}
+            ],
+            execute_func=soul_get_thought,
+        )
 
     def _pending_cap(self) -> int:
         n = int(self.get_config("introspection.pending_max_messages", 600))
@@ -501,23 +763,36 @@ class SoulEngine:
         temp = float(_clamp(float(temperature), 0.0, 2.0))
         effective = self._effective_max_tokens(requested=int(max_tokens), task_config=task_config, prompt=prompt)
 
-        # 自动降级：若解析失败，重试一次（更严格 JSON + 更小输出）
+        # 自动降级：若解析失败，逐步收紧约束（更严格 JSON + 更小输出 + 更低温度）
         attempts = [
-            (prompt, effective),
-            (
-                (prompt + "\n\n再次强调：只输出严格 JSON（不要 Markdown 代码块、不要解释文字）。").strip(),
-                max(256, min(effective, 2048)),
-            ),
+            {"prompt": prompt, "max_tokens": effective, "temperature": temp},
+            {
+                "prompt": (prompt + "\n\n再次强调：只输出严格 JSON（不要 Markdown 代码块、不要解释文字）。").strip(),
+                "max_tokens": max(256, min(effective, 2048)),
+                "temperature": temp,
+            },
+            {
+                "prompt": (
+                    "只输出一个 JSON object（必须以 { 开头以 } 结尾），不要输出代码块，不要输出任何解释文字。\n"
+                    "如果字段无法确定，请给出保守默认值，但必须满足 schema。\n\n"
+                    + prompt
+                ).strip(),
+                "max_tokens": max(256, min(effective, 1024)),
+                "temperature": min(temp, 0.3),
+            },
         ]
 
         last_model = ""
         last_content = ""
-        for p, mt in attempts:
+        for a in attempts:
+            p = str(a.get("prompt", "") or "")
+            mt = int(a.get("max_tokens", effective) or effective)
+            ttemp = float(_clamp(float(a.get("temperature", temp) or temp), 0.0, 2.0))
             ok, content, _reasoning, model_name = await llm_api.generate_with_model(
                 p,
                 model_config=task_config,
                 request_type=request_type,
-                temperature=temp,
+                temperature=ttemp,
                 max_tokens=int(mt),
             )
             last_model = model_name or last_model
@@ -660,6 +935,7 @@ class SoulEngine:
                     "digest": "内化结论（脱敏，不复刻原句）",
                     "style_hint": "未来表达风格偏置（1~3句）",
                     "impact_points": {a: 0.0 for a in AXES},
+                    "rationale": ["固化理由（1~4条，抽象概括，不复刻原句）"],
                     "tags": ["..."],
                     "confidence": 0.0,
                     "intensity": 0.0,
@@ -685,6 +961,7 @@ class SoulEngine:
 - 不要输出任何可识别个人信息、链接/号码/邮箱。
 - 所有内容不得复刻聊天原句。
 - impact_points 以“点”为单位（-100~100）。
+ - rationale 必须抽象概括，不要带任何可识别信息与原句。
 
 任务：{task}
 输出必须严格 JSON。JSON schema 示例：
@@ -719,6 +996,21 @@ class SoulEngine:
 
         if not isinstance(final, dict):
             return None
+
+        rationale = final.get("rationale", [])
+        if isinstance(rationale, list):
+            reasons = [self._sanitize_text(str(x), max_chars=140) for x in rationale if str(x).strip()]
+            reasons = [x for x in reasons if x][:6]
+            if reasons:
+                async with lock:
+                    state = self._get_group(stream_id)
+                    self._append_log_locked(
+                        state,
+                        kind="cabinet_rationale",
+                        content="【思想固化理由】\n" + "\n".join([f"- {x}" for x in reasons]),
+                        tags=["introspection", "cabinet"],
+                        extra={"topic": seed.topic},
+                    )
 
         name = str(final.get("name", "") or "").strip()[:40] or seed.topic[:40] or "Thought"
         definition = str(final.get("definition", "") or "").strip()[:800]
@@ -775,6 +1067,8 @@ class SoulEngine:
                     seed = state.seed_queue.pop(0) if state.seed_queue else None
                 if not seed:
                     break
+                seed.attempts = int(getattr(seed, "attempts", 0) or 0)
+                seed.last_attempt_ts = float(_now_ts())
                 thought = await self._internalize_seed(stream_id, seed)
                 if not thought:
                     async with lock:
@@ -782,9 +1076,14 @@ class SoulEngine:
                         self._append_log_locked(
                             state,
                             kind="cabinet_failed",
-                            content=f"【思想内化失败】topic={seed.topic}",
+                            content=f"【思想内化失败】topic={seed.topic} attempts={seed.attempts + 1}",
                             tags=["introspection", "cabinet"],
                         )
+                        max_attempts = int(self.get_config("cabinet.max_internalize_attempts", 3))
+                        max_attempts = max(1, min(max_attempts, 20))
+                        seed.attempts = int(seed.attempts) + 1
+                        if seed.attempts < max_attempts:
+                            state.seed_queue.append(seed)
                     continue
 
                 async with lock:
@@ -885,6 +1184,7 @@ class SoulEngine:
                     "monologue": "（60~220字内心独白）",
                     "notes": ["最终要点（1~8条）"],
                     "spectrum_shift_points": {a: 0.0 for a in AXES},
+                    "shift_rationale": ["本次偏移的关键理由（1~4条，抽象概括，不复刻原句）"],
                     "confidence": 0.0,
                     "intensity": 0.0,
                     "seed_topics": [{"topic": "短标题", "tags": ["..."], "energy": 0.0, "fragments": ["抽象转述切片"]}],
@@ -908,6 +1208,7 @@ class SoulEngine:
 - 所有内容不得复刻聊天原句。
 - 偏移以“点”为单位（-100~100），日常偏移应偏小（通常每轴<5），除非你确信出现明显变化。
 - 种子 fragments 必须抽象转述。
+ - shift_rationale 必须抽象概括，不要带任何可识别信息与原句。
 
 任务：{task}
 输出必须严格 JSON。JSON schema 示例：
@@ -979,11 +1280,27 @@ class SoulEngine:
             if any(abs(float(applied.get(a, 0.0) or 0.0)) >= 10.0 for a in AXES):
                 state.last_major_shift_ts = max(float(state.last_major_shift_ts or 0.0), now)
 
+            rationale = final.get("shift_rationale", [])
+            if isinstance(rationale, list):
+                reasons = [self._sanitize_text(str(x), max_chars=140) for x in rationale if str(x).strip()]
+                reasons = [x for x in reasons if x][:6]
+                if reasons:
+                    self._append_log_locked(
+                        state,
+                        kind="spectrum_rationale",
+                        content="【偏移理由】\n" + "\n".join([f"- {x}" for x in reasons]),
+                        tags=["introspection", "spectrum"],
+                    )
+
             # 生成候选思想种子：进入队列，等下一次内省内化
             seed_threshold = float(self.get_config("cabinet.seed_energy_threshold", 0.5))
             seed_threshold = float(_clamp(seed_threshold, 0.0, 1.0))
             seed_cap = int(self.get_config("cabinet.max_seed_queue", 30))
             seed_cap = max(0, min(seed_cap, 200))
+            seed_merge_threshold = float(self.get_config("cabinet.seed_merge_threshold", 0.6))
+            seed_merge_threshold = float(_clamp(seed_merge_threshold, 0.0, 1.0))
+            seed_frag_cap = int(self.get_config("cabinet.max_seed_fragments", 12))
+            seed_frag_cap = max(0, min(seed_frag_cap, 50))
 
             for tp in seeds[:10]:
                 if not isinstance(tp, dict):
@@ -993,8 +1310,6 @@ class SoulEngine:
                     continue
                 energy = float(tp.get("energy", 0.0) or 0.0)
                 if energy < seed_threshold:
-                    continue
-                if any(s.topic == topic for s in state.seed_queue):
                     continue
 
                 ttags = tp.get("tags", [])
@@ -1009,16 +1324,44 @@ class SoulEngine:
                 frags2 = [f for f in frags2 if f]
 
                 seed_id = f"seed:{int(now)}:{abs(hash(topic)) % 100000}"
-                state.seed_queue.append(
-                    ThoughtSeed(
-                        seed_id=seed_id,
-                        topic=topic[:60],
-                        tags=ttags2,
-                        energy=float(_clamp(energy, 0.0, 1.0)),
-                        fragments=frags2,
-                        created_ts=now,
-                    )
+                new_seed = ThoughtSeed(
+                    seed_id=seed_id,
+                    topic=topic[:60],
+                    tags=ttags2,
+                    energy=float(_clamp(energy, 0.0, 1.0)),
+                    fragments=frags2,
+                    created_ts=now,
+                    attempts=0,
+                    last_attempt_ts=0.0,
                 )
+
+                # 去重/合并：topic/标签相近则合并能量与 fragments，避免 seed_queue 被同一话题灌爆
+                best_i = -1
+                best_sim = 0.0
+                for i, s in enumerate(state.seed_queue):
+                    if not isinstance(s, ThoughtSeed):
+                        continue
+                    if s.topic == new_seed.topic:
+                        best_i = i
+                        best_sim = 1.0
+                        break
+                    sim = self._seed_similarity(topic=new_seed.topic, tags=new_seed.tags, other=s)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_i = i
+
+                if best_i >= 0 and best_sim >= seed_merge_threshold:
+                    s = state.seed_queue[best_i]
+                    s.energy = float(max(float(s.energy or 0.0), float(new_seed.energy or 0.0)))
+                    merged_tags = [str(x)[:32] for x in list(dict.fromkeys((s.tags or []) + (new_seed.tags or []))) if str(x).strip()]
+                    s.tags = merged_tags[:12]
+                    merged_frags = [str(x) for x in list(dict.fromkeys((s.fragments or []) + (new_seed.fragments or []))) if str(x).strip()]
+                    s.fragments = merged_frags[:seed_frag_cap] if seed_frag_cap else []
+                    if float(s.created_ts or 0.0) <= 0:
+                        s.created_ts = float(new_seed.created_ts or now)
+                else:
+                    state.seed_queue.append(new_seed)
+
                 if seed_cap and len(state.seed_queue) > seed_cap:
                     state.seed_queue = state.seed_queue[-seed_cap:]
 
@@ -1037,30 +1380,67 @@ class SoulEngine:
     # -------------------------
     # Injection
     # -------------------------
-    def _select_relevant_thoughts(self, thoughts: List[Thought], *, trigger_text: str, max_thoughts: int) -> List[Thought]:
-        max_thoughts = max(0, min(int(max_thoughts), 6))
-        if max_thoughts <= 0:
-            return []
-        text = (trigger_text or "").strip().lower()
-        if not text:
-            return thoughts[-max_thoughts:]
+    def _is_utility_query(self, text: str) -> bool:
+        s = (text or "").strip()
+        if not s:
+            return False
+        s_low = s.lower()
+        if "```" in s or "`" in s:
+            return True
+        if any(k in s_low for k in ["traceback", "exception", "error", "stack", "npm", "pip", "import ", "http ", "https "]):
+            return True
+        if any(k in s for k in ["报错", "异常", "堆栈", "怎么装", "怎么部署", "怎么配置", "命令", "日志"]):
+            return True
+        return False
 
-        scored: List[Tuple[float, Thought]] = []
-        for t in thoughts:
-            score = 0.0
-            if t.topic and t.topic.lower() in text:
-                score += 3.0
-            for tag in t.tags:
-                if not tag:
-                    continue
-                if str(tag).lower() in text:
-                    score += 1.0
-            score += 0.02 * len(t.digest or "")
-            scored.append((score, t))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [t for s, t in scored if s > 0][:max_thoughts]
+    def _wants_opinion(self, text: str) -> bool:
+        s = (text or "").strip()
+        if not s:
+            return False
+        return any(
+            k in s
+            for k in [
+                "怎么看",
+                "你觉得",
+                "你认为",
+                "如何评价",
+                "立场",
+                "观点",
+                "意识形态",
+                "政治",
+                "道德",
+                "意义",
+                "价值",
+                "虚无",
+                "英雄",
+                "二次元",
+                "现充",
+                "宅",
+                "AI",
+                "人工智能",
+                "赛博",
+                "传统",
+                "保守",
+                "激进",
+            ]
+        )
+
+    def _injection_policy(self, *, trigger_text: str) -> str:
+        conf = str(self.get_config("injection.policy", "auto") or "auto").strip().lower()
+        if conf in {"full", "spectrum_only", "auto"}:
+            pass
+        else:
+            conf = "auto"
+        if conf != "auto":
+            return conf
+        if self._is_utility_query(trigger_text):
+            return "spectrum_only"
+        if self._wants_opinion(trigger_text):
+            return "full"
+        return "auto"
 
     async def build_injection_block(self, stream_id: str, *, trigger_text: str) -> str:
+        now = _now_ts()
         lock = self._get_lock(stream_id)
         async with lock:
             state = self._get_group(stream_id)
@@ -1068,19 +1448,31 @@ class SoulEngine:
             thoughts = list(state.thoughts[-20:])
 
         spectrum_block = self._spectrum_instruction_block(values)
+        policy = self._injection_policy(trigger_text=trigger_text)
         max_details = int(self.get_config("injection.max_thought_details", 2))
-        picked = self._select_relevant_thoughts(thoughts, trigger_text=trigger_text, max_thoughts=max_details)
+        max_details = max(0, min(max_details, 6))
+        if policy == "spectrum_only":
+            max_details = 0
+
+        min_score = float(self.get_config("injection.min_thought_score", 0.0))
+        scored = self._score_thoughts(thoughts=thoughts, query=(trigger_text or "").strip(), now=now)
+        picked_scored = [x for x in scored if float(x.get("score", 0.0) or 0.0) >= min_score][:max_details]
         details = []
-        for t in picked:
+        for item in picked_scored:
+            t: Thought = item["thought"]
+            style_hint = str(t.style_hint or "").strip()
+            style_hint = self._sanitize_text(style_hint, max_chars=120) if style_hint else ""
             details.append(
                 "\n".join(
                     [
                         f"- 思想：{t.name}",
                         f"  定义：{(t.definition or '').strip()[:240]}",
                         f"  内化结论：{(t.digest or '').strip()[:520]}",
+                        f"  风格提示：{style_hint}" if style_hint else "",
                     ]
                 )
             )
+        details = [d for d in details if d.strip()]
 
         block = (
             "\n\n"
@@ -1096,6 +1488,24 @@ class SoulEngine:
         max_chars = max(400, min(max_chars, 6000))
         if len(block) > max_chars:
             block = block[: max_chars - 3].rstrip() + "..."
+
+        async with lock:
+            state = self._get_group(stream_id)
+            state.last_injection_ts = now
+            state.last_injection = {
+                "ts": _to_iso(now),
+                "policy": policy,
+                "picked": [
+                    {
+                        "thought_id": str(item["thought"].thought_id),
+                        "name": str(item["thought"].name),
+                        "score": round(float(item.get("score", 0.0) or 0.0), 4),
+                        "decay": round(float(item.get("decay", 1.0) or 1.0), 4),
+                        "raw_score": round(float(item.get("raw_score", 0.0) or 0.0), 4),
+                    }
+                    for item in picked_scored
+                ],
+            }
         return block
 
     # -------------------------
@@ -1108,7 +1518,31 @@ class SoulEngine:
     def _start_introspection_task(self, stream_id: str) -> None:
         if self._introspection_task_active(stream_id):
             return
-        task = asyncio.create_task(self._introspection_run(stream_id, force=False))
+
+        async def runner() -> bool:
+            t0 = _now_ts()
+            ok = False
+            err = ""
+            try:
+                ok = await self._introspection_run(stream_id, force=False)
+                return bool(ok)
+            except Exception as e:
+                err = str(e)
+                logger.debug(f"[soul] introspection task crashed: {e}")
+                return False
+            finally:
+                dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
+                lock = self._get_lock(stream_id)
+                async with lock:
+                    st = self._get_group(stream_id)
+                    st.introspection_runs_total = int(st.introspection_runs_total or 0) + 1
+                    if not ok:
+                        st.introspection_failures_total = int(st.introspection_failures_total or 0) + 1
+                    st.last_introspection_duration_ms = int(dur_ms)
+                    st.last_introspection_ok = bool(ok)
+                    st.last_introspection_error = str(err or "")[:300]
+
+        task = asyncio.create_task(runner())
         self._introspection_tasks[stream_id] = task
         task.add_done_callback(lambda _t, sid=stream_id: self._introspection_tasks.pop(sid, None))
 
@@ -1158,6 +1592,280 @@ class SoulEngine:
     # -------------------------
     # Persistence
     # -------------------------
+    def _state_version(self, raw: dict) -> int:
+        try:
+            v = raw.get("schema_version", None)
+            if v is None:
+                v = raw.get("version", 0)
+            return int(v or 0)
+        except Exception:
+            return 0
+
+    def _migrate_state_payload(self, raw: dict) -> dict:
+        # 迁移框架：把旧版本 payload 逐步转换为最新 schema_version。
+        # 目标：保持向后兼容；无法兼容时宁可降级到“尽量可用”，不要阻止插件启动。
+        if not isinstance(raw, dict):
+            return {"schema_version": STATE_SCHEMA_VERSION, "salt": self._salt, "groups": {}}
+
+        v = self._state_version(raw)
+
+        def ensure_base(obj: dict) -> dict:
+            obj.setdefault("salt", self._salt)
+            obj.setdefault("groups", {})
+            if not isinstance(obj.get("groups"), dict):
+                obj["groups"] = {}
+            return obj
+
+        raw = ensure_base(raw)
+
+        # v0/v1：可能没有 schema_version；字段结构以 groups 为主
+        if v <= 1:
+            raw = ensure_base(raw)
+            v = 2
+
+        # v2 -> v3：显式 schema_version，保留兼容字段 version
+        if v == 2:
+            raw["schema_version"] = STATE_SCHEMA_VERSION
+            raw["version"] = STATE_SCHEMA_VERSION
+            v = STATE_SCHEMA_VERSION
+
+        # 更高版本：尽量读取已知字段
+        raw["schema_version"] = int(raw.get("schema_version", STATE_SCHEMA_VERSION) or STATE_SCHEMA_VERSION)
+        raw["version"] = int(raw.get("version", raw["schema_version"]) or raw["schema_version"])
+        return raw
+
+    def _parse_group_state(self, obj: dict) -> GroupState:
+        st = GroupState()
+        if not isinstance(obj, dict):
+            return st
+
+        st.target = str(obj.get("target", "") or "")
+        st.message_count = int(obj.get("message_count", 0) or 0)
+        st.last_activity_ts = float(obj.get("last_activity_ts", 0.0) or 0.0)
+
+        pm = obj.get("pending_messages", [])
+        pending: List[Dict[str, Any]] = []
+        if isinstance(pm, list):
+            for m in pm[-self._pending_cap() :]:
+                if not isinstance(m, dict):
+                    continue
+                ts = float(m.get("ts", 0.0) or 0.0)
+                text = str(m.get("text", "") or "").strip()
+                if not text:
+                    continue
+                uid = str(m.get("uid", "") or "").strip()
+                if not uid:
+                    legacy_uid = str(m.get("user_id", "") or "").strip()
+                    if legacy_uid:
+                        uid = f"u_legacy_{self._sha256_short(f'{self._salt}|legacy|{legacy_uid}', n=10)}"
+                pending.append({"ts": ts, "uid": uid, "text": text[:800]})
+        st.pending_messages = pending
+
+        bt = obj.get("base_tone", {})
+        if isinstance(bt, dict):
+            st.base_tone = {a: float(_clamp(float(bt.get(a, 0.0) or 0.0), -1.0, 1.0)) for a in AXES}
+        vals = obj.get("values", {})
+        if isinstance(vals, dict):
+            st.values = {a: float(_clamp(float(vals.get(a, 0.0) or 0.0), -1.0, 1.0)) for a in AXES}
+        ema = obj.get("ema", {})
+        if isinstance(ema, dict):
+            st.ema = {a: float(_clamp(float(ema.get(a, 0.0) or 0.0), -1.0, 1.0)) for a in AXES}
+        rd = obj.get("recent_deltas", {})
+        if isinstance(rd, dict):
+            st.recent_deltas = {a: [float(x) for x in (rd.get(a, []) or []) if isinstance(x, (int, float))][-500:] for a in AXES}
+
+        st.last_introspection_ts = float(obj.get("last_introspection_ts", 0.0) or 0.0)
+        st.last_major_shift_ts = float(obj.get("last_major_shift_ts", 0.0) or 0.0)
+        st.introspection_runs_total = int(obj.get("introspection_runs_total", 0) or 0)
+        st.introspection_failures_total = int(obj.get("introspection_failures_total", 0) or 0)
+        st.last_introspection_duration_ms = int(obj.get("last_introspection_duration_ms", 0) or 0)
+        st.last_introspection_ok = bool(obj.get("last_introspection_ok", True))
+        st.last_introspection_error = str(obj.get("last_introspection_error", "") or "")[:300]
+
+        logs = obj.get("introspection_logs", [])
+        if isinstance(logs, list):
+            out: List[IntrospectionLogItem] = []
+            for it in logs[-self._log_cap() :]:
+                if not isinstance(it, dict):
+                    continue
+                out.append(
+                    IntrospectionLogItem(
+                        ts=float(it.get("ts", 0.0) or 0.0),
+                        kind=str(it.get("kind", "") or "")[:32],
+                        content=str(it.get("content", "") or "")[:2000],
+                        tags=[str(t)[:32] for t in (it.get("tags") or []) if isinstance(t, (str, int, float))][:12]
+                        if isinstance(it.get("tags"), list)
+                        else [],
+                        extra=it.get("extra") if isinstance(it.get("extra"), dict) else {},
+                    )
+                )
+            st.introspection_logs = out
+
+        def safe_dataclass_kwargs(dc, data: dict) -> dict:
+            allowed = getattr(dc, "__dataclass_fields__", {}) or {}
+            return {k: data.get(k) for k in allowed.keys() if k in data}
+
+        seeds = obj.get("seed_queue", [])
+        if isinstance(seeds, list):
+            out_seeds: List[ThoughtSeed] = []
+            for s in seeds:
+                if not isinstance(s, dict):
+                    continue
+                try:
+                    out_seeds.append(ThoughtSeed(**safe_dataclass_kwargs(ThoughtSeed, s)))
+                except Exception:
+                    continue
+            st.seed_queue = out_seeds
+
+        thoughts = obj.get("thoughts", [])
+        if isinstance(thoughts, list):
+            out_thoughts: List[Thought] = []
+            for t in thoughts:
+                if not isinstance(t, dict):
+                    continue
+                try:
+                    out_thoughts.append(Thought(**safe_dataclass_kwargs(Thought, t)))
+                except Exception:
+                    continue
+            st.thoughts = out_thoughts
+
+        return st
+
+    async def append_audit_event(self, event: Dict[str, Any]) -> None:
+        if not bool(self.get_config("debug.audit_enabled", True)):
+            return
+        max_bytes = int(self.get_config("debug.audit_max_bytes", 2_000_000))
+        max_bytes = max(50_000, min(max_bytes, 50_000_000))
+
+        now = _now_ts()
+        payload = dict(event or {})
+        payload.setdefault("ts", _to_iso(now))
+        payload.setdefault("plugin", "mai_soul_engine")
+        payload.setdefault("schema_version", STATE_SCHEMA_VERSION)
+
+        # 尽量避免落盘过长字段
+        for k, v in list(payload.items()):
+            if isinstance(v, str) and len(v) > 800:
+                payload[k] = v[:800] + "..."
+
+        line = json.dumps(payload, ensure_ascii=False)
+
+        async with self._audit_lock:
+            try:
+                self._audit_file.parent.mkdir(parents=True, exist_ok=True)
+                if self._audit_file.exists() and self._audit_file.stat().st_size > max_bytes:
+                    bak = self._audit_file.with_suffix(self._audit_file.suffix + ".bak")
+                    try:
+                        if bak.exists():
+                            bak.unlink()
+                    except Exception:
+                        pass
+                    try:
+                        self._audit_file.rename(bak)
+                    except Exception:
+                        pass
+                with open(self._audit_file, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception:
+                return
+
+    async def try_import_on_start(self) -> None:
+        if not bool(self.get_config("persistence.import_on_start", False)):
+            return
+        p = str(self.get_config("persistence.import_path", "") or "").strip()
+        path = Path(p) if p else (self.plugin_dir / "data" / "import.json")
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            await self.append_audit_event({"action": "import_state", "ok": False, "reason": f"invalid_json:{e}"})
+            return
+        if not isinstance(raw, dict):
+            await self.append_audit_event({"action": "import_state", "ok": False, "reason": "not_object"})
+            return
+
+        raw = self._migrate_state_payload(raw)
+        mode = str(self.get_config("persistence.import_mode", "merge") or "merge").strip().lower()
+        if mode not in {"merge", "overwrite"}:
+            mode = "merge"
+
+        imported_salt = str(raw.get("salt", "") or "").strip()
+        if mode == "merge" and imported_salt and imported_salt != self._salt and self._groups:
+            await self.append_audit_event({"action": "import_state", "ok": False, "reason": "salt_mismatch"})
+            return
+        if mode == "overwrite" and imported_salt:
+            self._salt = imported_salt
+        if mode == "merge" and imported_salt and not self._groups:
+            self._salt = imported_salt
+
+        groups = raw.get("groups", {})
+        if not isinstance(groups, dict):
+            await self.append_audit_event({"action": "import_state", "ok": False, "reason": "no_groups"})
+            return
+
+        imported: Dict[str, GroupState] = {}
+        for sid, obj in groups.items():
+            if not isinstance(obj, dict):
+                continue
+            imported[str(sid)] = self._parse_group_state(obj)
+
+        if not imported:
+            await self.append_audit_event({"action": "import_state", "ok": False, "reason": "empty"})
+            return
+
+        if mode == "overwrite":
+            self._groups = imported
+        else:
+            for sid, st_new in imported.items():
+                if sid not in self._groups:
+                    self._groups[sid] = st_new
+                    continue
+                lock = self._get_lock(sid)
+                async with lock:
+                    st = self._get_group(sid)
+                    if float(st_new.last_introspection_ts or 0.0) > float(st.last_introspection_ts or 0.0):
+                        st.base_tone = st_new.base_tone
+                        st.values = st_new.values
+                        st.ema = st_new.ema
+                        st.recent_deltas = st_new.recent_deltas
+                        st.last_introspection_ts = st_new.last_introspection_ts
+                        st.last_major_shift_ts = max(float(st.last_major_shift_ts or 0.0), float(st_new.last_major_shift_ts or 0.0))
+                    # 合并 thoughts
+                    by_id: Dict[str, Thought] = {t.thought_id: t for t in (st.thoughts or []) if isinstance(t, Thought)}
+                    for t in st_new.thoughts or []:
+                        if not isinstance(t, Thought):
+                            continue
+                        cur = by_id.get(t.thought_id)
+                        if not cur or float(t.created_ts or 0.0) > float(cur.created_ts or 0.0):
+                            by_id[t.thought_id] = t
+                    merged_thoughts = list(by_id.values())
+                    merged_thoughts.sort(key=lambda x: float(x.created_ts or 0.0))
+                    max_slots = int(self.get_config("cabinet.max_slots", 6))
+                    max_slots = max(1, min(max_slots, 20))
+                    st.thoughts = merged_thoughts[-max_slots:]
+
+                    # 合并 seed_queue（简单拼接 + cap；更复杂策略由内省期合并）
+                    merged_seeds = list(st.seed_queue or []) + list(st_new.seed_queue or [])
+                    seed_cap = int(self.get_config("cabinet.max_seed_queue", 30))
+                    seed_cap = max(0, min(seed_cap, 200))
+                    st.seed_queue = merged_seeds[-seed_cap:] if seed_cap else []
+
+                    # 合并日志（按时间保留最后 N 条）
+                    merged_logs = list(st.introspection_logs or []) + list(st_new.introspection_logs or [])
+                    merged_logs.sort(key=lambda x: float(getattr(x, "ts", 0.0) or 0.0))
+                    st.introspection_logs = merged_logs[-self._log_cap() :]
+
+                    st.message_count = max(int(st.message_count or 0), int(st_new.message_count or 0))
+                    st.last_activity_ts = max(float(st.last_activity_ts or 0.0), float(st_new.last_activity_ts or 0.0))
+
+        try:
+            ts = int(_now_ts())
+            path.rename(path.with_suffix(path.suffix + f".imported.{ts}"))
+        except Exception:
+            pass
+        await self.append_audit_event({"action": "import_state", "ok": True, "mode": mode, "groups": len(imported)})
+
     def _fsync_dir(self, dir_path: Path) -> None:
         try:
             fd = os.open(str(dir_path), os.O_DIRECTORY)
@@ -1202,7 +1910,13 @@ class SoulEngine:
 
     async def persist(self) -> None:
         try:
-            payload: Dict[str, Any] = {"version": 2, "salt": self._salt, "groups": {}}
+            payload: Dict[str, Any] = {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "version": STATE_SCHEMA_VERSION,
+                "salt": self._salt,
+                "updated_at": _to_iso(_now_ts()),
+                "groups": {},
+            }
             for sid, st in self._groups.items():
                 lock = self._get_lock(sid)
                 async with lock:
@@ -1217,6 +1931,11 @@ class SoulEngine:
                         "recent_deltas": st.recent_deltas,
                         "last_introspection_ts": float(st.last_introspection_ts or 0.0),
                         "last_major_shift_ts": float(st.last_major_shift_ts or 0.0),
+                        "introspection_runs_total": int(st.introspection_runs_total or 0),
+                        "introspection_failures_total": int(st.introspection_failures_total or 0),
+                        "last_introspection_duration_ms": int(st.last_introspection_duration_ms or 0),
+                        "last_introspection_ok": bool(st.last_introspection_ok),
+                        "last_introspection_error": str(st.last_introspection_error or "")[:300],
                         "introspection_logs": [
                             {"ts": it.ts, "kind": it.kind, "content": it.content, "tags": it.tags, "extra": it.extra}
                             for it in (st.introspection_logs or [])[-self._log_cap():]
@@ -1245,7 +1964,17 @@ class SoulEngine:
         if raw is None:
             raw = try_load(self._state_file.with_suffix(self._state_file.suffix + ".bak"))
         if raw is None:
+            # 两份都坏掉：保留现场但不阻止启动
+            try:
+                ts = int(_now_ts())
+                for p in [self._state_file, self._state_file.with_suffix(self._state_file.suffix + ".bak")]:
+                    if p.exists():
+                        p.rename(p.with_suffix(p.suffix + f".corrupt.{ts}"))
+            except Exception:
+                pass
             return
+
+        raw = self._migrate_state_payload(raw)
 
         try:
             salt = str(raw.get("salt", "") or "").strip()
@@ -1257,71 +1986,7 @@ class SoulEngine:
             for sid, obj in groups.items():
                 if not isinstance(obj, dict):
                     continue
-                st = GroupState()
-                st.target = str(obj.get("target", "") or "")
-                st.message_count = int(obj.get("message_count", 0) or 0)
-                st.last_activity_ts = float(obj.get("last_activity_ts", 0.0) or 0.0)
-                pm = obj.get("pending_messages", [])
-                pending: List[Dict[str, Any]] = []
-                if isinstance(pm, list):
-                    for m in pm[-self._pending_cap():]:
-                        if not isinstance(m, dict):
-                            continue
-                        ts = float(m.get("ts", 0.0) or 0.0)
-                        text = str(m.get("text", "") or "").strip()
-                        if not text:
-                            continue
-                        uid = str(m.get("uid", "") or "").strip()
-                        if not uid:
-                            legacy_uid = str(m.get("user_id", "") or "").strip()
-                            if legacy_uid:
-                                uid = f"u_legacy_{self._sha256_short(f'{self._salt}|legacy|{legacy_uid}', n=10)}"
-                        pending.append({"ts": ts, "uid": uid, "text": text[:800]})
-                st.pending_messages = pending
-
-                bt = obj.get("base_tone", {})
-                if isinstance(bt, dict):
-                    st.base_tone = {a: float(_clamp(float(bt.get(a, 0.0) or 0.0), -1.0, 1.0)) for a in AXES}
-                vals = obj.get("values", {})
-                if isinstance(vals, dict):
-                    st.values = {a: float(_clamp(float(vals.get(a, 0.0) or 0.0), -1.0, 1.0)) for a in AXES}
-                ema = obj.get("ema", {})
-                if isinstance(ema, dict):
-                    st.ema = {a: float(_clamp(float(ema.get(a, 0.0) or 0.0), -1.0, 1.0)) for a in AXES}
-                rd = obj.get("recent_deltas", {})
-                if isinstance(rd, dict):
-                    st.recent_deltas = {a: [float(x) for x in (rd.get(a, []) or []) if isinstance(x, (int, float))][-500:] for a in AXES}
-
-                st.last_introspection_ts = float(obj.get("last_introspection_ts", 0.0) or 0.0)
-                st.last_major_shift_ts = float(obj.get("last_major_shift_ts", 0.0) or 0.0)
-
-                logs = obj.get("introspection_logs", [])
-                if isinstance(logs, list):
-                    out: List[IntrospectionLogItem] = []
-                    for it in logs[-self._log_cap():]:
-                        if not isinstance(it, dict):
-                            continue
-                        out.append(
-                            IntrospectionLogItem(
-                                ts=float(it.get("ts", 0.0) or 0.0),
-                                kind=str(it.get("kind", "") or "")[:32],
-                                content=str(it.get("content", "") or "")[:2000],
-                                tags=[str(t)[:32] for t in (it.get("tags") or []) if isinstance(t, (str, int, float))][:12]
-                                if isinstance(it.get("tags"), list)
-                                else [],
-                                extra=it.get("extra") if isinstance(it.get("extra"), dict) else {},
-                            )
-                        )
-                    st.introspection_logs = out
-
-                seeds = obj.get("seed_queue", [])
-                if isinstance(seeds, list):
-                    st.seed_queue = [ThoughtSeed(**s) for s in seeds if isinstance(s, dict)]
-                thoughts = obj.get("thoughts", [])
-                if isinstance(thoughts, list):
-                    st.thoughts = [Thought(**t) for t in thoughts if isinstance(t, dict)]
-
-                self._groups[str(sid)] = st
+                self._groups[str(sid)] = self._parse_group_state(obj)
         except Exception as e:
             logger.debug(f"[soul] load_persisted failed: {e}")
 
@@ -1572,6 +2237,124 @@ class SoulEngine:
             )
         return {"targets": out, "updated_at": _to_iso(now)}
 
+    async def _snapshot_health(self) -> dict:
+        now = _now_ts()
+        group_count = len(self._groups)
+        pending_total = 0
+        seed_total = 0
+        thought_total = 0
+        active_tasks = 0
+        last_activity = 0.0
+        last_introspection = 0.0
+        runs_total = 0
+        failures_total = 0
+        latest_intro_duration_ms = 0
+        for sid in list(self._groups.keys()):
+            lock = self._get_lock(sid)
+            async with lock:
+                st = self._get_group(sid)
+                pending_total += len(st.pending_messages or [])
+                seed_total += len(st.seed_queue or [])
+                thought_total += len(st.thoughts or [])
+                last_activity = max(last_activity, float(st.last_activity_ts or 0.0))
+                ts = float(st.last_introspection_ts or 0.0)
+                if ts >= last_introspection:
+                    last_introspection = ts
+                    latest_intro_duration_ms = int(st.last_introspection_duration_ms or 0)
+                runs_total += int(st.introspection_runs_total or 0)
+                failures_total += int(st.introspection_failures_total or 0)
+            if self._introspection_task_active(sid):
+                active_tasks += 1
+
+        state_file_ok = self._state_file.exists()
+        state_bytes = int(self._state_file.stat().st_size) if state_file_ok else 0
+        audit_bytes = int(self._audit_file.stat().st_size) if self._audit_file.exists() else 0
+
+        return {
+            "ok": True,
+            "enabled": self.is_enabled(),
+            "schema_version": STATE_SCHEMA_VERSION,
+            "uptime": self._uptime_str(now),
+            "groups": {
+                "count": group_count,
+                "pending_messages_total": pending_total,
+                "seed_queue_total": seed_total,
+                "thoughts_total": thought_total,
+                "active_introspection_tasks": active_tasks,
+                "last_activity": _to_iso(last_activity) if last_activity else None,
+                "last_introspection": _to_iso(last_introspection) if last_introspection else None,
+                "introspection_runs_total": runs_total,
+                "introspection_failures_total": failures_total,
+                "introspection_failure_rate": round((failures_total / runs_total) if runs_total else 0.0, 4),
+                "last_introspection_duration_ms": latest_intro_duration_ms,
+            },
+            "files": {"state_json": {"exists": state_file_ok, "bytes": state_bytes}, "audit_log": {"bytes": audit_bytes}},
+            "updated_at": _to_iso(now),
+        }
+
+    async def _snapshot_injection_frontend(self, stream_id: str) -> dict:
+        now = _now_ts()
+        lock = self._get_lock(stream_id)
+        async with lock:
+            st = self._get_group(stream_id)
+            last = dict(st.last_injection or {})
+        return {"last_injection": last, "updated_at": _to_iso(now)}
+
+    async def _snapshot_thought_search_frontend(self, stream_id: Optional[str], *, query: str, top_k: int, min_score: float) -> dict:
+        now = _now_ts()
+        hits = await self._search_thoughts(stream_id=stream_id, query=query, top_k=top_k, min_score=min_score)
+        out = []
+        for h in hits:
+            t: Thought = h["thought"]
+            out.append(
+                {
+                    "stream_id": str(h.get("stream_id", "") or ""),
+                    "thought_id": t.thought_id,
+                    "name": t.name[:60],
+                    "topic": t.topic[:80],
+                    "tags": list(t.tags or [])[:12],
+                    "score": round(float(h.get("score", 0.0) or 0.0), 4),
+                    "created_at": _to_iso(float(t.created_ts or now)),
+                    "definition": (t.definition or "")[:240],
+                    "digest": (t.digest or "")[:420],
+                }
+            )
+        return {"query": str(query or "")[:200], "hits": out, "updated_at": _to_iso(now)}
+
+    async def _export_state_sanitized(self, stream_id: Optional[str]) -> dict:
+        now = _now_ts()
+        out: Dict[str, Any] = {
+            "schema_version": STATE_SCHEMA_VERSION,
+            "exported_at": _to_iso(now),
+            "salt": self._salt,
+            "groups": {},
+        }
+
+        sids = [str(stream_id)] if stream_id else list(self._groups.keys())
+        for sid in sids:
+            lock = self._get_lock(sid)
+            async with lock:
+                st = self._get_group(sid)
+                out["groups"][sid] = {
+                    "target": st.target,
+                    "message_count": int(st.message_count or 0),
+                    "last_activity_ts": float(st.last_activity_ts or 0.0),
+                    "pending_messages_count": len(st.pending_messages or []),
+                    "base_tone": st.base_tone,
+                    "values": st.values,
+                    "ema": st.ema,
+                    "recent_deltas": st.recent_deltas,
+                    "last_introspection_ts": float(st.last_introspection_ts or 0.0),
+                    "last_major_shift_ts": float(st.last_major_shift_ts or 0.0),
+                    "introspection_logs": [
+                        {"ts": it.ts, "kind": it.kind, "content": it.content, "tags": it.tags, "extra": it.extra}
+                        for it in (st.introspection_logs or [])[-self._log_cap() :]
+                    ],
+                    "seed_queue": [s.__dict__ for s in (st.seed_queue or [])[-200:]],
+                    "thoughts": [t.__dict__ for t in (st.thoughts or [])[-200:]],
+                }
+        return out
+
     def setup_router(self) -> APIRouter:
         router = APIRouter(prefix="/api/v1/soul", tags=["soul"])
 
@@ -1614,6 +2397,29 @@ class SoulEngine:
         async def get_targets(request: Request, limit: int = 50, offset: int = 0):
             self._require_api_token(request)
             return JSONResponse(await self._snapshot_targets_frontend(limit=limit, offset=offset))
+
+        @router.get("/health")
+        async def get_health(request: Request):
+            self._require_api_token(request)
+            return JSONResponse(await self._snapshot_health())
+
+        @router.get("/injection")
+        async def get_injection(request: Request, stream_id: Optional[str] = None, target: Optional[str] = None):
+            self._require_api_token(request)
+            sid = self._resolve_stream_id(stream_id=stream_id, target=target)
+            return JSONResponse(await self._snapshot_injection_frontend(sid))
+
+        @router.get("/thoughts/search")
+        async def search_thoughts(request: Request, q: str, stream_id: Optional[str] = None, target: Optional[str] = None, top_k: int = 5, min_score: float = 0.0):
+            self._require_api_token(request)
+            sid = self._resolve_stream_id(stream_id=stream_id, target=target)
+            return JSONResponse(await self._snapshot_thought_search_frontend(sid, query=q, top_k=top_k, min_score=min_score))
+
+        @router.get("/export")
+        async def export_state(request: Request, stream_id: Optional[str] = None, target: Optional[str] = None):
+            self._require_api_token(request)
+            sid = self._resolve_stream_id(stream_id=stream_id, target=target) if (stream_id or target) else None
+            return JSONResponse(await self._export_state_sanitized(sid))
 
         return router
 
@@ -1661,8 +2467,10 @@ class SoulOnStartEventHandler(BaseEventHandler):
             plugin_dir = Path(self.get_config("runtime.plugin_dir", "") or "") or Path(__file__).parent
             engine = get_engine(plugin_dir=plugin_dir)
             engine.set_config(self.plugin_config or {})
+            engine.register_memory_tools()
             if engine.get_config("persistence.enabled", True):
                 engine.load_persisted()
+            await engine.try_import_on_start()
             engine.register_api_routes()
             await async_task_manager.add_task(SoulBackgroundTask(engine))
             return True, True, None, None, None
@@ -1738,9 +2546,28 @@ class SoulPostLlmEventHandler(BaseEventHandler):
             if not bool(engine.get_config("injection.enabled", True)):
                 return True, True, None, None, None
 
+            prompt = str(message.llm_prompt)
+
+            # 回复提示词预算：避免注入把 prompt 推爆
+            reply_budget = int(engine.get_config("performance.reply_prompt_budget_chars", 0) or 0)
+            if reply_budget <= 0:
+                reply_budget = int(engine.get_config("performance.prompt_budget_chars", 120_000) or 120_000)
+            reply_budget = max(10_000, min(reply_budget, 800_000))
+            safety = int(engine.get_config("performance.reply_injection_safety_chars", 2000) or 2000)
+            safety = max(0, min(safety, 20_000))
+            allow = reply_budget - len(prompt) - safety
+            if allow <= 200:
+                lock = engine._get_lock(str(message.stream_id))
+                async with lock:
+                    st = engine._get_group(str(message.stream_id))
+                    st.last_injection_ts = _now_ts()
+                    st.last_injection = {"ts": _to_iso(st.last_injection_ts), "skipped": True, "reason": "prompt_budget"}
+                return True, True, None, None, message
+
             trigger_text = str(getattr(message, "plain_text", "") or "")
             block = await engine.build_injection_block(message.stream_id, trigger_text=trigger_text)
-            prompt = str(message.llm_prompt)
+            if len(block) > allow:
+                block = block[: max(0, allow - 3)].rstrip() + "..."
 
             marker = "现在，你说："
             idx = prompt.rfind(marker)
@@ -1787,15 +2614,32 @@ class SoulDebugCommand(BaseCommand):
         return engine
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
+        engine = self._get_engine()
         ok, reason = self._is_allowed()
+        sub = str(self.matched_groups.get("sub") or "").strip().lower() or "help"
+
+        platform = str(getattr(self.message.message_info, "platform", "") or "")
+        user_info = getattr(self.message.message_info, "user_info", None)
+        user_id = str(getattr(user_info, "user_id", "") or "")
+        uid_hash = engine._hash_user_id(platform, user_id) if (platform and user_id) else ""
+        stream_id = getattr(getattr(self.message, "chat_stream", None), "stream_id", None)
+
+        await engine.append_audit_event(
+            {
+                "action": "debug_command",
+                "sub": sub,
+                "ok": ok,
+                "reason": reason,
+                "uid": uid_hash,
+                "stream_id": str(stream_id or ""),
+            }
+        )
+
         if not ok:
             return True, None, 0
-        sub = str(self.matched_groups.get("sub") or "").strip().lower() or "help"
-        engine = self._get_engine()
         if not engine.is_enabled():
             await self.send_text("Mai-Soul 当前未启用（[plugin].enabled=false）。")
             return True, "engine_disabled", 1
-        stream_id = getattr(getattr(self.message, "chat_stream", None), "stream_id", None)
         if not stream_id:
             await self.send_text("无法获取 stream_id。")
             return True, "no_stream", 1
@@ -1818,7 +2662,31 @@ class SoulDebugCommand(BaseCommand):
             return True, "status", 1
 
         if sub == "introspect":
+            if not bool(engine.get_config("debug.allow_force_introspect", False)):
+                await engine.append_audit_event(
+                    {"action": "debug_introspect", "ok": False, "reason": "force_disabled", "uid": uid_hash, "stream_id": str(stream_id)}
+                )
+                await self.send_text("已禁用强制思维内省（debug.allow_force_introspect=false）。")
+                return True, "force_disabled", 1
+            t0 = _now_ts()
             ok2 = await engine._introspection_run(str(stream_id), force=True)
+            dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
+            lock = engine._get_lock(str(stream_id))
+            async with lock:
+                st = engine._get_group(str(stream_id))
+                st.introspection_runs_total = int(st.introspection_runs_total or 0) + 1
+                if not ok2:
+                    st.introspection_failures_total = int(st.introspection_failures_total or 0) + 1
+                st.last_introspection_duration_ms = int(dur_ms)
+                st.last_introspection_ok = bool(ok2)
+            await engine.append_audit_event(
+                {
+                    "action": "debug_introspect",
+                    "ok": bool(ok2),
+                    "uid": uid_hash,
+                    "stream_id": str(stream_id),
+                }
+            )
             await self.send_text("思维内省执行完成。" if ok2 else "思维内省未执行（窗口为空或 LLM 失败）。")
             return True, "introspect", 1
 
@@ -1877,10 +2745,15 @@ class MaiSoulEnginePlugin(BasePlugin):
             "max_slots": ConfigField(type=int, default=6, description="思维阁槽位数（固化思想上限）", min=1, max=20, order=0),
             "max_seed_queue": ConfigField(type=int, default=30, description="思想种子队列上限", min=0, max=200, order=1),
             "seed_energy_threshold": ConfigField(type=float, default=0.5, description="生成思想种子所需最低 energy（0~1）", min=0.0, max=1.0, order=2),
-            "internalize_seeds_per_run": ConfigField(type=int, default=1, description="每次内省最多内化几个种子", min=0, max=5, order=3),
-            "internalization_rounds": ConfigField(type=int, default=3, description="内化轮数（>=2）", min=2, max=6, order=4),
-            "temperature": ConfigField(type=float, default=0.35, description="内化温度", min=0.0, max=2.0, order=5),
-            "max_tokens": ConfigField(type=int, default=60000, description="内化最大 tokens", min=128, max=200_000, order=6),
+            "seed_merge_threshold": ConfigField(type=float, default=0.6, description="思想种子合并阈值（相似度>=阈值则合并）", min=0.0, max=1.0, order=3),
+            "max_seed_fragments": ConfigField(type=int, default=12, description="每个思想种子最多保留 fragments 条数", min=0, max=50, order=4),
+            "internalize_seeds_per_run": ConfigField(type=int, default=1, description="每次内省最多内化几个种子", min=0, max=5, order=5),
+            "max_internalize_attempts": ConfigField(type=int, default=3, description="思想种子内化失败最多重试次数", min=1, max=20, order=6),
+            "internalization_rounds": ConfigField(type=int, default=3, description="内化轮数（>=2）", min=2, max=6, order=7),
+            "temperature": ConfigField(type=float, default=0.35, description="内化温度", min=0.0, max=2.0, order=8),
+            "max_tokens": ConfigField(type=int, default=60000, description="内化最大 tokens", min=128, max=200_000, order=9),
+            "thought_half_life_days": ConfigField(type=float, default=30.0, description="固化思想检索衰减半衰期（天；0=不衰减）", min=0.0, max=3650.0, order=10),
+            "thought_min_decay": ConfigField(type=float, default=0.25, description="固化思想最低衰减权重（0~1）", min=0.0, max=1.0, order=11),
         },
         "introspection": {
             "interval_minutes": ConfigField(type=float, default=20.0, description="内省触发间隔（分钟）", min=1.0, max=24 * 60.0, order=0),
@@ -1899,22 +2772,32 @@ class MaiSoulEnginePlugin(BasePlugin):
         },
         "injection": {
             "enabled": ConfigField(type=bool, default=True, description="是否在回复前注入光谱与固化思想（POST_LLM）", order=0),
-            "max_thought_details": ConfigField(type=int, default=2, description="最多注入几条相关固化思想详情", min=0, max=6, order=1),
-            "max_chars": ConfigField(type=int, default=1400, description="注入块最大字符数", min=400, max=6000, order=2),
+            "policy": ConfigField(type=str, default="auto", description="注入策略：auto/full/spectrum_only", order=1),
+            "min_thought_score": ConfigField(type=float, default=0.0, description="注入固化思想的最低相关分（0 表示只要命中就可注入）", min=0.0, max=50.0, order=2),
+            "max_thought_details": ConfigField(type=int, default=2, description="最多注入几条相关固化思想详情", min=0, max=6, order=3),
+            "max_chars": ConfigField(type=int, default=1400, description="注入块最大字符数", min=400, max=6000, order=4),
         },
         "persistence": {
             "enabled": ConfigField(type=bool, default=True, description="是否启用持久化（state.json）", order=0),
             "save_interval_seconds": ConfigField(type=float, default=15.0, description="保存间隔（秒）", min=3.0, max=3600.0, order=1),
+            "import_on_start": ConfigField(type=bool, default=False, description="启动时从 import 文件导入（仅本地文件，默认关闭）", order=2),
+            "import_path": ConfigField(type=str, default="", description="导入文件路径（留空则使用 data/import.json）", order=3),
+            "import_mode": ConfigField(type=str, default="merge", description="导入模式：merge/overwrite", order=4),
         },
         "performance": {
             "max_message_chars": ConfigField(type=int, default=800, description="单条消息最大字符数（入库前截断）", min=100, max=5000, order=0),
             "prompt_budget_chars": ConfigField(type=int, default=120_000, description="提示词总字符预算（超出会分段总结/降级）", min=20_000, max=800_000, order=1),
             "summary_chunk_chars": ConfigField(type=int, default=7000, description="分段总结：每段输入字符预算", min=2000, max=50_000, order=2),
+            "reply_prompt_budget_chars": ConfigField(type=int, default=120_000, description="回复阶段提示词预算（用于限制注入；默认同 prompt_budget_chars）", min=10_000, max=800_000, order=3),
+            "reply_injection_safety_chars": ConfigField(type=int, default=2000, description="回复注入预留安全字符数（避免推爆）", min=0, max=20_000, order=4),
         },
         "debug": {
             "enabled": ConfigField(type=bool, default=False, description="是否启用 /soul 调试命令（生产建议关闭）", order=0),
             "admin_only": ConfigField(type=bool, default=True, description="调试命令是否仅管理员可用", order=1),
             "admin_user_ids": ConfigField(type=list, default=[], description="允许调试命令的用户列表（platform:user_id 或 user_id）", item_type="string", order=2),
+            "allow_force_introspect": ConfigField(type=bool, default=False, description="是否允许 /soul introspect 强制内省（写状态；默认关闭）", order=3),
+            "audit_enabled": ConfigField(type=bool, default=True, description="是否记录调试/导入等操作的审计日志（data/audit.jsonl）", order=4),
+            "audit_max_bytes": ConfigField(type=int, default=2_000_000, description="审计日志最大字节数（超出自动轮转）", min=50_000, max=50_000_000, order=5),
         },
         "runtime": {"plugin_dir": ConfigField(type=str, default="", description="运行时注入：插件目录（一般不用填）", order=0)},
     }

@@ -10,6 +10,8 @@ Mai‑Soul‑Engine 为 MaiBot 提供一个**可被群聊塑造**的后端人格
 
 同时暴露 `/api/v1/soul/*` 给前端可视化使用。
 
+此外，插件会在启动时**注册主程序的记忆检索工具（Memory Retrieval tools）**，用于在需要时检索“固化思想”（不依赖主程序数据库，不受“最近 50 条”限制）。
+
 开发文档：`docs/开发文档.md`
 
 ---
@@ -102,6 +104,10 @@ Base：`/api/v1/soul`
 - `GET /api/v1/soul/introspection`（思维内省日志）
 - `GET /api/v1/soul/pulse`
 - `GET /api/v1/soul/targets`
+- `GET /api/v1/soul/injection`（最近一次注入命中信息）
+- `GET /api/v1/soul/thoughts/search?q=...`（固化思想检索）
+- `GET /api/v1/soul/health`（健康检查/统计）
+- `GET /api/v1/soul/export`（脱敏导出，用于迁移/备份）
 
 兼容接口：
 - `GET /api/v1/soul/fragments`：等价于 `/introspection`（用于兼容旧前端）
@@ -182,3 +188,4 @@ admin_user_ids = ["qq:123456"]
 - `pending_messages` 不落盘真实用户名/账号：用户与群的标识会被哈希化；聊天内容会进行更强脱敏（链接/邮箱/手机号/身份证/长数字等）。
 - 聊天窗口过大时会自动“分段总结/降级”以避免超上下文：可用 `performance.prompt_budget_chars` / `performance.summary_chunk_chars` 调整。
 - 内省日志/思想 fragments 已做脱敏与截断，但仍建议结合你的隐私要求调整 `introspection.pending_max_messages` 与 `introspection.max_log_items`。
+- 迁移/备份：用 `GET /api/v1/soul/export` 导出（不含 pending_messages 全文）；导入仅支持本地文件（见 `config.toml` 的 `[persistence]` 注释）。

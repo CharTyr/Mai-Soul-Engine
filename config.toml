@@ -46,14 +46,28 @@ max_slots = 6
 max_seed_queue = 30
 # 种子阈值：内省末轮生成的候选议题，能量低于阈值则丢弃（0~1）
 seed_energy_threshold = 0.5
+# 种子合并阈值：当新生成的种子与队列中某条相似度 >= 阈值时，会“合并”为同一条
+# - 目的：避免同一话题反复被生成，灌爆 seed_queue
+# - 取值建议：0.5~0.75（越大越不容易合并）
+seed_merge_threshold = 0.6
+# 每个思想种子最多保留 fragments 条数（fragments 会被脱敏/截断）
+max_seed_fragments = 12
 # 每次内省最多内化多少个种子（建议 1~2，太高会很耗）
 internalize_seeds_per_run = 1
+# 思想种子内化失败最多重试次数（超出会丢弃该种子）
+max_internalize_attempts = 3
 # 每个种子内化需要几轮（越高越“深入”，也越耗）
 internalization_rounds = 3
 # 内化阶段模型温度（越高越发散；0.3~0.5 推荐）
 temperature = 0.35
 # 内化阶段 token 上限：非常高会显著增加耗时与成本（同时也更“深入”）
 max_tokens = 60000
+# 固化思想检索衰减半衰期（天）：
+# - 用于“注入/检索”时对旧思想做温和降权（避免旧思想长期霸占注入位）
+# - 0 表示不衰减
+thought_half_life_days = 30.0
+# 固化思想最低衰减权重（0~1）：再老也至少保留这么多权重（避免永久失忆）
+thought_min_decay = 0.25
 
 [introspection]
 # 触发间隔（分钟）：达到间隔且满足静默/有新消息等条件后，会运行一次“思维内省”
@@ -91,6 +105,13 @@ max_log_items = 300
 # 是否在回复时注入“档位倾向 + 固化思想摘要”
 # - 关闭后仍会运行内省/持久化，但不会改变 replyer 的提示词
 enabled = true
+# 注入策略：
+# - "auto"：自动判断（工具/代码类问题更偏“只注入光谱”；观点/立场类更偏“注入思想”）
+# - "full"：总是尝试注入固化思想（命中才注入）
+# - "spectrum_only"：只注入光谱，不注入固化思想详情
+policy = "auto"
+# 只有当“相关性分数 >= min_thought_score”时，才会注入某条固化思想（0 表示只要命中就可注入）
+min_thought_score = 0.0
 # 注入最多带上多少条固化思想（越大越强影响，也越容易变啰嗦）
 max_thought_details = 2
 # 注入内容最大字符数（防止把提示词撑爆）
@@ -101,6 +122,21 @@ max_chars = 1400
 enabled = true
 # 写盘间隔（秒）：越小越安全但更频繁 IO
 save_interval_seconds = 15.0
+# 导入/导出（用于迁移/备份）：
+# - 导出：HTTP `GET /api/v1/soul/export`（只读、已脱敏，不含 pending_messages 全文）
+# - 导入：仅支持“本地文件导入”，避免远程写状态风险
+#
+# 启动时导入（默认关闭）：
+# 1) 把导出的 JSON 放到 `plugins/MaiBot_Soul_Engine/data/import.json`（或自定义路径）
+# 2) 开启 import_on_start=true
+# 3) 重启 MaiBot（导入成功后文件会被改名为 `.imported.<ts>`）
+import_on_start = false
+# 导入文件路径：留空则使用 `data/import.json`
+import_path = ""
+# 导入模式：
+# - "merge"：合并到现有状态（要求 salt 一致；避免哈希体系混乱）
+# - "overwrite"：覆盖现有状态（会采用导入文件的 salt 与 groups）
+import_mode = "merge"
 
 [performance]
 # 单条消息摘要最大长度（会先脱敏再截断）；过长会抬高提示词成本
@@ -109,6 +145,10 @@ max_message_chars = 800
 prompt_budget_chars = 120000
 # 分段总结：每段输入字符预算（越大越少段，但单次请求更大更慢）
 summary_chunk_chars = 7000
+# 回复阶段提示词预算：用于限制“注入块”追加，避免把 replyer prompt 推爆
+reply_prompt_budget_chars = 120000
+# 注入预留安全字符数：给主程序留空间（避免临界超上下文）
+reply_injection_safety_chars = 2000
 
 [runtime]
 # 运行时注入：一般不需要改。留空表示自动使用插件目录。
@@ -131,3 +171,9 @@ admin_only = true
 # 示例：
 # admin_user_ids = ["123456", "qq:987654321", "telegram:123456789"]
 admin_user_ids = []
+# 是否允许 `/soul introspect` 强制内省（会写状态；生产环境默认关闭）
+allow_force_introspect = false
+# 是否写入审计日志（`data/audit.jsonl`；会做大小轮转）
+audit_enabled = true
+# 审计日志最大字节数（超出会轮转到 `audit.jsonl.bak`）
+audit_max_bytes = 2000000
