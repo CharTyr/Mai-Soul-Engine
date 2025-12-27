@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -23,6 +23,7 @@ from src.plugin_system import (
     BaseCommand,
     BaseEventHandler,
     BasePlugin,
+    ComponentInfo,
     ConfigField,
     ConfigLayout,
     ConfigTab,
@@ -2856,3 +2857,12 @@ class MaiSoulEnginePlugin(BasePlugin):
         },
         "runtime": {"plugin_dir": ConfigField(type=str, default="", description="运行时注入：插件目录（一般不用填）", order=0)},
     }
+
+    def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
+        return [
+            (SoulOnStartEventHandler.get_handler_info(), SoulOnStartEventHandler),
+            (SoulOnMessageEventHandler.get_handler_info(), SoulOnMessageEventHandler),
+            (SoulOnPlanEventHandler.get_handler_info(), SoulOnPlanEventHandler),
+            (SoulPostLlmEventHandler.get_handler_info(), SoulPostLlmEventHandler),
+            (SoulDebugCommand.get_command_info(), SoulDebugCommand),
+        ]
