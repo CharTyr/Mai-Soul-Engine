@@ -132,7 +132,6 @@ Base：`/api/v1/soul`
 - `GET /api/v1/soul/pulse`
 - `GET /api/v1/soul/targets`
 - `GET /api/v1/soul/injection`（最近一次注入命中信息）
-- `GET /api/v1/soul/thoughts/search?q=...`（固化思想检索）
 - `GET /api/v1/soul/health`（健康检查/统计）
 - `GET /api/v1/soul/export`（脱敏导出，用于迁移/备份）
 

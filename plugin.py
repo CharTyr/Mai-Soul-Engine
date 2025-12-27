@@ -2345,27 +2345,6 @@ class SoulEngine:
             last = dict(st.last_injection or {})
         return {"last_injection": last, "updated_at": _to_iso(now)}
 
-    async def _snapshot_thought_search_frontend(self, stream_id: Optional[str], *, query: str, top_k: int, min_score: float) -> dict:
-        now = _now_ts()
-        hits = await self._search_thoughts(stream_id=stream_id, query=query, top_k=top_k, min_score=min_score)
-        out = []
-        for h in hits:
-            t: Thought = h["thought"]
-            out.append(
-                {
-                    "stream_id": str(h.get("stream_id", "") or ""),
-                    "thought_id": t.thought_id,
-                    "name": t.name[:60],
-                    "topic": t.topic[:80],
-                    "tags": list(t.tags or [])[:12],
-                    "score": round(float(h.get("score", 0.0) or 0.0), 4),
-                    "created_at": _to_iso(float(t.created_ts or now)),
-                    "definition": (t.definition or "")[:240],
-                    "digest": (t.digest or "")[:420],
-                }
-            )
-        return {"query": str(query or "")[:200], "hits": out, "updated_at": _to_iso(now)}
-
     async def _export_state_sanitized(self, stream_id: Optional[str]) -> dict:
         now = _now_ts()
         out: Dict[str, Any] = {
@@ -2453,12 +2432,6 @@ class SoulEngine:
             self._require_api_token(request)
             sid = self._resolve_stream_id(stream_id=stream_id, target=target)
             return JSONResponse(await self._snapshot_injection_frontend(sid))
-
-        @router.get("/thoughts/search")
-        async def search_thoughts(request: Request, q: str, stream_id: Optional[str] = None, target: Optional[str] = None, top_k: int = 5, min_score: float = 0.0):
-            self._require_api_token(request)
-            sid = self._resolve_stream_id(stream_id=stream_id, target=target)
-            return JSONResponse(await self._snapshot_thought_search_frontend(sid, query=q, top_k=top_k, min_score=min_score))
 
         @router.get("/export")
         async def export_state(request: Request, stream_id: Optional[str] = None, target: Optional[str] = None):
