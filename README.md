@@ -168,11 +168,9 @@ VITE_USE_MOCK_DATA=false
 npm run dev
 ```
 
-同时在后端 `config.toml` 中把你的前端地址加入 CORS 白名单（示例）：
-```toml
-[api]
-cors_allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
-```
+说明：
+- 本地开发推荐使用前端的 Vite 代理（默认 `/api -> http://127.0.0.1:8000`），通常不需要处理跨域/CORS。
+- 如果你选择“不走代理、直接跨域请求后端”，请在后端设置 `api.token`，插件会自动允许浏览器 Origin（无需额外 CORS 配置）。
 
 ### 方式 B：生产部署（静态站点）
 
@@ -185,7 +183,7 @@ npm run build
 
 3) 后端与前端不在同域时：
    - 后端必须设置 `api.token`
-   - 后端 `api.cors_allow_origins` 只放你的前端域名（不要 `*`）
+   - 插件会自动处理 CORS（反射 Origin）；生产环境仍建议把前端与后端放在同域或通过反代统一域名
 
 ---
 

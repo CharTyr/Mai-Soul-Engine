@@ -14,7 +14,7 @@
 # 重要说明：
 # - 插件对外 API Header：`X-Soul-Token: <token>`（见 `[api].token`）
 # - 本插件只持久化脱敏后的摘要与状态到 JSON（默认 `data/state.json`），不会保存原始聊天全文
-# - 生产环境请务必设置 token，并限制 CORS
+# - 生产环境请务必设置 token（否则任何人都能读 API）
 
 [plugin]
 # 总开关：false 时插件不做任何内省/注入/存储（但仍可被加载）
@@ -25,8 +25,9 @@ enabled = true
 # - 留空：任何能访问到后端端口的人都能读 API（不建议）
 # - 建议：设置一串随机长字符串（例如 32~64 位）
 token = ""
-# CORS 白名单（给浏览器前端用）。生产环境请只留你的 WebUI 域名。
-cors_allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# CORS 说明（无需额外配置）：
+# - 若 token 为空：仅允许本机 Origin（localhost/127.0.0.1/[::1]）跨域读取，避免误暴露
+# - 若 token 非空：自动允许任意 Origin（反射 Origin），便于前端跨域部署
 
 [spectrum]
 # 思想光谱内部是 -1~+1（对外展示会映射为 -100~+100）

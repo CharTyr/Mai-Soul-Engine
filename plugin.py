@@ -2031,20 +2031,41 @@ class SoulEngine:
         origin = request.headers.get("origin", "") or request.headers.get("Origin", "")
         allow = self._cors_allow_origin(origin)
         headers = {
-            "Access-Control-Allow-Origin": allow,
             "Access-Control-Allow-Methods": "GET,OPTIONS",
             "Access-Control-Allow-Headers": "Authorization,Content-Type,X-Soul-Token",
             "Access-Control-Max-Age": "600",
+            "Vary": "Origin",
         }
+        if allow:
+            headers["Access-Control-Allow-Origin"] = allow
         return Response(status_code=204, headers=headers)
 
-    def _cors_allow_origin(self, origin: str) -> str:
-        origins = self.get_config("api.cors_allow_origins", ["http://localhost:5173", "http://127.0.0.1:5173"])
-        if origins == ["*"] or origins == "*":
-            return "*" if origin else "*"
-        if isinstance(origins, list) and origin in origins:
+    def _cors_allow_origin(self, origin: str) -> Optional[str]:
+        # 为了减少配置复杂度：不提供 CORS 白名单配置项。
+        # - 如果 api.token 为空：仅允许本机 Origin（localhost/127.0.0.1/[::1]）跨域访问，避免误暴露
+        # - 如果 api.token 非空：允许任意 Origin（反射 Origin），便于前端跨域部署
+        origin = str(origin or "").strip()
+        if not origin or origin.lower() == "null":
+            return None
+
+        o = origin.lower()
+        if not (o.startswith("http://") or o.startswith("https://")):
+            return None
+
+        token = str(self.get_config("api.token", "") or "").strip()
+        if token:
             return origin
-        return origins[0] if isinstance(origins, list) and origins else "*"
+
+        if (
+            o.startswith("http://localhost")
+            or o.startswith("https://localhost")
+            or o.startswith("http://127.0.0.1")
+            or o.startswith("https://127.0.0.1")
+            or o.startswith("http://[::1]")
+            or o.startswith("https://[::1]")
+        ):
+            return origin
+        return None
 
     def _register_cors_middleware(self, app) -> None:
         @app.middleware("http")
@@ -2054,8 +2075,10 @@ class SoulEngine:
             response = await call_next(request)
             if request.url.path.startswith("/api/v1/soul"):
                 origin = request.headers.get("origin", "") or request.headers.get("Origin", "")
-                response.headers["Access-Control-Allow-Origin"] = self._cors_allow_origin(origin)
-                response.headers["Vary"] = "Origin"
+                allow = self._cors_allow_origin(origin)
+                if allow:
+                    response.headers["Access-Control-Allow-Origin"] = allow
+                    response.headers["Vary"] = "Origin"
             return response
 
     def _resolve_stream_id(self, *, stream_id: Optional[str], target: Optional[str]) -> str:
@@ -2791,13 +2814,6 @@ class MaiSoulEnginePlugin(BasePlugin):
         },
         "api": {
             "token": ConfigField(type=str, default="", description="API Token（留空则不鉴权；生产建议设置）", input_type="password", order=0),
-            "cors_allow_origins": ConfigField(
-                type=list,
-                default=["http://localhost:5173", "http://127.0.0.1:5173"],
-                description="允许跨域的 Origin 列表（['*'] 表示全部允许）",
-                item_type="string",
-                order=1,
-            ),
         },
         "spectrum": {
             "clamp_abs": ConfigField(type=float, default=1.0, description="光谱数值夹紧（内部 [-1,1]）", min=0.2, max=1.0, order=0),
