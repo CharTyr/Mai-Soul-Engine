@@ -4,9 +4,15 @@
   "version": "0.1.0",
   "description": "为 MaiBot 提供基于“思维内省”的动态意识形态系统（思想光谱/思维阁），并暴露 /api/v1/soul/* 用于外部前端展示。",
   "author": {
-    "name": "CharTyr"
+    "name": "CharTyr",
+    "url": "https://github.com/CharTyr"
   },
   "license": "GPL-3.0-or-later",
+  "host_application": {
+    "min_version": "0.11.6"
+  },
+  "homepage_url": "https://github.com/CharTyr/Mai-Soul-Engine",
+  "repository_url": "hhttps://github.com/CharTyr/Mai-Soul-Engine",
   "keywords": [
     "soul",
     "ideology",
@@ -19,9 +25,6 @@
     "analytics",
     "web"
   ],
-  "host_application": {
-    "min_version": "0.11.0"
-  },
   "plugin_info": {
     "is_built_in": false,
     "plugin_type": "general"
