@@ -162,7 +162,17 @@ reply_injection_safety_chars = 2000
 plugin_dir = ""
 
 [debug]
-# 调试开关：开启后允许使用 `/soul status`、`/soul introspect`（以主程序命令体系为准）
+# 命令开关：开启后允许使用 `/soul ...` 在聊天里查看状态/光谱/思维阁（不依赖前端）
+# 常用：
+# - `/soul status`    状态（类似 WebUI /pulse）
+# - `/soul spectrum`  思想光谱
+# - `/soul cabinet`   思维阁（固化思想/种子队列）
+# - `/soul logs 12`   最近 12 条内省日志
+# - `/soul targets`   列出可用 stream_id（用于私聊查看群状态）
+# - `/soul injection` 最近一次注入命中信息
+#
+# 注意：
+# - 命令默认只建议管理员使用；生产环境建议保持关闭，或只对白名单开放
 enabled = false
 # admin_only=true 时，仅 admin_user_ids 可执行调试命令
 admin_only = true

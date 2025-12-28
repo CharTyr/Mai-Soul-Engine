@@ -2929,8 +2929,8 @@ class SoulPostLlmEventHandler(BaseEventHandler):
 
 class SoulDebugCommand(BaseCommand):
     command_name = "soul_debug"
-    command_description = "Mai-Soul 调试命令（status / introspect）"
-    command_pattern = r"^[/／]soul(?:\\s+(?P<sub>help|status|introspect))?(?:\\s+(?P<arg>.+))?$"
+    command_description = "Mai-Soul 命令（查看状态/光谱/思维阁；可选强制内省）"
+    command_pattern = r"^[/／]soul(?:\s+(?P<sub>help|status|introspect|spectrum|cabinet|logs|targets|injection|光谱|思维阁|日志|目标|注入))?(?:\s+(?P<arg>.+))?$"
 
     def _is_allowed(self) -> tuple[bool, str]:
         if not bool(self.get_config("debug.enabled", False)):
@@ -2960,7 +2960,15 @@ class SoulDebugCommand(BaseCommand):
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         engine = self._get_engine()
         ok, reason = self._is_allowed()
-        sub = str(self.matched_groups.get("sub") or "").strip().lower() or "help"
+        sub_raw = str(self.matched_groups.get("sub") or "").strip() or "help"
+        sub = {
+            "光谱": "spectrum",
+            "思维阁": "cabinet",
+            "日志": "logs",
+            "目标": "targets",
+            "注入": "injection",
+        }.get(sub_raw, sub_raw).strip().lower() or "help"
+        arg = str(self.matched_groups.get("arg") or "").strip()
 
         platform = str(getattr(self.message.message_info, "platform", "") or "")
         user_info = getattr(self.message.message_info, "user_info", None)
@@ -2980,30 +2988,221 @@ class SoulDebugCommand(BaseCommand):
         )
 
         if not ok:
-            return True, None, 0
+            if reason == "debug_disabled":
+                await self.send_text(
+                    "\n".join(
+                        [
+                            "Mai-Soul：/soul 命令未启用。",
+                            "请在插件 `config.toml` 打开：",
+                            "- `[debug].enabled = true`",
+                            "- 并配置 `admin_user_ids = [\"qq:123456\"]`（或仅 user_id）",
+                        ]
+                    )
+                )
+            elif reason == "not_admin":
+                await self.send_text("Mai-Soul：无权限（你不在 `debug.admin_user_ids` 白名单中）。")
+            else:
+                await self.send_text(f"Mai-Soul：无法执行命令（reason={reason}）。")
+            return True, reason, 2
         if not engine.is_enabled():
             await self.send_text("Mai-Soul 当前未启用（[plugin].enabled=false）。")
-            return True, "engine_disabled", 1
+            return True, "engine_disabled", 2
         if not stream_id:
             await self.send_text("无法获取 stream_id。")
-            return True, "no_stream", 1
+            return True, "no_stream", 2
+
+        def _pick_sid(arg_text: str) -> tuple[Optional[str], str]:
+            # 解析优先级：
+            # 1) sid/stream_id 显式指定（sid=xxx / sid:xxx）
+            # 2) target 显式指定（target=xxx / target:xxx）
+            # 3) 直接给一个 token（视为 stream_id 或 target）
+            # 4) fallback：如果当前会话 stream_id 已有群状态则用它；否则仅当只有 1 个群时自动选择；否则要求用户指定
+            sids = list(engine._groups.keys())
+            arg_text = str(arg_text or "").strip()
+            if arg_text:
+                token0 = arg_text.split()[0].strip()
+                m_sid = re.match(r"(?i)^(?:sid|stream_id|stream)[:=](.+)$", token0)
+                if m_sid:
+                    return str(m_sid.group(1)).strip(), ""
+                m_target = re.match(r"(?i)^(?:target)[:=](.+)$", token0)
+                if m_target:
+                    needle = str(m_target.group(1)).strip()
+                    for sid2, st2 in engine._groups.items():
+                        if str(st2.target or "") == needle:
+                            return sid2, ""
+                    return None, "target_not_found"
+
+                if token0 in engine._groups:
+                    return token0, ""
+                for sid2, st2 in engine._groups.items():
+                    if str(st2.target or "") == token0:
+                        return sid2, ""
+                # 允许用户直接提供一个 stream_id（即便当前未记录到 groups，也可用于查看空状态）
+                return token0, ""
+
+            if str(stream_id) in engine._groups:
+                return str(stream_id), ""
+            if len(sids) == 1:
+                return sids[0], ""
+            if len(sids) > 1:
+                return None, "need_sid"
+            return str(stream_id), ""
+
+        async def _send_targets() -> None:
+            snap = await engine._snapshot_targets_frontend(limit=20, offset=0)
+            targets = snap.get("targets", [])
+            if not isinstance(targets, list) or not targets:
+                await self.send_text("Mai-Soul：暂无已记录的群/会话（还没有收到任何群消息）。")
+                return
+            lines = ["Mai-Soul targets（最近活跃在前，最多 20）："]
+            for t in targets[:20]:
+                if not isinstance(t, dict):
+                    continue
+                sid2 = str(t.get("stream_id", "") or "")
+                last = str(t.get("last_activity", "") or "")
+                mc = int(t.get("message_count", 0) or 0)
+                tgt = str(t.get("target", "") or "")
+                lines.append(f"- sid={sid2} msgs={mc} last={last} target={tgt}")
+            await self.send_text("\n".join(lines)[:1800])
+
+        async def _send_spectrum(sid2: str) -> None:
+            snap = await engine._snapshot_spectrum_frontend(sid2)
+            dims = snap.get("dimensions", [])
+            if not isinstance(dims, list):
+                dims = []
+            lines = ["Mai-Soul 思想光谱："]
+            for d in dims[:10]:
+                if not isinstance(d, dict):
+                    continue
+                axis = str(d.get("axis", "") or "")
+                vals = d.get("values", {}) if isinstance(d.get("values"), dict) else {}
+                cur = vals.get("current", 0.0)
+                ema = vals.get("ema", 0.0)
+                base = vals.get("baseline", 0.0)
+                vol = d.get("volatility", 0.0)
+                lines.append(f"- {axis}: current={cur:.1f} ema={ema:.1f} baseline={base:.1f} volatility={float(vol):.2f}")
+            dominant = str(snap.get("dominant_trait", "") or "")
+            base_tone = snap.get("base_tone", {}) if isinstance(snap.get("base_tone"), dict) else {}
+            primary = str(base_tone.get("primary", "") or "")
+            secondary = str(base_tone.get("secondary", "") or "")
+            last_shift = str(snap.get("last_major_shift", "") or "")
+            if dominant:
+                lines.append(f"dominant_trait: {dominant}")
+            if primary:
+                lines.append(f"base_tone: {primary}" + (f" / {secondary}" if secondary else ""))
+            if last_shift:
+                lines.append(f"last_major_shift: {last_shift}")
+            await self.send_text("\n".join(lines)[:1800])
+
+        async def _send_cabinet(sid2: str) -> None:
+            lock = engine._get_lock(sid2)
+            async with lock:
+                st = engine._get_group(sid2)
+                seeds = list(st.seed_queue or [])
+                thoughts = list(st.thoughts or [])
+
+            lines = ["Mai-Soul 思维阁："]
+            if thoughts:
+                lines.append(f"固化思想（{len(thoughts)}）：")
+                for t in thoughts[-10:]:
+                    if not isinstance(t, Thought):
+                        continue
+                    impact = {a: round(float((t.impact_points or {}).get(a, 0.0) or 0.0), 1) for a in AXES}
+                    lines.append(f"- {t.name} ({t.thought_id}) impact={json.dumps(impact, ensure_ascii=False)}")
+            else:
+                lines.append("固化思想：0")
+
+            if seeds:
+                lines.append(f"待内化种子（{len(seeds)}，展示前 10）：")
+                for s in seeds[:10]:
+                    if not isinstance(s, ThoughtSeed):
+                        continue
+                    lines.append(f"- {s.topic} ({s.seed_id}) energy={float(s.energy):.2f} tags={','.join(list(s.tags or [])[:6])}")
+            else:
+                lines.append("待内化种子：0")
+
+            await self.send_text("\n".join(lines)[:1800])
+
+        async def _send_logs(sid2: str, *, limit: int) -> None:
+            snap = await engine._snapshot_introspection_logs_frontend(sid2, limit=limit)
+            frags = snap.get("fragments", [])
+            if not isinstance(frags, list) or not frags:
+                await self.send_text("Mai-Soul：暂无内省日志。")
+                return
+            lines = [f"Mai-Soul 内省日志（最近 {min(len(frags), limit)} 条）："]
+            for it in frags[-limit:]:
+                if not isinstance(it, dict):
+                    continue
+                ts = str(it.get("timestamp", "") or "")
+                content = str(it.get("content", "") or "").replace("\r", "").strip()
+                content_one = content.replace("\n", " ")
+                if len(content_one) > 180:
+                    content_one = content_one[:177] + "..."
+                lines.append(f"- [{ts}] {content_one}")
+            await self.send_text("\n".join(lines)[:1800])
+
+        async def _send_injection(sid2: str) -> None:
+            snap = await engine._snapshot_injection_frontend(sid2)
+            last = snap.get("last_injection", {}) if isinstance(snap.get("last_injection"), dict) else {}
+            await self.send_text(("Mai-Soul 最近一次注入：\n" + json.dumps(last, ensure_ascii=False, indent=2))[:1800])
 
         if sub == "help":
             await self.send_text(
                 "\n".join(
                     [
-                        "Mai-Soul 调试命令：",
-                        "- /soul status          查看当前群状态",
-                        "- /soul introspect      强制执行一次思维内省",
+                        "Mai-Soul 命令：",
+                        "- /soul status                  查看状态（类似 WebUI /pulse）",
+                        "- /soul spectrum [sid=<sid>]    查看思想光谱（默认当前会话）",
+                        "- /soul cabinet [sid=<sid>]     查看思维阁（固化思想/种子队列）",
+                        "- /soul logs [N]                查看最近 N 条内省日志（默认 12）",
+                        "- /soul targets                 列出已记录的群/会话 stream_id",
+                        "- /soul injection [sid=<sid>]   查看最近一次注入命中信息",
+                        "- /soul introspect              强制执行一次思维内省（需另开 allow_force_introspect）",
                     ]
                 )
             )
-            return True, "help", 1
+            return True, "help", 2
+
+        if sub == "targets":
+            await _send_targets()
+            return True, "targets", 2
+
+        sid, sid_reason = _pick_sid(arg)
+        if not sid:
+            if sid_reason == "need_sid":
+                await self.send_text("Mai-Soul：私聊里无法自动确定要查看哪个群。先用 `/soul targets` 获取 sid，然后：`/soul spectrum sid=<sid>`。")
+                return True, "need_sid", 2
+            if sid_reason == "target_not_found":
+                await self.send_text("Mai-Soul：未找到该 target。先用 `/soul targets` 查看可用 target/sid。")
+                return True, "target_not_found", 2
+            await self.send_text("Mai-Soul：无法解析要查看的 stream_id。")
+            return True, "no_sid", 2
 
         if sub == "status":
-            pulse = await engine._snapshot_pulse_frontend(str(stream_id))
+            pulse = await engine._snapshot_pulse_frontend(str(sid))
             await self.send_text(json.dumps(pulse, ensure_ascii=False, indent=2)[:1500])
-            return True, "status", 1
+            return True, "status", 2
+
+        if sub == "spectrum":
+            await _send_spectrum(str(sid))
+            return True, "spectrum", 2
+
+        if sub == "cabinet":
+            await _send_cabinet(str(sid))
+            return True, "cabinet", 2
+
+        if sub == "logs":
+            lim = 12
+            if arg:
+                if arg.isdigit():
+                    lim = int(arg)
+            lim = max(1, min(int(lim), 60))
+            await _send_logs(str(sid), limit=lim)
+            return True, "logs", 2
+
+        if sub == "injection":
+            await _send_injection(str(sid))
+            return True, "injection", 2
 
         if sub == "introspect":
             if not bool(engine.get_config("debug.allow_force_introspect", False)):
@@ -3011,13 +3210,13 @@ class SoulDebugCommand(BaseCommand):
                     {"action": "debug_introspect", "ok": False, "reason": "force_disabled", "uid": uid_hash, "stream_id": str(stream_id)}
                 )
                 await self.send_text("已禁用强制思维内省（debug.allow_force_introspect=false）。")
-                return True, "force_disabled", 1
+                return True, "force_disabled", 2
             t0 = _now_ts()
-            ok2 = await engine._introspection_run(str(stream_id), force=True)
+            ok2 = await engine._introspection_run(str(sid), force=True)
             dur_ms = int(max(0.0, (_now_ts() - t0) * 1000.0))
-            lock = engine._get_lock(str(stream_id))
+            lock = engine._get_lock(str(sid))
             async with lock:
-                st = engine._get_group(str(stream_id))
+                st = engine._get_group(str(sid))
                 st.introspection_runs_total = int(st.introspection_runs_total or 0) + 1
                 if not ok2:
                     st.introspection_failures_total = int(st.introspection_failures_total or 0) + 1
@@ -3028,13 +3227,14 @@ class SoulDebugCommand(BaseCommand):
                     "action": "debug_introspect",
                     "ok": bool(ok2),
                     "uid": uid_hash,
-                    "stream_id": str(stream_id),
+                    "stream_id": str(sid),
                 }
             )
             await self.send_text("思维内省执行完成。" if ok2 else "思维内省未执行（窗口为空或 LLM 失败）。")
-            return True, "introspect", 1
+            return True, "introspect", 2
 
-        return True, "unknown", 1
+        await self.send_text("Mai-Soul：未知子命令。发送 `/soul help` 查看用法。")
+        return True, "unknown", 2
 
 
 @register_plugin
@@ -3131,7 +3331,7 @@ class MaiSoulEnginePlugin(BasePlugin):
             "reply_injection_safety_chars": ConfigField(type=int, default=2000, description="回复注入预留安全字符数（避免推爆）", min=0, max=20_000, order=4),
         },
         "debug": {
-            "enabled": ConfigField(type=bool, default=False, description="是否启用 /soul 调试命令（生产建议关闭）", order=0),
+            "enabled": ConfigField(type=bool, default=False, description="是否启用 /soul 命令（查看状态/光谱/思维阁；生产建议关闭）", order=0),
             "admin_only": ConfigField(type=bool, default=True, description="调试命令是否仅管理员可用", order=1),
             "admin_user_ids": ConfigField(type=list, default=[], description="允许调试命令的用户列表（platform:user_id 或 user_id）", item_type="string", order=2),
             "allow_force_introspect": ConfigField(type=bool, default=False, description="是否允许 /soul introspect 强制内省（写状态；默认关闭）", order=3),
