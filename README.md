@@ -186,7 +186,7 @@ npm run build
 
 ---
 
-## 调试命令（可选）
+## 聊天命令（可选）
 
 在 `config.toml` 打开：
 ```toml
@@ -200,8 +200,17 @@ admin_user_ids = ["qq:123456"]
 ```
 
 群里发送：
-- `/soul status`：查看 pulse 状态（含内省下一次时间）
-- `/soul introspect`：强制执行一次思维内省
+- `/soul status`：查看状态（类似 WebUI 的 `/pulse`）
+- `/soul spectrum`：查看思想光谱
+- `/soul cabinet`：查看思维阁（固化思想 / 待内化种子队列）
+- `/soul logs 12`：查看最近 12 条内省日志
+- `/soul injection`：查看最近一次注入命中信息
+- `/soul targets`：列出已记录的群/会话 `sid`（便于私聊查看群状态）
+- `/soul introspect`：强制执行一次思维内省（需要 `debug.allow_force_introspect=true`）
+
+私聊里使用（避免刷屏）：
+1) 先 `/soul targets` 复制要查看的 `sid`
+2) 再用：`/soul spectrum sid=<sid>`（其它命令同理）
 
 ---
 
