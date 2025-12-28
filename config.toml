@@ -173,6 +173,7 @@ plugin_dir = ""
 #
 # 注意：
 # - 命令默认只建议管理员使用；生产环境建议保持关闭，或只对白名单开放
+# - 若你不在白名单中，机器人会直接忽略命令（不会回复）
 enabled = false
 # admin_only=true 时，仅 admin_user_ids 可执行调试命令
 admin_only = true

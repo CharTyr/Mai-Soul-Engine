@@ -2988,21 +2988,7 @@ class SoulDebugCommand(BaseCommand):
         )
 
         if not ok:
-            if reason == "debug_disabled":
-                await self.send_text(
-                    "\n".join(
-                        [
-                            "Mai-Soul：/soul 命令未启用。",
-                            "请在插件 `config.toml` 打开：",
-                            "- `[debug].enabled = true`",
-                            "- 并配置 `admin_user_ids = [\"qq:123456\"]`（或仅 user_id）",
-                        ]
-                    )
-                )
-            elif reason == "not_admin":
-                await self.send_text("Mai-Soul：无权限（你不在 `debug.admin_user_ids` 白名单中）。")
-            else:
-                await self.send_text(f"Mai-Soul：无法执行命令（reason={reason}）。")
+            # 非白名单/未启用：保持静默（不回复），但拦截命令，避免被主流程当普通聊天处理
             return True, reason, 2
         if not engine.is_enabled():
             await self.send_text("Mai-Soul 当前未启用（[plugin].enabled=false）。")

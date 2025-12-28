@@ -199,6 +199,8 @@ admin_only = true
 admin_user_ids = ["qq:123456"]
 ```
 
+注意：如果你不在白名单中，机器人会直接忽略 `/soul ...`（不会回复）。
+
 群里发送：
 - `/soul status`：查看状态（类似 WebUI 的 `/pulse`）
 - `/soul spectrum`：查看思想光谱
