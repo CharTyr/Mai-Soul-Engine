@@ -24,7 +24,7 @@ class EvolutionTaskHandler(BaseEventHandler):
     ) -> Tuple[bool, bool, Optional[str], Optional[dict], Optional[MaiMessages]]:
         from ..utils.audit_log import init_audit_log
 
-        if not self.get_config("evolution_enabled", True):
+        if not self.get_config("evolution.evolution_enabled", True):
             return True, True, None, None, message
 
         plugin_dir = Path(__file__).parent.parent
@@ -43,18 +43,18 @@ class EvolutionTaskHandler(BaseEventHandler):
 
         while True:
             try:
-                interval_hours = self.get_config("evolution_interval_hours", 1.0)
+                interval_hours = self.get_config("evolution.evolution_interval_hours", 1.0)
                 await asyncio.sleep(interval_hours * 3600)
 
-                if not self.get_config("evolution_enabled", True):
+                if not self.get_config("evolution.evolution_enabled", True):
                     continue
 
                 spectrum = get_or_create_spectrum("global")
                 if not spectrum.initialized:
                     continue
 
-                evolution_rate = self.get_config("evolution_rate", 5)
-                monitored_groups = self.get_config("monitored_groups", [])
+                evolution_rate = self.get_config("evolution.evolution_rate", 5)
+                monitored_groups = self.get_config("monitor.monitored_groups", [])
 
                 if not monitored_groups:
                     continue
@@ -110,7 +110,7 @@ class EvolutionTaskHandler(BaseEventHandler):
 
             prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
 
-            thought_cabinet_enabled = self.get_config("enabled", False)
+            thought_cabinet_enabled = self.get_config("thought_cabinet.enabled", False)
             if thought_cabinet_enabled:
                 from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
 
@@ -147,8 +147,8 @@ class EvolutionTaskHandler(BaseEventHandler):
                 "progressive": spectrum.progressive,
             }
 
-            ema_alpha = self.get_config("ema_alpha", 0.3)
-            resistance = self.get_config("direction_resistance", 0.5)
+            ema_alpha = self.get_config("evolution.ema_alpha", 0.3)
+            resistance = self.get_config("evolution.direction_resistance", 0.5)
 
             raw_deltas = {
                 "economic": max(-evolution_rate, min(evolution_rate, deltas.get("economic", 0))),
@@ -229,9 +229,9 @@ class EvolutionTaskHandler(BaseEventHandler):
             return
 
         config = {
-            "max_seeds": self.get_config("max_seeds", 20),
-            "min_trigger_intensity": self.get_config("min_trigger_intensity", 0.7),
-            "admin_user_id": self.get_config("admin_user_id", ""),
+            "max_seeds": self.get_config("thought_cabinet.max_seeds", 20),
+            "min_trigger_intensity": self.get_config("thought_cabinet.min_trigger_intensity", 0.7),
+            "admin_user_id": self.get_config("admin.admin_user_id", ""),
         }
         manager = ThoughtSeedManager(config)
 

@@ -15,19 +15,19 @@ class SeedListCommand(BaseCommand):
         from ..utils.spectrum_utils import match_user
         from ..thought.seed_manager import ThoughtSeedManager
 
-        admin_user_id = self.get_config("admin_user_id", "")
+        admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = getattr(self.message, "platform", "")
         user_id = str(getattr(self.message, "user_id", ""))
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以查看思维种子", 2
 
-        if not self.get_config("enabled", False):
+        if not self.get_config("thought_cabinet.enabled", False):
             return True, "思维阁系统未启用", 2
 
         config = {
-            "max_seeds": self.get_config("max_seeds", 20),
-            "min_trigger_intensity": self.get_config("min_trigger_intensity", 0.7),
+            "max_seeds": self.get_config("thought_cabinet.max_seeds", 20),
+            "min_trigger_intensity": self.get_config("thought_cabinet.min_trigger_intensity", 0.7),
             "admin_user_id": admin_user_id,
         }
         manager = ThoughtSeedManager(config)
@@ -46,14 +46,14 @@ class SeedApproveCommand(BaseCommand):
         from ..thought.seed_manager import ThoughtSeedManager
         from ..thought.internalization_engine import InternalizationEngine
 
-        admin_user_id = self.get_config("admin_user_id", "")
+        admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = getattr(self.message, "platform", "")
         user_id = str(getattr(self.message, "user_id", ""))
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以审核思维种子", 2
 
-        if not self.get_config("enabled", False):
+        if not self.get_config("thought_cabinet.enabled", False):
             return True, "思维阁系统未启用", 2
 
         content = getattr(self.message, "content", "")
@@ -80,6 +80,7 @@ class SeedApproveCommand(BaseCommand):
         result = await engine.internalize_seed(seed)
 
         if result["success"]:
+            await manager.delete_seed(seed_id)
             impact = result["spectrum_impact"]
             impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
             return (
@@ -99,14 +100,14 @@ class SeedRejectCommand(BaseCommand):
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
 
-        admin_user_id = self.get_config("admin_user_id", "")
+        admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = getattr(self.message, "platform", "")
         user_id = str(getattr(self.message, "user_id", ""))
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以审核思维种子", 2
 
-        if not self.get_config("enabled", False):
+        if not self.get_config("thought_cabinet.enabled", False):
             return True, "思维阁系统未启用", 2
 
         content = getattr(self.message, "content", "")
