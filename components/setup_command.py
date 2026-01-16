@@ -1,5 +1,6 @@
 from typing import Optional, Tuple
 from datetime import datetime
+from pathlib import Path
 from src.plugin_system import BaseCommand
 
 questionnaire_sessions: dict = {}
@@ -14,6 +15,10 @@ class SetupCommand(BaseCommand):
         from ..questions.setup_questions import QUESTIONS, calculate_initial_spectrum
         from ..models.ideology_model import get_or_create_spectrum, init_tables
         from ..utils.spectrum_utils import format_spectrum_display, match_user
+        from ..utils.audit_log import init_audit_log
+
+        plugin_dir = Path(__file__).parent.parent
+        init_audit_log(plugin_dir)
 
         admin_user_id = self.get_config("admin_user_id", "")
         if not admin_user_id:
@@ -51,6 +56,7 @@ class SetupAnswerHandler(BaseCommand):
         from ..questions.setup_questions import QUESTIONS, calculate_initial_spectrum
         from ..models.ideology_model import get_or_create_spectrum, init_tables
         from ..utils.spectrum_utils import format_spectrum_display, match_user
+        from ..utils.audit_log import log_init
 
         admin_user_id = self.get_config("admin_user_id", "")
         platform = getattr(self.message, "platform", "")
@@ -82,8 +88,10 @@ class SetupAnswerHandler(BaseCommand):
 
             del questionnaire_sessions[session_key]
 
+            await log_init(session_key, spectrum_values)
+
             display = format_spectrum_display(spectrum_values)
-            return True, f"问卷完成！初始灵魂光谱光谱：\n\n{display}", 2
+            return True, f"问卷完成！初始灵魂光谱：\n\n{display}", 2
 
         q = QUESTIONS[session["current"]]
         return True, f"第{session['current'] + 1}题：{q['text']}", 2

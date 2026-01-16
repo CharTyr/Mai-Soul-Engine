@@ -1,16 +1,21 @@
 from typing import Optional, Tuple
 from datetime import datetime
+from pathlib import Path
 from src.plugin_system import BaseCommand
 
 
 class ResetCommand(BaseCommand):
     command_name = "worldview_reset"
-    command_description = "重置意识形态光谱"
+    command_description = "重置灵魂光谱"
     command_pattern = r"^/worldview_reset$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..models.ideology_model import get_or_create_spectrum, init_tables
         from ..utils.spectrum_utils import match_user
+        from ..utils.audit_log import log_reset, init_audit_log
+
+        plugin_dir = Path(__file__).parent.parent
+        init_audit_log(plugin_dir)
 
         admin_user_id = self.get_config("admin_user_id", "")
         platform = getattr(self.message, "platform", "")
@@ -28,5 +33,7 @@ class ResetCommand(BaseCommand):
         spectrum.initialized = False
         spectrum.updated_at = datetime.now()
         spectrum.save()
+
+        await log_reset(f"{platform}:{user_id}")
 
         return True, "灵魂光谱已重置为中立状态，请使用 /worldview_setup 重新初始化", 2

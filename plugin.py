@@ -34,6 +34,7 @@ class MaiSoulEngine(BasePlugin):
             "evolution_enabled": ConfigField(type=bool, default=True, description="启用自动演化"),
             "evolution_interval_hours": ConfigField(type=float, default=1.0, description="演化周期(小时)"),
             "evolution_rate": ConfigField(type=int, default=5, description="每次演化最大变化值"),
+            "ema_alpha": ConfigField(type=float, default=0.3, description="EMA平滑系数(0-1，越大变化越快)"),
         },
         "monitor": {
             "monitored_groups": ConfigField(

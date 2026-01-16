@@ -91,3 +91,35 @@ def is_user_monitored(platform: str, user_id: str, config: dict) -> bool:
             return True
 
     return False
+
+
+# EMA平滑
+def ema_update(current: float, new_value: float, alpha: float = 0.3) -> float:
+    """指数移动平均，alpha越大新值权重越高"""
+    return current * (1 - alpha) + new_value * alpha
+
+
+def smooth_delta(current: int, delta: int, alpha: float = 0.3) -> int:
+    """平滑后的delta值"""
+    if delta == 0:
+        return 0
+    target = current + delta
+    smoothed = ema_update(float(current), float(target), alpha)
+    return int(round(smoothed)) - current
+
+
+# 隐私脱敏
+import re
+
+def sanitize_text(text: str, max_chars: int = 500) -> str:
+    """过滤敏感信息"""
+    s = (text or "").replace("\n", " ").replace("\r", " ").strip()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"https?://\S+", "<url>", s, flags=re.IGNORECASE)
+    s = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<email>", s)
+    s = re.sub(r"@\S+", "@某人", s)
+    s = re.sub(r"(?:\+?86[-\s]?)?1[3-9]\d{9}", "<phone>", s)
+    s = re.sub(r"\b\d{17}[\dXx]\b", "<id>", s)
+    s = re.sub(r"(?:QQ群|群号|群|QQ|qq)\s*[:：]?\s*([1-9]\d{4,11})", "<qq>", s)
+    s = re.sub(r"\b\d{7,}\b", "<num>", s)
+    return s[:max_chars]
