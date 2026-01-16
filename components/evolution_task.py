@@ -81,6 +81,7 @@ class EvolutionTaskHandler(BaseEventHandler):
             parse_chat_id,
             sanitize_text,
             smooth_delta,
+            apply_resistance,
         )
         from ..utils.audit_log import log_evolution
         from src.llm_models.utils_model import LLMRequest
@@ -147,6 +148,7 @@ class EvolutionTaskHandler(BaseEventHandler):
             }
 
             ema_alpha = self.get_config("ema_alpha", 0.3)
+            resistance = self.get_config("direction_resistance", 0.5)
 
             raw_deltas = {
                 "economic": max(-evolution_rate, min(evolution_rate, deltas.get("economic", 0))),
@@ -155,17 +157,29 @@ class EvolutionTaskHandler(BaseEventHandler):
                 "progressive": max(-evolution_rate, min(evolution_rate, deltas.get("progressive", 0))),
             }
 
+            resisted_deltas = {}
+            new_dirs = {}
+            for dim in ["economic", "social", "diplomatic", "progressive"]:
+                last_dir = getattr(spectrum, f"last_{dim}_dir", 0)
+                adj_delta, new_dir = apply_resistance(raw_deltas[dim], last_dir, resistance)
+                resisted_deltas[dim] = adj_delta
+                new_dirs[dim] = new_dir
+
             smoothed_deltas = {
-                "economic": smooth_delta(spectrum.economic, raw_deltas["economic"], ema_alpha),
-                "social": smooth_delta(spectrum.social, raw_deltas["social"], ema_alpha),
-                "diplomatic": smooth_delta(spectrum.diplomatic, raw_deltas["diplomatic"], ema_alpha),
-                "progressive": smooth_delta(spectrum.progressive, raw_deltas["progressive"], ema_alpha),
+                "economic": smooth_delta(spectrum.economic, resisted_deltas["economic"], ema_alpha),
+                "social": smooth_delta(spectrum.social, resisted_deltas["social"], ema_alpha),
+                "diplomatic": smooth_delta(spectrum.diplomatic, resisted_deltas["diplomatic"], ema_alpha),
+                "progressive": smooth_delta(spectrum.progressive, resisted_deltas["progressive"], ema_alpha),
             }
 
             spectrum.economic = update_spectrum_value(spectrum.economic, smoothed_deltas["economic"])
             spectrum.social = update_spectrum_value(spectrum.social, smoothed_deltas["social"])
             spectrum.diplomatic = update_spectrum_value(spectrum.diplomatic, smoothed_deltas["diplomatic"])
             spectrum.progressive = update_spectrum_value(spectrum.progressive, smoothed_deltas["progressive"])
+            spectrum.last_economic_dir = new_dirs["economic"]
+            spectrum.last_social_dir = new_dirs["social"]
+            spectrum.last_diplomatic_dir = new_dirs["diplomatic"]
+            spectrum.last_progressive_dir = new_dirs["progressive"]
             spectrum.last_evolution = now
             spectrum.updated_at = now
             spectrum.save()

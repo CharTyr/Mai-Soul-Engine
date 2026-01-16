@@ -108,8 +108,24 @@ def smooth_delta(current: int, delta: int, alpha: float = 0.3) -> int:
     return int(round(smoothed)) - current
 
 
+def apply_resistance(delta: int, last_dir: int, resistance: float = 0.5) -> tuple[int, int]:
+    """应用反向变动阻力，返回(调整后delta, 新方向)"""
+    if delta == 0:
+        return 0, last_dir
+
+    current_dir = 1 if delta > 0 else -1
+
+    if last_dir != 0 and current_dir != last_dir:
+        adjusted_delta = int(delta * (1 - resistance))
+    else:
+        adjusted_delta = delta
+
+    return adjusted_delta, current_dir
+
+
 # 隐私脱敏
 import re
+
 
 def sanitize_text(text: str, max_chars: int = 500) -> str:
     """过滤敏感信息"""
