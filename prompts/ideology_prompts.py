@@ -77,7 +77,7 @@ def get_prompt_level(value: int, thresholds: dict, enable_extreme: bool = False)
         return "right_4" if is_right else "left_4"
 
 
-def build_ideology_prompt(spectrum: dict, thresholds: dict, custom_prompts: dict | None = None, enable_extreme: bool = False) -> str:
+def build_ideology_prompt(spectrum: dict, custom_prompts: dict | None = None, enable_extreme: bool = False) -> str:
     prompts = []
 
     prompt_dicts = {

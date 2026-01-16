@@ -32,15 +32,9 @@ class IdeologyInjector(BaseEventHandler):
             "progressive": spectrum.progressive,
         }
 
-        thresholds = {
-            "threshold_mild": self.get_config("threshold_mild", 25),
-            "threshold_moderate": self.get_config("threshold_moderate", 50),
-            "threshold_extreme": self.get_config("threshold_extreme", 75),
-        }
-
         custom_prompts = self.get_config("custom_prompts", {})
         enable_extreme = self.get_config("enable_extreme", False)
-        ideology_prompt = build_ideology_prompt(spectrum_dict, thresholds, custom_prompts, enable_extreme)
+        ideology_prompt = build_ideology_prompt(spectrum_dict, custom_prompts, enable_extreme)
 
         if not ideology_prompt:
             return True, True, None, None, message
