@@ -16,7 +16,7 @@ class IdeologyInjector(BaseEventHandler):
         from ..models.ideology_model import get_or_create_spectrum, init_tables
         from ..prompts.ideology_prompts import build_ideology_prompt
 
-        if not self.get_config("enabled", True):
+        if not self.get_config("admin.enabled", True):
             return True, True, None, None, message
 
         init_tables()
@@ -32,8 +32,8 @@ class IdeologyInjector(BaseEventHandler):
             "progressive": spectrum.progressive,
         }
 
-        custom_prompts = self.get_config("custom_prompts", {})
-        enable_extreme = self.get_config("enable_extreme", False)
+        custom_prompts = self.get_config("threshold.custom_prompts", {})
+        enable_extreme = self.get_config("threshold.enable_extreme", False)
         ideology_prompt = build_ideology_prompt(spectrum_dict, custom_prompts, enable_extreme)
 
         if not ideology_prompt:

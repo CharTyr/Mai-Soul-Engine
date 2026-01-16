@@ -34,7 +34,7 @@ class SetupCommand(BaseCommand):
         plugin_dir = Path(__file__).parent.parent
         init_audit_log(plugin_dir)
 
-        admin_user_id = self.get_config("admin_user_id", "")
+        admin_user_id = self.get_config("admin.admin_user_id", "")
         if not admin_user_id:
             return True, "请先在配置文件中设置 admin_user_id（格式：平台:ID，如qq:768295235）", 2
 
@@ -74,7 +74,7 @@ class SetupAnswerHandler(BaseCommand):
 
         cleanup_expired_sessions()
 
-        admin_user_id = self.get_config("admin_user_id", "")
+        admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = getattr(self.message, "platform", "")
         user_id = str(getattr(self.message, "user_id", ""))
         session_key = f"{platform}:{user_id}"
