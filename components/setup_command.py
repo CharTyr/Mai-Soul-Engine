@@ -1,9 +1,18 @@
 from typing import Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from src.plugin_system import BaseCommand
 
 questionnaire_sessions: dict = {}
+SESSION_TIMEOUT_MINUTES = 30
+
+
+def cleanup_expired_sessions():
+    now = datetime.now()
+    expired = [k for k, v in questionnaire_sessions.items() 
+               if now - v["started_at"] > timedelta(minutes=SESSION_TIMEOUT_MINUTES)]
+    for k in expired:
+        del questionnaire_sessions[k]
 
 
 class SetupCommand(BaseCommand):
@@ -12,10 +21,12 @@ class SetupCommand(BaseCommand):
     command_pattern = r"^/soul_setup$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
-        from ..questions.setup_questions import QUESTIONS, calculate_initial_spectrum
-        from ..models.ideology_model import get_or_create_spectrum, init_tables
-        from ..utils.spectrum_utils import format_spectrum_display, match_user
+        from ..questions.setup_questions import QUESTIONS
+        from ..models.ideology_model import init_tables
+        from ..utils.spectrum_utils import match_user
         from ..utils.audit_log import init_audit_log
+
+        cleanup_expired_sessions()
 
         plugin_dir = Path(__file__).parent.parent
         init_audit_log(plugin_dir)
@@ -57,6 +68,8 @@ class SetupAnswerHandler(BaseCommand):
         from ..models.ideology_model import get_or_create_spectrum, init_tables
         from ..utils.spectrum_utils import format_spectrum_display, match_user
         from ..utils.audit_log import log_init
+
+        cleanup_expired_sessions()
 
         admin_user_id = self.get_config("admin_user_id", "")
         platform = getattr(self.message, "platform", "")
