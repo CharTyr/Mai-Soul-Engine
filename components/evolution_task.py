@@ -94,9 +94,7 @@ class EvolutionTaskHandler(BaseEventHandler):
             last_time = record.last_analyzed
             now = datetime.now()
 
-            messages = await get_messages_by_time_in_chat(
-                stream_id, last_time.timestamp(), now.timestamp()
-            )
+            messages = await get_messages_by_time_in_chat(stream_id, last_time.timestamp(), now.timestamp())
 
             if not messages or len(messages) < 5:
                 return
@@ -111,6 +109,12 @@ class EvolutionTaskHandler(BaseEventHandler):
 
             prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
 
+            thought_cabinet_enabled = self.get_config("enabled", False)
+            if thought_cabinet_enabled:
+                from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
+
+                prompt = ENHANCED_EVOLUTION_PROMPT.format(rate=evolution_rate, messages=msg_text)
+
             llm = LLMRequest()
             response, _ = await llm.generate_response_async(prompt)
 
@@ -121,13 +125,20 @@ class EvolutionTaskHandler(BaseEventHandler):
                 response = response.strip()
                 if response.startswith("```"):
                     response = response.split("\n", 1)[1].rsplit("```", 1)[0]
-                deltas = json.loads(response)
+                result = json.loads(response)
+
+                if thought_cabinet_enabled and "spectrum_deltas" in result:
+                    deltas = result["spectrum_deltas"]
+                    thought_seeds = result.get("thought_seeds", [])
+                    await self._process_thought_seeds(thought_seeds, stream_id)
+                else:
+                    deltas = result
             except json.JSONDecodeError:
                 logger.warning(f"无法解析LLM响应: {response}")
                 return
 
             spectrum = get_or_create_spectrum("global")
-            
+
             before = {
                 "economic": spectrum.economic,
                 "social": spectrum.social,
@@ -136,14 +147,14 @@ class EvolutionTaskHandler(BaseEventHandler):
             }
 
             ema_alpha = self.get_config("ema_alpha", 0.3)
-            
+
             raw_deltas = {
                 "economic": max(-evolution_rate, min(evolution_rate, deltas.get("economic", 0))),
                 "social": max(-evolution_rate, min(evolution_rate, deltas.get("social", 0))),
                 "diplomatic": max(-evolution_rate, min(evolution_rate, deltas.get("diplomatic", 0))),
                 "progressive": max(-evolution_rate, min(evolution_rate, deltas.get("progressive", 0))),
             }
-            
+
             smoothed_deltas = {
                 "economic": smooth_delta(spectrum.economic, raw_deltas["economic"], ema_alpha),
                 "social": smooth_delta(spectrum.social, raw_deltas["social"], ema_alpha),
@@ -196,3 +207,21 @@ class EvolutionTaskHandler(BaseEventHandler):
 
         except Exception as e:
             logger.error(f"分析群{group_config_id}时出错: {e}")
+
+    async def _process_thought_seeds(self, seeds: list, stream_id: str):
+        from ..thought.seed_manager import ThoughtSeedManager
+
+        if not seeds:
+            return
+
+        config = {
+            "max_seeds": self.get_config("max_seeds", 20),
+            "min_trigger_intensity": self.get_config("min_trigger_intensity", 0.7),
+            "admin_user_id": self.get_config("admin_user_id", ""),
+        }
+        manager = ThoughtSeedManager(config)
+
+        for seed_data in seeds[:2]:
+            seed_id = await manager.create_seed(seed_data)
+            if seed_id:
+                logger.info(f"群{stream_id}创建思维种子: {seed_id}")

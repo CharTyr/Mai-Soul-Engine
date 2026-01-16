@@ -20,6 +20,7 @@ class MaiSoulEngine(BasePlugin):
         "evolution": "演化设置",
         "monitor": "监控范围",
         "threshold": "档位阈值",
+        "thought_cabinet": "思维阁设置",
     }
 
     config_schema: dict = {
@@ -52,6 +53,12 @@ class MaiSoulEngine(BasePlugin):
             "enable_extreme": ConfigField(type=bool, default=False, description="启用极端档位(98-100触发)"),
             "custom_prompts": ConfigField(type=dict, default={}, description="自定义提示词模板(覆盖默认)"),
         },
+        "thought_cabinet": {
+            "enabled": ConfigField(type=bool, default=False, description="启用思维阁系统（默认关闭）"),
+            "max_seeds": ConfigField(type=int, default=20, description="思维种子上限"),
+            "min_trigger_intensity": ConfigField(type=float, default=0.7, description="最小触发强度"),
+            "admin_notification_enabled": ConfigField(type=bool, default=True, description="启用管理员审核通知"),
+        },
     }
 
     def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
@@ -60,6 +67,7 @@ class MaiSoulEngine(BasePlugin):
         from .components.reset_command import ResetCommand
         from .components.ideology_injector import IdeologyInjector
         from .components.evolution_task import EvolutionTaskHandler
+        from .components.thought_commands import SeedListCommand, SeedApproveCommand, SeedRejectCommand
 
         return [
             (SetupCommand.get_command_info(), SetupCommand),
@@ -68,4 +76,7 @@ class MaiSoulEngine(BasePlugin):
             (ResetCommand.get_command_info(), ResetCommand),
             (IdeologyInjector.get_handler_info(), IdeologyInjector),
             (EvolutionTaskHandler.get_handler_info(), EvolutionTaskHandler),
+            (SeedListCommand.get_command_info(), SeedListCommand),
+            (SeedApproveCommand.get_command_info(), SeedApproveCommand),
+            (SeedRejectCommand.get_command_info(), SeedRejectCommand),
         ]
