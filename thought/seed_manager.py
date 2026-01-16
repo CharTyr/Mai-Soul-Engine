@@ -57,7 +57,10 @@ class ThoughtSeedManager:
                     await self.delete_seed(seed_id)
 
     async def delete_seed(self, seed_id: str) -> bool:
-        return True
+        from src.chat.knowledge.lpmm_ops import lpmm_ops
+
+        result = await lpmm_ops.delete(seed_id, exact_match=False)
+        return result.get("deleted_count", 0) > 0
 
     async def get_pending_seeds(self) -> list:
         from src.chat.knowledge.lpmm_ops import lpmm_ops
