@@ -7,7 +7,7 @@ from src.plugin_system import BaseCommand
 class ResetCommand(BaseCommand):
     command_name = "soul_reset"
     command_description = "重置灵魂光谱"
-    command_pattern = r"^/soul_reset$"
+    command_pattern = r"^/soul_reset\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..models.ideology_model import get_or_create_spectrum, init_tables

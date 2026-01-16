@@ -9,8 +9,11 @@ SESSION_TIMEOUT_MINUTES = 30
 
 def cleanup_expired_sessions():
     now = datetime.now()
-    expired = [k for k, v in questionnaire_sessions.items() 
-               if now - v["started_at"] > timedelta(minutes=SESSION_TIMEOUT_MINUTES)]
+    expired = [
+        k
+        for k, v in questionnaire_sessions.items()
+        if now - v["started_at"] > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+    ]
     for k in expired:
         del questionnaire_sessions[k]
 
@@ -18,7 +21,7 @@ def cleanup_expired_sessions():
 class SetupCommand(BaseCommand):
     command_name = "soul_setup"
     command_description = "初始化灵魂光谱问卷（管理员私聊）"
-    command_pattern = r"^/soul_setup$"
+    command_pattern = r"^/soul_setup\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..questions.setup_questions import QUESTIONS
@@ -61,7 +64,7 @@ class SetupCommand(BaseCommand):
 class SetupAnswerHandler(BaseCommand):
     command_name = "soul_answer"
     command_description = "处理问卷回答"
-    command_pattern = r"^[1-5]$"
+    command_pattern = r"^[1-5]\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..questions.setup_questions import QUESTIONS, calculate_initial_spectrum

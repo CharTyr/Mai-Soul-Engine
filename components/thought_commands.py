@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 class SeedListCommand(BaseCommand):
     command_name = "soul_seeds"
     command_description = "查看待审核的思维种子"
-    command_pattern = r"^/soul_seeds$"
+    command_pattern = r"^/soul_seeds\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
@@ -39,7 +39,7 @@ class SeedListCommand(BaseCommand):
 class SeedApproveCommand(BaseCommand):
     command_name = "soul_approve"
     command_description = "批准思维种子内化"
-    command_pattern = r"^/soul_approve\s+(\w+)$"
+    command_pattern = r"^/soul_approve\s+(\w+)\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
@@ -94,7 +94,7 @@ class SeedApproveCommand(BaseCommand):
 class SeedRejectCommand(BaseCommand):
     command_name = "soul_reject"
     command_description = "拒绝思维种子"
-    command_pattern = r"^/soul_reject\s+(\w+)$"
+    command_pattern = r"^/soul_reject\s+(\w+)\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user

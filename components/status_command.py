@@ -5,7 +5,7 @@ from src.plugin_system import BaseCommand
 class StatusCommand(BaseCommand):
     command_name = "soul_status"
     command_description = "查看当前意识形态光谱状态"
-    command_pattern = r"^/soul_status$"
+    command_pattern = r"^/soul_status\s*$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..models.ideology_model import get_or_create_spectrum, init_tables
