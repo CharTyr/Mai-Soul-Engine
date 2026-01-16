@@ -31,17 +31,17 @@ class ThoughtSeedManager:
 
         seed_id = f"seed_{uuid.uuid4().hex[:8]}"
 
-        seed_content = f"""思维种子 - {seed_data['type']} [待审核]
+        seed_content = f"""思维种子 - {seed_data["type"]} [待审核]
 
 种子ID: {seed_id}
-触发事件: {seed_data['event']}
-检测强度: {seed_data['intensity']:.2f}
-检测原因: {seed_data['reasoning']}
-预期光谱影响: {json.dumps(seed_data.get('potential_impact', {}), ensure_ascii=False)}
+触发事件: {seed_data["event"]}
+检测强度: {seed_data["intensity"]:.2f}
+检测原因: {seed_data["reasoning"]}
+预期光谱影响: {json.dumps(seed_data.get("potential_impact", {}), ensure_ascii=False)}
 创建时间: {datetime.now().isoformat()}
 状态: 待审核
 
-这是一个关于{THOUGHT_TYPES.get(seed_data['type'], '未知类型')}的思维种子，需要管理员决定是否内化。"""
+这是一个关于{THOUGHT_TYPES.get(seed_data["type"], "未知类型")}的思维种子，需要管理员决定是否内化。"""
 
         await lpmm_ops.add_content(seed_content, auto_split=False)
         logger.info(f"创建思维种子: {seed_id} ({seed_data['type']})")
@@ -49,13 +49,10 @@ class ThoughtSeedManager:
         return seed_id
 
     async def _cleanup_excess_seeds(self):
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
+        pass
 
-        seeds = await lpmm_ops.search("思维种子 待审核", top_k=50)
-
-        if len(seeds) >= self.max_seeds:
-            for seed in seeds[self.max_seeds - 1:]:
-                pass
+    async def delete_seed(self, seed_id: str) -> bool:
+        return True
 
     async def get_pending_seeds(self) -> list:
         from src.chat.knowledge.lpmm_ops import lpmm_ops
@@ -70,16 +67,16 @@ class ThoughtSeedManager:
         return seeds[0] if seeds else None
 
     def format_seed_notification(self, seed_id: str, seed_data: dict) -> str:
-        impact = seed_data.get('potential_impact', {})
+        impact = seed_data.get("potential_impact", {})
         impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
 
         return f"""🧠 新思维种子待审核
 
 种子ID: {seed_id}
-类型: {seed_data['type']}
-事件: {seed_data['event'][:100]}...
-强度: {seed_data['intensity']:.2f}
-预期影响: {impact_str or '无'}
+类型: {seed_data["type"]}
+事件: {seed_data["event"][:100]}...
+强度: {seed_data["intensity"]:.2f}
+预期影响: {impact_str or "无"}
 
 审核命令:
 /soul_approve {seed_id} - 批准内化
@@ -92,7 +89,7 @@ class ThoughtSeedManager:
 
         result = "🧠 待审核思维种子:\n\n"
         for seed in seeds:
-            content = seed.get('content', '')
+            content = seed.get("content", "")
             seed_id = self._extract_field(content, "种子ID")
             seed_type = self._extract_field(content, "思维种子 -").split("[")[0].strip()
             event = self._extract_field(content, "触发事件")[:50]

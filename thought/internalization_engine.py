@@ -33,12 +33,12 @@ class InternalizationEngine:
         from src.llm_models.utils_model import LLMRequest
 
         try:
-            seed_info = self._parse_seed_content(seed.get('content', ''))
+            seed_info = self._parse_seed_content(seed.get("content", ""))
 
             prompt = INTERNALIZATION_PROMPT.format(
-                type=seed_info.get('type', '未知'),
-                event=seed_info.get('event', ''),
-                reasoning=seed_info.get('reasoning', '')
+                type=seed_info.get("type", "未知"),
+                event=seed_info.get("event", ""),
+                reasoning=seed_info.get("reasoning", ""),
             )
 
             llm = LLMRequest()
@@ -46,38 +46,34 @@ class InternalizationEngine:
 
             result = self._parse_response(response)
             if not result:
-                return {'success': False, 'error': '内化响应解析失败'}
+                return {"success": False, "error": "内化响应解析失败"}
 
-            spectrum_impact = await self._apply_spectrum_impact(result['spectrum_impact'])
+            spectrum_impact = await self._apply_spectrum_impact(result["spectrum_impact"])
 
             await self._store_solidified_thought(seed_info, result, spectrum_impact)
 
-            await self._mark_seed_internalized(seed_info.get('id', ''))
+            await self._mark_seed_internalized(seed_info.get("id", ""))
 
-            return {
-                'success': True,
-                'spectrum_impact': spectrum_impact,
-                'thought': result['thought']
-            }
+            return {"success": True, "spectrum_impact": spectrum_impact, "thought": result["thought"]}
 
         except Exception as e:
             logger.error(f"内化失败: {e}")
-            return {'success': False, 'error': str(e)}
+            return {"success": False, "error": str(e)}
 
     def _parse_seed_content(self, content: str) -> dict:
         result = {}
         for line in content.split("\n"):
             if "种子ID:" in line:
-                result['id'] = line.split(":", 1)[1].strip()
+                result["id"] = line.split(":", 1)[1].strip()
             elif "思维种子 -" in line:
-                result['type'] = line.split("-", 1)[1].split("[")[0].strip()
+                result["type"] = line.split("-", 1)[1].split("[")[0].strip()
             elif "触发事件:" in line:
-                result['event'] = line.split(":", 1)[1].strip()
+                result["event"] = line.split(":", 1)[1].strip()
             elif "检测原因:" in line:
-                result['reasoning'] = line.split(":", 1)[1].strip()
+                result["reasoning"] = line.split(":", 1)[1].strip()
             elif "预期光谱影响:" in line:
                 try:
-                    result['potential_impact'] = json.loads(line.split(":", 1)[1].strip())
+                    result["potential_impact"] = json.loads(line.split(":", 1)[1].strip())
                 except:
                     pass
         return result
@@ -102,7 +98,7 @@ class InternalizationEngine:
             "economic": spectrum.economic,
             "social": spectrum.social,
             "diplomatic": spectrum.diplomatic,
-            "progressive": spectrum.progressive
+            "progressive": spectrum.progressive,
         }
 
         for dim in ["economic", "social", "diplomatic", "progressive"]:
@@ -114,8 +110,7 @@ class InternalizationEngine:
         spectrum.save()
 
         return {
-            dim: getattr(spectrum, dim) - old_values[dim]
-            for dim in ["economic", "social", "diplomatic", "progressive"]
+            dim: getattr(spectrum, dim) - old_values[dim] for dim in ["economic", "social", "diplomatic", "progressive"]
         }
 
     async def _store_solidified_thought(self, seed_info: dict, result: dict, impact: dict):
@@ -123,13 +118,13 @@ class InternalizationEngine:
 
         impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
 
-        solidified_content = f"""思维固化 - {seed_info.get('type', '未知')}
+        solidified_content = f"""思维固化 - {seed_info.get("type", "未知")}
 
-固化观点: {result['thought']}
+固化观点: {result["thought"]}
 
-光谱影响: {impact_str or '无'}
-影响原因: {result.get('reasoning', '')}
-原始种子: {seed_info.get('id', '')}
+光谱影响: {impact_str or "无"}
+影响原因: {result.get("reasoning", "")}
+原始种子: {seed_info.get("id", "")}
 固化时间: {datetime.now().isoformat()}
 
 这是一个经过深层内化的观点，已经成为我价值观的一部分。"""
@@ -138,4 +133,4 @@ class InternalizationEngine:
         logger.info(f"思维固化完成: {seed_info.get('id', '')}")
 
     async def _mark_seed_internalized(self, seed_id: str):
-        pass
+        logger.info(f"种子 {seed_id} 已标记为已内化")

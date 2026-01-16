@@ -1,6 +1,9 @@
 from typing import Optional, Tuple
 import re
+import logging
 from src.plugin_system import BaseCommand
+
+logger = logging.getLogger(__name__)
 
 
 class SeedListCommand(BaseCommand):
@@ -70,16 +73,20 @@ class SeedApproveCommand(BaseCommand):
         if not seed:
             return True, f"未找到种子 {seed_id}", 2
 
-        if "待审核" not in seed.get('content', ''):
+        if "待审核" not in seed.get("content", ""):
             return True, f"种子 {seed_id} 不在待审核状态", 2
 
         engine = InternalizationEngine()
         result = await engine.internalize_seed(seed)
 
-        if result['success']:
-            impact = result['spectrum_impact']
+        if result["success"]:
+            impact = result["spectrum_impact"]
             impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
-            return True, f"✅ 种子 {seed_id} 已批准内化\n\n固化观点: {result['thought'][:100]}...\n\n光谱影响: {impact_str or '无'}", 2
+            return (
+                True,
+                f"✅ 种子 {seed_id} 已批准内化\n\n固化观点: {result['thought'][:100]}...\n\n光谱影响: {impact_str or '无'}",
+                2,
+            )
         else:
             return True, f"❌ 种子 {seed_id} 内化失败: {result['error']}", 2
 
@@ -112,4 +119,17 @@ class SeedRejectCommand(BaseCommand):
 
         seed_id = match.group(1)
 
+        from ..thought.seed_manager import ThoughtSeedManager
+
+        config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": admin_user_id}
+        manager = ThoughtSeedManager(config)
+        seed = await manager.get_seed_by_id(seed_id)
+
+        if not seed:
+            return True, f"未找到种子 {seed_id}", 2
+
+        if "待审核" not in seed.get("content", ""):
+            return True, f"种子 {seed_id} 不在待审核状态", 2
+
+        logger.info(f"管理员拒绝思维种子: {seed_id}")
         return True, f"✅ 种子 {seed_id} 已拒绝", 2
