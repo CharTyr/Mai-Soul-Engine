@@ -48,7 +48,7 @@ class SetupCommand(BaseCommand):
 
 
 class SetupAnswerHandler(BaseCommand):
-    command_name = "worldview_answer"
+    command_name = "soul_answer"
     command_description = "处理问卷回答"
     command_pattern = r"^[1-5]$"
 

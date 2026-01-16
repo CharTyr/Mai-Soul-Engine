@@ -57,7 +57,7 @@ class MaiSoulEngine(BasePlugin):
     }
 
     def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
-        from .components.setup_command import SetupCommand
+        from .components.setup_command import SetupCommand, SetupAnswerHandler
         from .components.status_command import StatusCommand
         from .components.reset_command import ResetCommand
         from .components.ideology_injector import IdeologyInjector
@@ -65,6 +65,7 @@ class MaiSoulEngine(BasePlugin):
 
         return [
             (SetupCommand.get_command_info(), SetupCommand),
+            (SetupAnswerHandler.get_command_info(), SetupAnswerHandler),
             (StatusCommand.get_command_info(), StatusCommand),
             (ResetCommand.get_command_info(), ResetCommand),
             (IdeologyInjector.get_handler_info(), IdeologyInjector),
