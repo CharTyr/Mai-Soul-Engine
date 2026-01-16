@@ -24,7 +24,11 @@ class EvolutionTaskHandler(BaseEventHandler):
     ) -> Tuple[bool, bool, Optional[str], Optional[dict], Optional[MaiMessages]]:
         from ..utils.audit_log import init_audit_log
 
-        if not self.get_config("evolution.evolution_enabled", True):
+        evolution_enabled = self.get_config("evolution.evolution_enabled", True)
+        logger.debug(f"演化任务检查: evolution_enabled={evolution_enabled}")
+
+        if not evolution_enabled:
+            logger.debug("演化任务未启用，跳过")
             return True, True, None, None, message
 
         plugin_dir = Path(__file__).parent.parent
@@ -33,6 +37,8 @@ class EvolutionTaskHandler(BaseEventHandler):
         if EvolutionTaskHandler._task is None or EvolutionTaskHandler._task.done():
             EvolutionTaskHandler._task = asyncio.create_task(self._evolution_loop())
             logger.info("灵魂光谱演化任务已启动")
+        else:
+            logger.debug("演化任务已在运行中")
 
         return True, True, None, None, message
 
@@ -40,33 +46,40 @@ class EvolutionTaskHandler(BaseEventHandler):
         from ..models.ideology_model import get_or_create_spectrum, init_tables
 
         init_tables()
+        logger.debug("演化循环已初始化数据库表")
 
         while True:
             try:
                 interval_hours = self.get_config("evolution.evolution_interval_hours", 1.0)
+                logger.debug(f"演化循环等待 {interval_hours} 小时")
                 await asyncio.sleep(interval_hours * 3600)
 
                 if not self.get_config("evolution.evolution_enabled", True):
+                    logger.debug("演化已禁用，跳过本轮")
                     continue
 
                 spectrum = get_or_create_spectrum("global")
                 if not spectrum.initialized:
+                    logger.debug("光谱未初始化，跳过本轮")
                     continue
 
                 evolution_rate = self.get_config("evolution.evolution_rate", 5)
                 monitored_groups = self.get_config("monitor.monitored_groups", [])
+                logger.debug(f"演化参数: rate={evolution_rate}, groups={monitored_groups}")
 
                 if not monitored_groups:
+                    logger.debug("无监控群组，跳过本轮")
                     continue
 
                 for group_config_id in monitored_groups:
+                    logger.debug(f"开始分析群组: {group_config_id}")
                     await self._analyze_group(group_config_id, evolution_rate)
 
             except asyncio.CancelledError:
                 logger.info("灵魂光谱演化任务已停止")
                 break
             except Exception as e:
-                logger.error(f"灵魂光谱演化任务出错: {e}")
+                logger.error(f"灵魂光谱演化任务出错: {e}", exc_info=True)
                 await asyncio.sleep(60)
 
     async def _analyze_group(self, group_config_id: str, evolution_rate: int):
@@ -96,8 +109,10 @@ class EvolutionTaskHandler(BaseEventHandler):
             now = datetime.now()
 
             messages = await get_messages_by_time_in_chat(stream_id, last_time.timestamp(), now.timestamp())
+            logger.debug(f"群{stream_id}获取消息: {len(messages) if messages else 0}条, 时间范围: {last_time} - {now}")
 
             if not messages or len(messages) < 5:
+                logger.debug(f"群{stream_id}消息不足5条，跳过分析")
                 return
 
             msg_lines = []
@@ -111,13 +126,16 @@ class EvolutionTaskHandler(BaseEventHandler):
             prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
 
             thought_cabinet_enabled = self.get_config("thought_cabinet.enabled", False)
+            logger.debug(f"思维阁启用状态: {thought_cabinet_enabled}")
             if thought_cabinet_enabled:
                 from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
 
                 prompt = ENHANCED_EVOLUTION_PROMPT.format(rate=evolution_rate, messages=msg_text)
 
             llm = LLMRequest()
+            logger.debug(f"发送LLM请求，prompt长度: {len(prompt)}")
             response, _ = await llm.generate_response_async(prompt)
+            logger.debug(f"LLM响应长度: {len(response) if response else 0}")
 
             if not response:
                 return
@@ -220,11 +238,12 @@ class EvolutionTaskHandler(BaseEventHandler):
             )
 
         except Exception as e:
-            logger.error(f"分析群{group_config_id}时出错: {e}")
+            logger.error(f"分析群{group_config_id}时出错: {e}", exc_info=True)
 
     async def _process_thought_seeds(self, seeds: list, stream_id: str):
         from ..thought.seed_manager import ThoughtSeedManager
 
+        logger.debug(f"处理思维种子: 收到 {len(seeds)} 个")
         if not seeds:
             return
 

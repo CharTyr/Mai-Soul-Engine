@@ -24,7 +24,10 @@ class ThoughtSeedManager:
     async def create_seed(self, seed_data: dict) -> Optional[str]:
         from src.chat.knowledge.lpmm_ops import lpmm_ops
 
+        logger.debug(f"尝试创建种子, 强度: {seed_data.get('intensity', 0)}, 阈值: {self.min_intensity}")
+
         if seed_data.get("intensity", 0) < self.min_intensity:
+            logger.debug(f"种子强度不足，跳过创建")
             return None
 
         await self._cleanup_excess_seeds()
@@ -44,34 +47,49 @@ class ThoughtSeedManager:
 这是一个关于{THOUGHT_TYPES.get(seed_data["type"], "未知类型")}的思维种子，需要管理员决定是否内化。"""
 
         await lpmm_ops.add_content(seed_content, auto_split=False)
-        logger.info(f"创建思维种子: {seed_id} ({seed_data['type']})")
+        logger.info(f"创建思维种子: {seed_id} (类型: {seed_data['type']}, 强度: {seed_data['intensity']:.2f})")
 
         return seed_id
 
     async def _cleanup_excess_seeds(self):
         seeds = await self.get_pending_seeds()
+        logger.debug(f"当前种子数: {len(seeds)}, 最大限制: {self.max_seeds}")
         if len(seeds) >= self.max_seeds:
+            logger.info(f"种子数超限，清理 {len(seeds) - self.max_seeds + 1} 个旧种子")
             for seed in seeds[self.max_seeds - 1 :]:
                 seed_id = self._extract_field(seed.get("content", ""), "种子ID")
                 if seed_id:
                     await self.delete_seed(seed_id)
+                    logger.debug(f"清理旧种子: {seed_id}")
 
     async def delete_seed(self, seed_id: str) -> bool:
         from src.chat.knowledge.lpmm_ops import lpmm_ops
 
+        logger.debug(f"删除种子: {seed_id}")
         result = await lpmm_ops.delete(seed_id, exact_match=False)
-        return result.get("deleted_count", 0) > 0
+        deleted = result.get("deleted_count", 0) > 0
+        if deleted:
+            logger.info(f"种子已删除: {seed_id}")
+        else:
+            logger.warning(f"删除种子失败: {seed_id}, 结果: {result}")
+        return deleted
 
     async def get_pending_seeds(self) -> list:
         from src.chat.knowledge.lpmm_ops import lpmm_ops
 
         seeds = await lpmm_ops.search("思维种子 待审核", top_k=20)
+        logger.debug(f"查询待审核种子, 找到 {len(seeds)} 个")
         return seeds
 
     async def get_seed_by_id(self, seed_id: str) -> Optional[dict]:
         from src.chat.knowledge.lpmm_ops import lpmm_ops
 
+        logger.debug(f"查询种子: {seed_id}")
         seeds = await lpmm_ops.search(f"思维种子 {seed_id}", top_k=1)
+        if seeds:
+            logger.debug(f"找到种子: {seed_id}")
+        else:
+            logger.debug(f"未找到种子: {seed_id}")
         return seeds[0] if seeds else None
 
     def format_seed_notification(self, seed_id: str, seed_data: dict) -> str:

@@ -34,6 +34,7 @@ class InternalizationEngine:
 
         try:
             seed_info = self._parse_seed_content(seed.get("content", ""))
+            logger.debug(f"开始内化种子: {seed_info.get('id', 'unknown')}, 类型: {seed_info.get('type', 'unknown')}")
 
             prompt = INTERNALIZATION_PROMPT.format(
                 type=seed_info.get("type", "未知"),
@@ -42,22 +43,27 @@ class InternalizationEngine:
             )
 
             llm = LLMRequest()
+            logger.debug(f"发送内化LLM请求，prompt长度: {len(prompt)}")
             response, _ = await llm.generate_response_async(prompt)
+            logger.debug(f"内化LLM响应长度: {len(response) if response else 0}")
 
             result = self._parse_response(response)
             if not result:
+                logger.warning(f"内化响应解析失败: {seed_info.get('id', '')}")
                 return {"success": False, "error": "内化响应解析失败"}
 
             spectrum_impact = await self._apply_spectrum_impact(result["spectrum_impact"])
+            logger.debug(f"光谱影响已应用: {spectrum_impact}")
 
             await self._store_solidified_thought(seed_info, result, spectrum_impact)
 
             await self._mark_seed_internalized(seed_info.get("id", ""))
 
+            logger.info(f"种子内化成功: {seed_info.get('id', '')}, 观点: {result['thought'][:50]}...")
             return {"success": True, "spectrum_impact": spectrum_impact, "thought": result["thought"]}
 
         except Exception as e:
-            logger.error(f"内化失败: {e}")
+            logger.error(f"内化失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     def _parse_seed_content(self, content: str) -> dict:
@@ -100,6 +106,7 @@ class InternalizationEngine:
             "diplomatic": spectrum.diplomatic,
             "progressive": spectrum.progressive,
         }
+        logger.debug(f"应用光谱影响前: {old_values}")
 
         for dim in ["economic", "social", "diplomatic", "progressive"]:
             delta = max(-10, min(10, impact.get(dim, 0)))
@@ -109,9 +116,11 @@ class InternalizationEngine:
         spectrum.updated_at = datetime.now()
         spectrum.save()
 
-        return {
+        result = {
             dim: getattr(spectrum, dim) - old_values[dim] for dim in ["economic", "social", "diplomatic", "progressive"]
         }
+        logger.debug(f"应用光谱影响后: {result}")
+        return result
 
     async def _store_solidified_thought(self, seed_info: dict, result: dict, impact: dict):
         from src.chat.knowledge.lpmm_ops import lpmm_ops
