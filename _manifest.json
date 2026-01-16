@@ -1,32 +1,40 @@
 {
   "manifest_version": 1,
-  "name": "Mai-Soul-Engine",
-  "version": "0.1.0",
-  "description": "为 MaiBot 提供基于“思维内省”的动态意识形态系统（思想光谱/思维阁），并暴露 /api/v1/soul/* 用于外部前端展示。",
+  "name": "MaiBot_Soul_Engine",
+  "version": "1.0.0",
+  "description": "世界观思维插件 - 通过问卷初始化意识形态光谱，根据聊天内容动态演化，影响MaiBot的回复风格",
   "author": {
-    "name": "CharTyr",
-    "url": "https://github.com/CharTyr"
+    "name": "MaiBot Community",
+    "url": "https://github.com/MaiBot"
   },
-  "license": "GPL-3.0-or-later",
-  "host_application": {
-    "min_version": "0.11.6"
-  },
-  "homepage_url": "https://github.com/CharTyr/Mai-Soul-Engine",
-  "repository_url": "hhttps://github.com/CharTyr/Mai-Soul-Engine",
-  "keywords": [
-    "soul",
-    "ideology",
-    "spectrum",
-    "thought-cabinet",
-    "introspection"
-  ],
-  "categories": [
-    "persona",
-    "analytics",
-    "web"
-  ],
+  "license": "MIT",
   "plugin_info": {
-    "is_built_in": false,
-    "plugin_type": "general"
+    "components": [
+      {
+        "type": "command",
+        "name": "worldview_setup",
+        "description": "初始化世界观问卷（管理员私聊）"
+      },
+      {
+        "type": "command",
+        "name": "worldview_status",
+        "description": "查看当前意识形态光谱状态"
+      },
+      {
+        "type": "command",
+        "name": "worldview_reset",
+        "description": "重置意识形态光谱"
+      },
+      {
+        "type": "event_handler",
+        "name": "ideology_injector",
+        "description": "POST_LLM事件处理器，注入意识形态提示词"
+      },
+      {
+        "type": "event_handler",
+        "name": "evolution_task",
+        "description": "周期性演化任务，分析聊天内容更新光谱"
+      }
+    ]
   }
 }
