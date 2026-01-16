@@ -49,9 +49,7 @@ class MaiSoulEngine(BasePlugin):
             "excluded_users": ConfigField(type=list, default=[], description="排除的用户ID列表，格式：平台:ID"),
         },
         "threshold": {
-            "threshold_mild": ConfigField(type=int, default=25, description="轻微倾向阈值"),
-            "threshold_moderate": ConfigField(type=int, default=50, description="明显倾向阈值"),
-            "threshold_extreme": ConfigField(type=int, default=75, description="极端倾向阈值"),
+            "enable_extreme": ConfigField(type=bool, default=False, description="启用极端档位(98-100触发)"),
             "custom_prompts": ConfigField(type=dict, default={}, description="自定义提示词模板(覆盖默认)"),
         },
     }

@@ -39,7 +39,8 @@ class IdeologyInjector(BaseEventHandler):
         }
 
         custom_prompts = self.get_config("custom_prompts", {})
-        ideology_prompt = build_ideology_prompt(spectrum_dict, thresholds, custom_prompts)
+        enable_extreme = self.get_config("enable_extreme", False)
+        ideology_prompt = build_ideology_prompt(spectrum_dict, thresholds, custom_prompts, enable_extreme)
 
         if not ideology_prompt:
             return True, True, None, None, message
