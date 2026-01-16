@@ -55,7 +55,7 @@ PROGRESSIVE_PROMPTS = {
 }
 
 
-def get_prompt_level(value: int, thresholds: dict, enable_extreme: bool = False) -> str:
+def get_prompt_level(value: int, enable_extreme: bool = False) -> str:
     if enable_extreme:
         if value <= 2:
             return "left_extreme"
@@ -88,7 +88,7 @@ def build_ideology_prompt(spectrum: dict, custom_prompts: dict | None = None, en
     }
 
     for dim in ["economic", "social", "diplomatic", "progressive"]:
-        level = get_prompt_level(spectrum.get(dim, 50), thresholds, enable_extreme)
+        level = get_prompt_level(spectrum.get(dim, 50), enable_extreme)
 
         if custom_prompts and dim in custom_prompts and level in custom_prompts[dim]:
             prompt = custom_prompts[dim][level]
