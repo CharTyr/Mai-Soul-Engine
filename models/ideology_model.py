@@ -1,5 +1,5 @@
 from datetime import datetime
-from peewee import Model, CharField, IntegerField, BooleanField, DateTimeField, TextField
+from peewee import Model, CharField, IntegerField, BooleanField, DateTimeField, TextField, AutoField
 from src.common.database.database import db
 
 
@@ -15,7 +15,7 @@ class IdeologySpectrum(Model):
 
     class Meta:
         database = db
-        table_name = "worldview_ideology_spectrum"
+        table_name = "soul_ideology_spectrum"
 
 
 class GroupEvolutionRecord(Model):
@@ -24,11 +24,11 @@ class GroupEvolutionRecord(Model):
 
     class Meta:
         database = db
-        table_name = "worldview_group_evolution"
+        table_name = "soul_group_evolution"
 
 
 class EvolutionHistory(Model):
-    id = IntegerField(primary_key=True)
+    id = AutoField()
     timestamp = DateTimeField(default=datetime.now)
     group_id = CharField()
     economic_delta = IntegerField(default=0)
@@ -39,7 +39,7 @@ class EvolutionHistory(Model):
 
     class Meta:
         database = db
-        table_name = "worldview_evolution_history"
+        table_name = "soul_evolution_history"
 
 
 def init_tables():
