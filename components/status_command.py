@@ -3,9 +3,9 @@ from src.plugin_system import BaseCommand
 
 
 class StatusCommand(BaseCommand):
-    command_name = "worldview_status"
+    command_name = "soul_status"
     command_description = "查看当前意识形态光谱状态"
-    command_pattern = r"^/worldview_status$"
+    command_pattern = r"^/soul_status$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..models.ideology_model import get_or_create_spectrum, init_tables
@@ -15,7 +15,7 @@ class StatusCommand(BaseCommand):
         spectrum = get_or_create_spectrum("global")
 
         if not spectrum.initialized:
-            return True, "灵魂光谱尚未初始化，请管理员使用 /worldview_setup 进行初始化", 2
+            return True, "灵魂光谱尚未初始化，请管理员使用 /soul_setup 进行初始化", 2
 
         spectrum_dict = {
             "economic": spectrum.economic,

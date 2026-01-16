@@ -1,6 +1,6 @@
-# MaiBot Mai-Soul-Engine
+# Mai-Soul-Engine
 
-让MaiBot通过问卷初始化意识形态光谱，并根据群聊内容动态演化，影响回复风格。
+可被塑造的人格演化系统 - 让MaiBot通过问卷初始化灵魂光谱，并根据群聊内容动态演化，影响回复风格。
 
 ## 功能特性
 
@@ -58,7 +58,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 
 管理员私聊发送：
 ```
-/worldview_setup
+/soul_setup
 ```
 
 依次回答20道问题（1-5分），完成初始化。
@@ -67,7 +67,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 
 任意用户发送：
 ```
-/worldview_status
+/soul_status
 ```
 
 显示当前四维度光谱值。
@@ -76,7 +76,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 
 管理员发送：
 ```
-/worldview_reset
+/soul_reset
 ```
 
 重置为中立状态。
@@ -158,7 +158,7 @@ result = await set_spectrum(economic=60, social=40, diplomatic=70, progressive=5
 ## 注意事项
 
 - 必须先配置 `admin_user_id` 才能使用
-- 只有管理员可以执行 `/worldview_setup` 和 `/worldview_reset`
+- 只有管理员可以执行 `/soul_setup` 和 `/soul_reset`
 - 演化任务需要配置 `monitored_groups` 才会生效
 - 自定义提示词可覆盖默认的价值观描述
 

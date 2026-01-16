@@ -7,9 +7,9 @@ questionnaire_sessions: dict = {}
 
 
 class SetupCommand(BaseCommand):
-    command_name = "worldview_setup"
+    command_name = "soul_setup"
     command_description = "初始化灵魂光谱问卷（管理员私聊）"
-    command_pattern = r"^/worldview_setup$"
+    command_pattern = r"^/soul_setup$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..questions.setup_questions import QUESTIONS, calculate_initial_spectrum
