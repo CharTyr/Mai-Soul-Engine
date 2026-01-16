@@ -9,6 +9,9 @@
 - **动态演化**：周期性分析群聊内容，自动调整光谱
 - **提示词注入**：根据当前光谱向回复注入性格倾向
 - **回弹机制**：光谱值超出边界时可反向变化
+- **EMA平滑**：防止光谱剧烈波动，变化更平稳
+- **隐私脱敏**：分析前自动过滤敏感信息
+- **审计日志**：记录所有演化事件到日志文件
 - **WebUI接口**：预留API供前端调用查看状态
 
 ## 安装
@@ -29,6 +32,7 @@ initialized = false
 evolution_enabled = true
 evolution_interval_hours = 1.0  # 演化周期（小时）
 evolution_rate = 5  # 每次最大变化值
+ema_alpha = 0.3  # EMA平滑系数（0-1，越大变化越快）
 
 [monitor]
 monitored_groups = ["qq:123456:group", "telegram:789012:group"]  # 监控的群ID（格式：平台:ID:group）
@@ -121,6 +125,35 @@ result = await set_spectrum(economic=60, social=40, diplomatic=70, progressive=5
 2. **提示词注入**：每次回复前，根据当前光谱值选择对应档位的提示词注入
 3. **周期演化**：每周期分析监控群的聊天内容，用LLM评估对灵魂光谱的影响，调整光谱
 4. **回弹机制**：当光谱值接近0或100时，反向变化会推动回弹
+
+## 高级功能
+
+### EMA平滑
+
+使用指数移动平均防止光谱剧烈波动。通过 `ema_alpha` 配置系数：
+- 值越大（接近1）：变化越快，响应越灵敏
+- 值越小（接近0）：变化越慢，越稳定
+- 默认值 0.3 适合大多数场景
+
+### 隐私脱敏
+
+分析群聊内容前自动过滤敏感信息：
+- URL → `<url>`
+- 邮箱 → `<email>`
+- 手机号 → `<phone>`
+- QQ号 → `<qq>`
+- 身份证号 → `<id>`
+- 长数字串 → `<num>`
+
+### 审计日志
+
+所有演化事件记录到 `data/audit.jsonl`：
+
+```json
+{"ts": "2026-01-16T01:45:00", "type": "evolution", "group_id": "qq:123:group", "before": {"economic": 50}, "after": {"economic": 52}, "deltas": {"economic": 2}, "message_count": 42}
+{"ts": "2026-01-16T01:30:00", "type": "init", "admin_id": "qq:768295235", "spectrum": {"economic": 45, "social": 55, "diplomatic": 50, "progressive": 60}}
+{"ts": "2026-01-16T02:00:00", "type": "reset", "admin_id": "qq:768295235"}
+```
 
 ## 注意事项
 
