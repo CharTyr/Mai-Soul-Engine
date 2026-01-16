@@ -7,7 +7,7 @@ questionnaire_sessions: dict = {}
 
 class SetupCommand(BaseCommand):
     command_name = "worldview_setup"
-    command_description = "初始化世界观问卷（管理员私聊）"
+    command_description = "初始化灵魂光谱问卷（管理员私聊）"
     command_pattern = r"^/worldview_setup$"
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
@@ -39,7 +39,7 @@ class SetupCommand(BaseCommand):
         }
 
         q = QUESTIONS[0]
-        return True, f"世界观问卷开始！共20题，请回复1-5分。\n\n第1题：{q['text']}", 2
+        return True, f"灵魂光谱问卷开始！共20题，请回复1-5分。\n\n第1题：{q['text']}", 2
 
 
 class SetupAnswerHandler(BaseCommand):
@@ -83,7 +83,7 @@ class SetupAnswerHandler(BaseCommand):
             del questionnaire_sessions[session_key]
 
             display = format_spectrum_display(spectrum_values)
-            return True, f"问卷完成！初始世界观光谱：\n\n{display}", 2
+            return True, f"问卷完成！初始灵魂光谱光谱：\n\n{display}", 2
 
         q = QUESTIONS[session["current"]]
         return True, f"第{session['current'] + 1}题：{q['text']}", 2

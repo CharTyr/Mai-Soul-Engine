@@ -8,8 +8,8 @@ from src.plugin_system import (
 
 
 @register_plugin
-class WorldviewPlugin(BasePlugin):
-    plugin_name: str = "MaiBot_Soul_Engine"
+class MaiSoulEngine(BasePlugin):
+    plugin_name: str = "Mai-Soul-Engine"
     enable_plugin: bool = True
     dependencies: List[str] = []
     python_dependencies: List[str] = []

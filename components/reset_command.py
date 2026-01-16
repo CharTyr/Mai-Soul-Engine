@@ -17,7 +17,7 @@ class ResetCommand(BaseCommand):
         user_id = str(getattr(self.message, "user_id", ""))
 
         if not match_user(platform, user_id, admin_user_id):
-            return True, "只有管理员可以重置世界观", 2
+            return True, "只有管理员可以重置灵魂光谱", 2
 
         init_tables()
         spectrum = get_or_create_spectrum("global")
@@ -29,4 +29,4 @@ class ResetCommand(BaseCommand):
         spectrum.updated_at = datetime.now()
         spectrum.save()
 
-        return True, "世界观已重置为中立状态，请使用 /worldview_setup 重新初始化", 2
+        return True, "灵魂光谱已重置为中立状态，请使用 /worldview_setup 重新初始化", 2

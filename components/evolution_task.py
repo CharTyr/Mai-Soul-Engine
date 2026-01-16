@@ -26,7 +26,7 @@ class EvolutionTaskHandler(BaseEventHandler):
 
         if EvolutionTaskHandler._task is None or EvolutionTaskHandler._task.done():
             EvolutionTaskHandler._task = asyncio.create_task(self._evolution_loop())
-            logger.info("世界观演化任务已启动")
+            logger.info("灵魂光谱演化任务已启动")
 
         return True, True, None, None, message
 
@@ -57,10 +57,10 @@ class EvolutionTaskHandler(BaseEventHandler):
                     await self._analyze_group(group_config_id, evolution_rate)
 
             except asyncio.CancelledError:
-                logger.info("世界观演化任务已停止")
+                logger.info("灵魂光谱演化任务已停止")
                 break
             except Exception as e:
-                logger.error(f"世界观演化任务出错: {e}")
+                logger.error(f"灵魂光谱演化任务出错: {e}")
                 await asyncio.sleep(60)
 
     async def _analyze_group(self, group_config_id: str, evolution_rate: int):

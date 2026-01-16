@@ -111,7 +111,7 @@ def build_ideology_prompt(spectrum: dict, thresholds: dict, custom_prompts: dict
     return "【性格倾向】\n" + "\n".join(prompts)
 
 
-EVOLUTION_ANALYSIS_PROMPT = """分析以下群聊内容，判断这些讨论会对一个AI的世界观产生什么影响。
+EVOLUTION_ANALYSIS_PROMPT = """分析以下群聊内容，判断这些讨论会对一个AI的灵魂光谱产生什么影响。
 请从四个维度评估影响方向和强度(-{rate}到+{rate}):
 
 1. economic(经济观): 负数=更重视公平，正数=更重视效率

@@ -15,7 +15,7 @@ class StatusCommand(BaseCommand):
         spectrum = get_or_create_spectrum("global")
 
         if not spectrum.initialized:
-            return True, "世界观尚未初始化，请管理员使用 /worldview_setup 进行初始化", 2
+            return True, "灵魂光谱尚未初始化，请管理员使用 /worldview_setup 进行初始化", 2
 
         spectrum_dict = {
             "economic": spectrum.economic,
@@ -27,4 +27,4 @@ class StatusCommand(BaseCommand):
         display = format_spectrum_display(spectrum_dict)
         last_update = spectrum.updated_at.strftime("%Y-%m-%d %H:%M:%S") if spectrum.updated_at else "未知"
 
-        return True, f"当前世界观光谱：\n\n{display}\n\n上次更新: {last_update}", 2
+        return True, f"当前灵魂光谱光谱：\n\n{display}\n\n上次更新: {last_update}", 2

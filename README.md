@@ -1,10 +1,10 @@
-# MaiBot 世界观思维插件
+# MaiBot Mai-Soul-Engine
 
 让MaiBot通过问卷初始化意识形态光谱，并根据群聊内容动态演化，影响回复风格。
 
 ## 功能特性
 
-- **问卷初始化**：20道问题设定初始世界观
+- **问卷初始化**：20道问题设定初始灵魂光谱
 - **四维度光谱**：经济观、社会观、文化观、变革观
 - **动态演化**：周期性分析群聊内容，自动调整光谱
 - **提示词注入**：根据当前光谱向回复注入性格倾向
@@ -13,11 +13,11 @@
 
 ## 安装
 
-将 `MaiBot_Soul_Engine` 文件夹放入 `plugins/` 目录即可。
+将 `Mai-Soul-Engine` 文件夹放入 `plugins/` 目录即可。
 
 ## 配置
 
-在 `config/plugins/MaiBot_Soul_Engine/config.toml` 中配置：
+在 `config/plugins/Mai-Soul-Engine/config.toml` 中配置：
 
 ```toml
 [admin]
@@ -50,7 +50,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 
 ## 使用方法
 
-### 1. 初始化世界观
+### 1. 初始化灵魂光谱
 
 管理员私聊发送：
 ```
@@ -68,7 +68,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 
 显示当前四维度光谱值。
 
-### 3. 重置世界观
+### 3. 重置灵魂光谱
 
 管理员发送：
 ```
@@ -91,7 +91,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 插件预留了以下API供WebUI调用：
 
 ```python
-from plugins.MaiBot_Soul_Engine.webui.api import (
+from plugins.Mai-Soul-Engine.webui.api import (
     get_current_spectrum,
     get_evolution_history,
     get_spectrum_chart_data,
@@ -119,7 +119,7 @@ result = await set_spectrum(economic=60, social=40, diplomatic=70, progressive=5
 
 1. **初始化**：问卷回答通过计分算法转换为四个维度的0-100数值
 2. **提示词注入**：每次回复前，根据当前光谱值选择对应档位的提示词注入
-3. **周期演化**：每周期分析监控群的聊天内容，用LLM评估对世界观的影响，调整光谱
+3. **周期演化**：每周期分析监控群的聊天内容，用LLM评估对灵魂光谱的影响，调整光谱
 4. **回弹机制**：当光谱值接近0或100时，反向变化会推动回弹
 
 ## 注意事项
