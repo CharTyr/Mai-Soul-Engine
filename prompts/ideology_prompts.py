@@ -44,20 +44,17 @@ def get_prompt_level(value: int, thresholds: dict) -> str:
     moderate = thresholds.get("threshold_moderate", 50)
     extreme = thresholds.get("threshold_extreme", 75)
 
-    if value <= 100 - extreme:
-        return "extreme_low"
-    elif value <= 100 - moderate:
-        return "moderate_low"
-    elif value <= 100 - mild:
-        return "mild_low"
-    elif value < mild:
+    distance_from_center = abs(value - 50)
+    is_high = value > 50
+
+    if distance_from_center <= 5:
         return "neutral"
-    elif value < moderate:
-        return "mild_high"
-    elif value < extreme:
-        return "moderate_high"
+    elif distance_from_center < mild:
+        return "mild_high" if is_high else "mild_low"
+    elif distance_from_center < moderate:
+        return "moderate_high" if is_high else "moderate_low"
     else:
-        return "extreme_high"
+        return "extreme_high" if is_high else "extreme_low"
 
 
 def build_ideology_prompt(spectrum: dict, thresholds: dict, custom_prompts: dict | None = None) -> str:
@@ -65,24 +62,40 @@ def build_ideology_prompt(spectrum: dict, thresholds: dict, custom_prompts: dict
 
     level_maps = {
         "economic": {
-            "extreme_low": "left_extreme", "moderate_low": "left_moderate", "mild_low": "left_mild",
+            "extreme_low": "left_extreme",
+            "moderate_low": "left_moderate",
+            "mild_low": "left_mild",
             "neutral": "neutral",
-            "mild_high": "right_mild", "moderate_high": "right_moderate", "extreme_high": "right_extreme",
+            "mild_high": "right_mild",
+            "moderate_high": "right_moderate",
+            "extreme_high": "right_extreme",
         },
         "social": {
-            "extreme_low": "liberty_extreme", "moderate_low": "liberty_moderate", "mild_low": "liberty_mild",
+            "extreme_low": "liberty_extreme",
+            "moderate_low": "liberty_moderate",
+            "mild_low": "liberty_mild",
             "neutral": "neutral",
-            "mild_high": "authority_mild", "moderate_high": "authority_moderate", "extreme_high": "authority_extreme",
+            "mild_high": "authority_mild",
+            "moderate_high": "authority_moderate",
+            "extreme_high": "authority_extreme",
         },
         "diplomatic": {
-            "extreme_low": "open_extreme", "moderate_low": "open_moderate", "mild_low": "open_mild",
+            "extreme_low": "open_extreme",
+            "moderate_low": "open_moderate",
+            "mild_low": "open_mild",
             "neutral": "neutral",
-            "mild_high": "conservative_mild", "moderate_high": "conservative_moderate", "extreme_high": "conservative_extreme",
+            "mild_high": "conservative_mild",
+            "moderate_high": "conservative_moderate",
+            "extreme_high": "conservative_extreme",
         },
         "progressive": {
-            "extreme_low": "progress_extreme", "moderate_low": "progress_moderate", "mild_low": "progress_mild",
+            "extreme_low": "progress_extreme",
+            "moderate_low": "progress_moderate",
+            "mild_low": "progress_mild",
             "neutral": "neutral",
-            "mild_high": "tradition_mild", "moderate_high": "tradition_moderate", "extreme_high": "tradition_extreme",
+            "mild_high": "tradition_mild",
+            "moderate_high": "tradition_moderate",
+            "extreme_high": "tradition_extreme",
         },
     }
 

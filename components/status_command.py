@@ -27,4 +27,4 @@ class StatusCommand(BaseCommand):
         display = format_spectrum_display(spectrum_dict)
         last_update = spectrum.updated_at.strftime("%Y-%m-%d %H:%M:%S") if spectrum.updated_at else "未知"
 
-        return True, f"当前灵魂光谱光谱：\n\n{display}\n\n上次更新: {last_update}", 2
+        return True, f"当前灵魂光谱：\n\n{display}\n\n上次更新: {last_update}", 2
