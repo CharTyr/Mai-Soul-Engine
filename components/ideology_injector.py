@@ -1,6 +1,6 @@
 from typing import Optional, Tuple
 from src.plugin_system import BaseEventHandler, EventType
-from src.common.data_models.mai_messages import MaiMessages
+from src.plugin_system.base.component_types import MaiMessages
 
 
 class IdeologyInjector(BaseEventHandler):
