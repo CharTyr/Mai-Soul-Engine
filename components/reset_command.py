@@ -17,7 +17,7 @@ class ResetCommand(BaseCommand):
         plugin_dir = Path(__file__).parent.parent
         init_audit_log(plugin_dir)
 
-        admin_user_id = self.get_config("admin_user_id", "")
+        admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = getattr(self.message, "platform", "")
         user_id = str(getattr(self.message, "user_id", ""))
 

@@ -85,7 +85,7 @@ async def manual_evolution(group_id: str) -> dict:
     from ..components.evolution_task import EvolutionTaskHandler
 
     handler = EvolutionTaskHandler()
-    evolution_rate = handler.get_config("evolution_rate", 5)
+    evolution_rate = handler.get_config("evolution.evolution_rate", 5)
     await handler._analyze_group(group_id, evolution_rate)
 
     return {"success": True, "group_id": group_id}

@@ -133,4 +133,9 @@ class InternalizationEngine:
         logger.info(f"思维固化完成: {seed_info.get('id', '')}")
 
     async def _mark_seed_internalized(self, seed_id: str):
+        from ..thought.seed_manager import ThoughtSeedManager
+
+        config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": ""}
+        manager = ThoughtSeedManager(config)
+        await manager.delete_seed(seed_id)
         logger.info(f"种子 {seed_id} 已标记为已内化")
