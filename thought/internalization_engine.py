@@ -74,7 +74,7 @@ class InternalizationEngine:
             elif "预期光谱影响:" in line:
                 try:
                     result["potential_impact"] = json.loads(line.split(":", 1)[1].strip())
-                except:
+                except Exception:
                     pass
         return result
 

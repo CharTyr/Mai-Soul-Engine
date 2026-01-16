@@ -131,5 +131,6 @@ class SeedRejectCommand(BaseCommand):
         if "待审核" not in seed.get("content", ""):
             return True, f"种子 {seed_id} 不在待审核状态", 2
 
+        await manager.delete_seed(seed_id)
         logger.info(f"管理员拒绝思维种子: {seed_id}")
-        return True, f"✅ 种子 {seed_id} 已拒绝", 2
+        return True, f"✅ 种子 {seed_id} 已拒绝并删除", 2

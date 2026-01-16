@@ -49,7 +49,12 @@ class ThoughtSeedManager:
         return seed_id
 
     async def _cleanup_excess_seeds(self):
-        pass
+        seeds = await self.get_pending_seeds()
+        if len(seeds) >= self.max_seeds:
+            for seed in seeds[self.max_seeds - 1 :]:
+                seed_id = self._extract_field(seed.get("content", ""), "种子ID")
+                if seed_id:
+                    await self.delete_seed(seed_id)
 
     async def delete_seed(self, seed_id: str) -> bool:
         return True
