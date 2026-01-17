@@ -4,10 +4,10 @@
   "version": "1.0.0",
   "description": "Mai-Soul-Engine - 通过问卷初始化意识形态光谱，根据聊天内容动态演化，影响MaiBot的回复风格",
   "author": {
-    "name": "MaiBot Community",
-    "url": "https://github.com/MaiBot"
+    "name": "CharTur ",
+    "url": "https://github.com/CharTyr/Mai-Soul-Engine"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0",
   "plugin_info": {
     "components": [
       {

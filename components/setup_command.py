@@ -2,6 +2,7 @@ from typing import Optional, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 from src.plugin_system import BaseCommand
+from src.plugin_system.apis import send_api
 
 questionnaire_sessions: dict = {}
 SESSION_TIMEOUT_MINUTES = 30
@@ -23,6 +24,11 @@ class SetupCommand(BaseCommand):
     command_description = "初始化灵魂光谱问卷（管理员私聊）"
     command_pattern = r"^/soul_setup\s*$"
 
+    async def _send_response(self, text: str):
+        """发送响应消息到聊天"""
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..questions.setup_questions import QUESTIONS
         from ..models.ideology_model import init_tables
@@ -36,21 +42,27 @@ class SetupCommand(BaseCommand):
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         if not admin_user_id:
-            return True, "请先在配置文件中设置 admin_user_id（格式：平台:ID，如qq:768295235）", 2
+            msg = "请先在配置文件中设置 admin_user_id（格式：平台:ID，如qq:768295235）"
+            await self._send_response(msg)
+            return True, msg, 2
 
         # 从 message_info 中正确获取平台和用户信息
         platform = self.message.message_info.platform if self.message.message_info else ""
         user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
 
         if not match_user(platform, user_id, admin_user_id):
-            return True, "只有管理员可以执行此命令", 2
+            msg = "只有管理员可以执行此命令"
+            await self._send_response(msg)
+            return True, msg, 2
 
         init_tables()
 
         session_key = f"{platform}:{user_id}"
         if session_key in questionnaire_sessions:
             session = questionnaire_sessions[session_key]
-            return True, f"问卷进行中，当前第{session['current'] + 1}题，请回复1-5", 2
+            msg = f"问卷进行中，当前第{session['current'] + 1}题，请回复1-5"
+            await self._send_response(msg)
+            return True, msg, 2
 
         questionnaire_sessions[session_key] = {
             "current": 0,
@@ -59,13 +71,20 @@ class SetupCommand(BaseCommand):
         }
 
         q = QUESTIONS[0]
-        return True, f"灵魂光谱问卷开始！共20题，请回复1-5分。\n\n第1题：{q['text']}", 2
+        msg = f"灵魂光谱问卷开始！共20题，请回复1-5分。\n\n第1题：{q['text']}"
+        await self._send_response(msg)
+        return True, msg, 2
 
 
 class SetupAnswerHandler(BaseCommand):
     command_name = "soul_answer"
     command_description = "处理问卷回答"
     command_pattern = r"^[1-5]\s*$"
+
+    async def _send_response(self, text: str):
+        """发送响应消息到聊天"""
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..questions.setup_questions import QUESTIONS, calculate_initial_spectrum
@@ -108,7 +127,11 @@ class SetupAnswerHandler(BaseCommand):
             await log_init(session_key, spectrum_values)
 
             display = format_spectrum_display(spectrum_values)
-            return True, f"问卷完成！初始灵魂光谱：\n\n{display}", 2
+            msg = f"问卷完成！初始灵魂光谱：\n\n{display}"
+            await self._send_response(msg)
+            return True, msg, 2
 
         q = QUESTIONS[session["current"]]
-        return True, f"第{session['current'] + 1}题：{q['text']}", 2
+        msg = f"第{session['current'] + 1}题：{q['text']}"
+        await self._send_response(msg)
+        return True, msg, 2

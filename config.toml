@@ -5,7 +5,7 @@
 [admin]
 
 # 管理员用户ID（必填，格式：平台:ID，如qq:768295235）
-admin_user_id = ""
+admin_user_id = "qq:768295235"
 
 # 启用插件
 enabled = true
