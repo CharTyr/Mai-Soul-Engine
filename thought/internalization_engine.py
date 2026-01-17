@@ -33,7 +33,14 @@ class InternalizationEngine:
         from src.llm_models.utils_model import LLMRequest
 
         try:
-            seed_info = self._parse_seed_content(seed.get("content", ""))
+            # 新格式：直接使用数据库返回的结构化字典
+            seed_info = {
+                "id": seed.get("seed_id", ""),
+                "type": seed.get("type", "未知"),
+                "event": seed.get("event", ""),
+                "reasoning": seed.get("reasoning", ""),
+                "potential_impact": seed.get("potential_impact", {}),
+            }
             logger.debug(f"开始内化种子: {seed_info.get('id', 'unknown')}, 类型: {seed_info.get('type', 'unknown')}")
 
             prompt = INTERNALIZATION_PROMPT.format(
@@ -57,32 +64,12 @@ class InternalizationEngine:
 
             await self._store_solidified_thought(seed_info, result, spectrum_impact)
 
-            await self._mark_seed_internalized(seed_info.get("id", ""))
-
             logger.info(f"种子内化成功: {seed_info.get('id', '')}, 观点: {result['thought'][:50]}...")
             return {"success": True, "spectrum_impact": spectrum_impact, "thought": result["thought"]}
 
         except Exception as e:
             logger.error(f"内化失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
-
-    def _parse_seed_content(self, content: str) -> dict:
-        result = {}
-        for line in content.split("\n"):
-            if "种子ID:" in line:
-                result["id"] = line.split(":", 1)[1].strip()
-            elif "思维种子 -" in line:
-                result["type"] = line.split("-", 1)[1].split("[")[0].strip()
-            elif "触发事件:" in line:
-                result["event"] = line.split(":", 1)[1].strip()
-            elif "检测原因:" in line:
-                result["reasoning"] = line.split(":", 1)[1].strip()
-            elif "预期光谱影响:" in line:
-                try:
-                    result["potential_impact"] = json.loads(line.split(":", 1)[1].strip())
-                except Exception:
-                    pass
-        return result
 
     def _parse_response(self, response: str) -> Optional[dict]:
         try:
@@ -140,11 +127,3 @@ class InternalizationEngine:
 
         await lpmm_ops.add_content(solidified_content, auto_split=False)
         logger.info(f"思维固化完成: {seed_info.get('id', '')}")
-
-    async def _mark_seed_internalized(self, seed_id: str):
-        from ..thought.seed_manager import ThoughtSeedManager
-
-        config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": ""}
-        manager = ThoughtSeedManager(config)
-        await manager.delete_seed(seed_id)
-        logger.info(f"种子 {seed_id} 已标记为已内化")
