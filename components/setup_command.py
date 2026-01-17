@@ -85,9 +85,8 @@ class SetupAnswerHandler(BaseCommand):
             return False, None, 0
 
         session = questionnaire_sessions[session_key]
-        content = getattr(self.message, "content", "")
-        if hasattr(content, "get_plain_text"):
-            content = content.get_plain_text()
+        # 从 processed_plain_text 获取消息内容
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
         answer = int(str(content).strip())
         session["answers"].append(answer)
         session["current"] += 1
