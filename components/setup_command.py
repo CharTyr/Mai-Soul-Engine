@@ -38,8 +38,9 @@ class SetupCommand(BaseCommand):
         if not admin_user_id:
             return True, "请先在配置文件中设置 admin_user_id（格式：平台:ID，如qq:768295235）", 2
 
-        platform = getattr(self.message, "platform", "")
-        user_id = str(getattr(self.message, "user_id", ""))
+        # 从 message_info 中正确获取平台和用户信息
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以执行此命令", 2
@@ -75,8 +76,9 @@ class SetupAnswerHandler(BaseCommand):
         cleanup_expired_sessions()
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
-        platform = getattr(self.message, "platform", "")
-        user_id = str(getattr(self.message, "user_id", ""))
+        # 从 message_info 中正确获取平台和用户信息
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
         session_key = f"{platform}:{user_id}"
 
         if not match_user(platform, user_id, admin_user_id) or session_key not in questionnaire_sessions:

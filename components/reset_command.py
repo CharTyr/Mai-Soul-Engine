@@ -18,8 +18,9 @@ class ResetCommand(BaseCommand):
         init_audit_log(plugin_dir)
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
-        platform = getattr(self.message, "platform", "")
-        user_id = str(getattr(self.message, "user_id", ""))
+        # 从 message_info 中正确获取平台和用户信息
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以重置灵魂光谱", 2

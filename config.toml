@@ -1,4 +1,4 @@
-# Mai-Soul-Engine - 自动生成的配置文件
+# Mai-Soul-Engine - 配置文件
 # Mai-Soul-Engine - 通过问卷初始化意识形态光谱，根据聊天内容动态演化，影响MaiBot的回复风格
 
 # 管理员配置
@@ -29,6 +29,9 @@ evolution_rate = 5
 # EMA平滑系数(0-1，越大变化越快)
 ema_alpha = 0.3
 
+# 反向变动阻力(0-1，越大阻力越强)
+direction_resistance = 0.5
+
 
 # 监控范围
 [monitor]
@@ -49,16 +52,24 @@ excluded_users = []
 # 档位阈值
 [threshold]
 
-# 轻微倾向阈值
-threshold_mild = 25
-
-# 明显倾向阈值
-threshold_moderate = 50
-
-# 极端倾向阈值
-threshold_extreme = 75
+# 启用极端档位(98-100触发)
+enable_extreme = false
 
 # 自定义提示词模板(覆盖默认)
-custom_prompts = {  }
+custom_prompts = { }
 
 
+# 思维阁设置
+[thought_cabinet]
+
+# 启用思维阁系统（默认关闭）
+enabled = false
+
+# 思维种子上限
+max_seeds = 20
+
+# 最小触发强度
+min_trigger_intensity = 0.7
+
+# 启用管理员审核通知
+admin_notification_enabled = true

@@ -16,8 +16,9 @@ class SeedListCommand(BaseCommand):
         from ..thought.seed_manager import ThoughtSeedManager
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
-        platform = getattr(self.message, "platform", "")
-        user_id = str(getattr(self.message, "user_id", ""))
+        # 从 message_info 中正确获取平台和用户信息
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以查看思维种子", 2
@@ -47,8 +48,9 @@ class SeedApproveCommand(BaseCommand):
         from ..thought.internalization_engine import InternalizationEngine
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
-        platform = getattr(self.message, "platform", "")
-        user_id = str(getattr(self.message, "user_id", ""))
+        # 从 message_info 中正确获取平台和用户信息
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以审核思维种子", 2
@@ -56,9 +58,8 @@ class SeedApproveCommand(BaseCommand):
         if not self.get_config("thought_cabinet.enabled", False):
             return True, "思维阁系统未启用", 2
 
-        content = getattr(self.message, "content", "")
-        if hasattr(content, "get_plain_text"):
-            content = content.get_plain_text()
+        # 从 processed_plain_text 获取消息内容
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
 
         match = re.match(self.command_pattern, str(content))
         if not match:
@@ -101,8 +102,9 @@ class SeedRejectCommand(BaseCommand):
         from ..utils.spectrum_utils import match_user
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
-        platform = getattr(self.message, "platform", "")
-        user_id = str(getattr(self.message, "user_id", ""))
+        # 从 message_info 中正确获取平台和用户信息
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
 
         if not match_user(platform, user_id, admin_user_id):
             return True, "只有管理员可以审核思维种子", 2
@@ -110,9 +112,8 @@ class SeedRejectCommand(BaseCommand):
         if not self.get_config("thought_cabinet.enabled", False):
             return True, "思维阁系统未启用", 2
 
-        content = getattr(self.message, "content", "")
-        if hasattr(content, "get_plain_text"):
-            content = content.get_plain_text()
+        # 从 processed_plain_text 获取消息内容
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
 
         match = re.match(self.command_pattern, str(content))
         if not match:
