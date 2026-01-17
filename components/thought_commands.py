@@ -74,7 +74,7 @@ class SeedApproveCommand(BaseCommand):
         if not seed:
             return True, f"未找到种子 {seed_id}", 2
 
-        if "待审核" not in seed.get("content", ""):
+        if seed.get("status") != "pending":
             return True, f"种子 {seed_id} 不在待审核状态", 2
 
         engine = InternalizationEngine()
@@ -130,7 +130,7 @@ class SeedRejectCommand(BaseCommand):
         if not seed:
             return True, f"未找到种子 {seed_id}", 2
 
-        if "待审核" not in seed.get("content", ""):
+        if seed.get("status") != "pending":
             return True, f"种子 {seed_id} 不在待审核状态", 2
 
         await manager.delete_seed(seed_id)

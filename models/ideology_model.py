@@ -46,8 +46,25 @@ class EvolutionHistory(Model):
         table_name = "soul_evolution_history"
 
 
+class ThoughtSeed(Model):
+    """思维种子数据模型 - 存储待审核的思维种子"""
+
+    seed_id = CharField(primary_key=True)
+    seed_type = CharField()  # 道德审判、权力质疑等
+    event = TextField()  # 触发事件
+    intensity = IntegerField()  # 强度 (0-100)
+    reasoning = TextField()  # 检测原因
+    potential_impact_json = TextField()  # JSON格式的预期光谱影响
+    created_at = DateTimeField(default=datetime.now)
+    status = CharField(default="pending")  # pending, approved, rejected
+
+    class Meta:
+        database = db
+        table_name = "soul_thought_seeds"
+
+
 def init_tables():
-    db.create_tables([IdeologySpectrum, GroupEvolutionRecord, EvolutionHistory], safe=True)
+    db.create_tables([IdeologySpectrum, GroupEvolutionRecord, EvolutionHistory, ThoughtSeed], safe=True)
 
 
 def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:

@@ -2,7 +2,7 @@ import json
 import uuid
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,8 @@ class ThoughtSeedManager:
         self.admin_user_id = config.get("admin_user_id", "")
 
     async def create_seed(self, seed_data: dict) -> Optional[str]:
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
+        """创建思维种子并存入数据库（不存入LPMM）"""
+        from ..models.ideology_model import ThoughtSeed
 
         logger.debug(f"尝试创建种子, 强度: {seed_data.get('intensity', 0)}, 阈值: {self.min_intensity}")
 
@@ -34,65 +35,95 @@ class ThoughtSeedManager:
 
         seed_id = f"seed_{uuid.uuid4().hex[:8]}"
 
-        seed_content = f"""思维种子 - {seed_data["type"]} [待审核]
+        # 存入数据库而非LPMM
+        ThoughtSeed.create(
+            seed_id=seed_id,
+            seed_type=seed_data["type"],
+            event=seed_data["event"],
+            intensity=int(seed_data["intensity"] * 100),  # 转换为0-100整数
+            reasoning=seed_data["reasoning"],
+            potential_impact_json=json.dumps(seed_data.get("potential_impact", {}), ensure_ascii=False),
+            status="pending",
+        )
 
-种子ID: {seed_id}
-触发事件: {seed_data["event"]}
-检测强度: {seed_data["intensity"]:.2f}
-检测原因: {seed_data["reasoning"]}
-预期光谱影响: {json.dumps(seed_data.get("potential_impact", {}), ensure_ascii=False)}
-创建时间: {datetime.now().isoformat()}
-状态: 待审核
-
-这是一个关于{THOUGHT_TYPES.get(seed_data["type"], "未知类型")}的思维种子，需要管理员决定是否内化。"""
-
-        await lpmm_ops.add_content(seed_content, auto_split=False)
         logger.info(f"创建思维种子: {seed_id} (类型: {seed_data['type']}, 强度: {seed_data['intensity']:.2f})")
-
         return seed_id
 
     async def _cleanup_excess_seeds(self):
-        seeds = await self.get_pending_seeds()
-        logger.debug(f"当前种子数: {len(seeds)}, 最大限制: {self.max_seeds}")
+        """清理超限的旧种子"""
+        from ..models.ideology_model import ThoughtSeed
+
+        seeds = list(ThoughtSeed.select().where(ThoughtSeed.status == "pending").order_by(ThoughtSeed.created_at.desc()))
+        logger.debug(f"当前待审核种子数: {len(seeds)}, 最大限制: {self.max_seeds}")
+
         if len(seeds) >= self.max_seeds:
             logger.info(f"种子数超限，清理 {len(seeds) - self.max_seeds + 1} 个旧种子")
             for seed in seeds[self.max_seeds - 1 :]:
-                seed_id = self._extract_field(seed.get("content", ""), "种子ID")
-                if seed_id:
-                    await self.delete_seed(seed_id)
-                    logger.debug(f"清理旧种子: {seed_id}")
+                seed.delete_instance()
+                logger.debug(f"清理旧种子: {seed.seed_id}")
 
     async def delete_seed(self, seed_id: str) -> bool:
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
+        """删除种子（从数据库）"""
+        from ..models.ideology_model import ThoughtSeed
 
         logger.debug(f"删除种子: {seed_id}")
-        result = await lpmm_ops.delete(seed_id, exact_match=False)
-        deleted = result.get("deleted_count", 0) > 0
-        if deleted:
+        try:
+            seed = ThoughtSeed.get(ThoughtSeed.seed_id == seed_id)
+            seed.delete_instance()
             logger.info(f"种子已删除: {seed_id}")
-        else:
-            logger.warning(f"删除种子失败: {seed_id}, 结果: {result}")
-        return deleted
+            return True
+        except ThoughtSeed.DoesNotExist:
+            logger.warning(f"删除种子失败: {seed_id} 不存在")
+            return False
 
-    async def get_pending_seeds(self) -> list:
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
+    async def get_pending_seeds(self) -> List[dict]:
+        """获取所有待审核种子"""
+        from ..models.ideology_model import ThoughtSeed
 
-        seeds = await lpmm_ops.search("思维种子 待审核", top_k=20)
+        seeds = list(ThoughtSeed.select().where(ThoughtSeed.status == "pending").order_by(ThoughtSeed.created_at.desc()))
         logger.debug(f"查询待审核种子, 找到 {len(seeds)} 个")
-        return seeds
+
+        # 转换为字典格式以保持兼容性
+        result = []
+        for seed in seeds:
+            result.append(
+                {
+                    "seed_id": seed.seed_id,
+                    "type": seed.seed_type,
+                    "event": seed.event,
+                    "intensity": seed.intensity / 100.0,  # 转回0-1范围
+                    "reasoning": seed.reasoning,
+                    "potential_impact": json.loads(seed.potential_impact_json),
+                    "created_at": seed.created_at.isoformat(),
+                    "status": seed.status,
+                }
+            )
+        return result
 
     async def get_seed_by_id(self, seed_id: str) -> Optional[dict]:
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
+        """根据ID获取种子"""
+        from ..models.ideology_model import ThoughtSeed
 
         logger.debug(f"查询种子: {seed_id}")
-        seeds = await lpmm_ops.search(f"思维种子 {seed_id}", top_k=1)
-        if seeds:
+        try:
+            seed = ThoughtSeed.get(ThoughtSeed.seed_id == seed_id)
             logger.debug(f"找到种子: {seed_id}")
-        else:
+            return {
+                "seed_id": seed.seed_id,
+                "type": seed.seed_type,
+                "event": seed.event,
+                "intensity": seed.intensity / 100.0,
+                "reasoning": seed.reasoning,
+                "potential_impact": json.loads(seed.potential_impact_json),
+                "created_at": seed.created_at.isoformat(),
+                "status": seed.status,
+            }
+        except ThoughtSeed.DoesNotExist:
             logger.debug(f"未找到种子: {seed_id}")
-        return seeds[0] if seeds else None
+            return None
 
     def format_seed_notification(self, seed_id: str, seed_data: dict) -> str:
+        """格式化种子通知消息"""
         impact = seed_data.get("potential_impact", {})
         impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
 
@@ -110,29 +141,15 @@ class ThoughtSeedManager:
 /soul_seeds - 查看所有待审核种子"""
 
     def format_seeds_list(self, seeds: list) -> str:
+        """格式化种子列表"""
         if not seeds:
             return "当前没有待审核的思维种子"
 
         result = "🧠 待审核思维种子:\n\n"
         for seed in seeds:
-            content = seed.get("content", "")
-            seed_id = self._extract_field(content, "种子ID")
-            seed_type = self._extract_field(content, "思维种子 -").split("[")[0].strip()
-            event = self._extract_field(content, "触发事件")[:50]
-            intensity = self._extract_field(content, "检测强度")
-
-            result += f"ID: {seed_id}\n"
-            result += f"类型: {seed_type}\n"
-            result += f"事件: {event}...\n"
-            result += f"强度: {intensity}\n\n"
+            result += f"ID: {seed['seed_id']}\n"
+            result += f"类型: {seed['type']}\n"
+            result += f"事件: {seed['event'][:50]}...\n"
+            result += f"强度: {seed['intensity']:.2f}\n\n"
 
         return result
-
-    def _extract_field(self, content: str, field_name: str) -> str:
-        for line in content.split("\n"):
-            if field_name in line:
-                parts = line.split(":", 1)
-                if len(parts) > 1:
-                    return parts[1].strip()
-                return line.replace(field_name, "").strip()
-        return ""
