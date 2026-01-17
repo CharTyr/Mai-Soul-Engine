@@ -32,6 +32,12 @@ ema_alpha = 0.3
 # 反向变动阻力(0-1，越大阻力越强)
 direction_resistance = 0.5
 
+# 每次分析的最大消息数
+max_messages_per_analysis = 200
+
+# 每条消息的最大字符数
+max_chars_per_message = 200
+
 
 # 监控范围
 [monitor]

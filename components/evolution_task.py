@@ -115,11 +115,14 @@ class EvolutionTaskHandler(BaseEventHandler):
                 logger.debug(f"群{stream_id}消息不足5条，跳过分析")
                 return
 
+            max_messages = self.get_config("evolution.max_messages_per_analysis", 200)
+            max_chars = self.get_config("evolution.max_chars_per_message", 200)
+
             msg_lines = []
-            for m in messages[:50]:
+            for m in messages[:max_messages]:
                 nickname = getattr(m, "sender_nickname", "user")
                 content = str(getattr(m, "content", ""))
-                sanitized = sanitize_text(content, max_chars=200)
+                sanitized = sanitize_text(content, max_chars=max_chars)
                 msg_lines.append(f"{nickname}: {sanitized}")
             msg_text = "\n".join(msg_lines)
 

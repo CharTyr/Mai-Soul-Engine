@@ -37,6 +37,8 @@ class MaiSoulEngine(BasePlugin):
             "evolution_rate": ConfigField(type=int, default=5, description="每次演化最大变化值"),
             "ema_alpha": ConfigField(type=float, default=0.3, description="EMA平滑系数(0-1，越大变化越快)"),
             "direction_resistance": ConfigField(type=float, default=0.5, description="反向变动阻力(0-1，越大阻力越强)"),
+            "max_messages_per_analysis": ConfigField(type=int, default=200, description="每次分析的最大消息数"),
+            "max_chars_per_message": ConfigField(type=int, default=200, description="每条消息的最大字符数"),
         },
         "monitor": {
             "monitored_groups": ConfigField(
