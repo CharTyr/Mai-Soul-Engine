@@ -308,7 +308,7 @@ class EvolutionTaskHandler(BaseEventHandler):
         manager = ThoughtSeedManager(config)
 
         for seed_data in seeds[:2]:
-            seed_id = await manager.create_seed(seed_data)
+            seed_id = await manager.create_seed(seed_data, stream_id=stream_id)
             if seed_id:
                 logger.info(f"群{stream_id}创建思维种子: {seed_id}")
                 if self.get_config("thought_cabinet.admin_notification_enabled", True):

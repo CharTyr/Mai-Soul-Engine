@@ -50,6 +50,7 @@ class ThoughtSeed(Model):
     """思维种子数据模型 - 存储待审核的思维种子"""
 
     seed_id = CharField(primary_key=True)
+    stream_id = CharField(default="")
     seed_type = CharField()  # 道德审判、权力质疑等
     event = TextField()  # 触发事件
     intensity = IntegerField()  # 强度 (0-100)
@@ -63,8 +64,41 @@ class ThoughtSeed(Model):
         table_name = "soul_thought_seeds"
 
 
+class CrystallizedTrait(Model):
+    """固化 trait - 存储已内化的观点（可禁用/删除）。"""
+
+    trait_id = CharField(primary_key=True)
+    stream_id = CharField(default="")
+    seed_id = CharField(default="")
+    name = CharField()
+    thought = TextField()
+    spectrum_impact_json = TextField(default="{}")
+    created_at = DateTimeField(default=datetime.now)
+    enabled = BooleanField(default=True)
+    deleted = BooleanField(default=False)
+
+    class Meta:
+        database = db
+        table_name = "soul_crystallized_traits"
+
+
+def _sqlite_has_column(table_name: str, column_name: str) -> bool:
+    try:
+        rows = db.execute_sql(f"PRAGMA table_info('{table_name}')").fetchall()
+    except Exception:
+        return True
+    return any((row[1] == column_name) for row in rows)
+
+
+def _sqlite_add_column(table_name: str, column_name: str, ddl: str) -> None:
+    db.execute_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}")
+
+
 def init_tables():
-    db.create_tables([IdeologySpectrum, GroupEvolutionRecord, EvolutionHistory, ThoughtSeed], safe=True)
+    db.create_tables([IdeologySpectrum, GroupEvolutionRecord, EvolutionHistory, ThoughtSeed, CrystallizedTrait], safe=True)
+
+    if not _sqlite_has_column(ThoughtSeed._meta.table_name, "stream_id"):
+        _sqlite_add_column(ThoughtSeed._meta.table_name, "stream_id", "TEXT DEFAULT ''")
 
 
 def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:

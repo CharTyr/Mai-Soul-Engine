@@ -21,7 +21,7 @@ class ThoughtSeedManager:
         self.min_intensity = config.get("min_trigger_intensity", 0.7)
         self.admin_user_id = config.get("admin_user_id", "")
 
-    async def create_seed(self, seed_data: dict) -> Optional[str]:
+    async def create_seed(self, seed_data: dict, stream_id: str = "") -> Optional[str]:
         """创建思维种子并存入数据库（不存入LPMM）"""
         from ..models.ideology_model import ThoughtSeed
 
@@ -38,6 +38,7 @@ class ThoughtSeedManager:
         # 存入数据库而非LPMM
         ThoughtSeed.create(
             seed_id=seed_id,
+            stream_id=stream_id or "",
             seed_type=seed_data["type"],
             event=seed_data["event"],
             intensity=int(seed_data["intensity"] * 100),  # 转换为0-100整数
@@ -76,11 +77,14 @@ class ThoughtSeedManager:
             logger.warning(f"删除种子失败: {seed_id} 不存在")
             return False
 
-    async def get_pending_seeds(self) -> List[dict]:
+    async def get_pending_seeds(self, stream_id: str | None = None) -> List[dict]:
         """获取所有待审核种子"""
         from ..models.ideology_model import ThoughtSeed
 
-        seeds = list(ThoughtSeed.select().where(ThoughtSeed.status == "pending").order_by(ThoughtSeed.created_at.desc()))
+        query = ThoughtSeed.select().where(ThoughtSeed.status == "pending")
+        if stream_id and stream_id != "global":
+            query = query.where(ThoughtSeed.stream_id == stream_id)
+        seeds = list(query.order_by(ThoughtSeed.created_at.desc()))
         logger.debug(f"查询待审核种子, 找到 {len(seeds)} 个")
 
         # 转换为字典格式以保持兼容性
@@ -89,6 +93,7 @@ class ThoughtSeedManager:
             result.append(
                 {
                     "seed_id": seed.seed_id,
+                    "stream_id": getattr(seed, "stream_id", "") or "",
                     "type": seed.seed_type,
                     "event": seed.event,
                     "intensity": seed.intensity / 100.0,  # 转回0-1范围
@@ -110,6 +115,7 @@ class ThoughtSeedManager:
             logger.debug(f"找到种子: {seed_id}")
             return {
                 "seed_id": seed.seed_id,
+                "stream_id": getattr(seed, "stream_id", "") or "",
                 "type": seed.seed_type,
                 "event": seed.event,
                 "intensity": seed.intensity / 100.0,
@@ -148,6 +154,8 @@ class ThoughtSeedManager:
         result = "🧠 待审核思维种子:\n\n"
         for seed in seeds:
             result += f"ID: {seed['seed_id']}\n"
+            if seed.get("stream_id"):
+                result += f"来源: {seed['stream_id']}\n"
             result += f"类型: {seed['type']}\n"
             result += f"事件: {seed['event'][:50]}...\n"
             result += f"强度: {seed['intensity']:.2f}\n\n"

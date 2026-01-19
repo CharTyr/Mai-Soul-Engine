@@ -46,11 +46,19 @@ excluded_users = []  # 排除的用户ID（格式：平台:ID）
 enable_extreme = false  # 启用极端档位(98-100触发)
 custom_prompts = {}  # 自定义提示词（可选）
 
+[injection]
+scope = "global"  # 群聊注入范围：global=所有群，monitored_only=仅 monitored_groups（仍受 excluded_groups 影响）
+inject_private = true  # 是否允许私聊注入（默认开启）
+
 [thought_cabinet]
 enabled = false  # 启用思维阁系统（默认关闭）
 max_seeds = 20  # 思维种子上限
 min_trigger_intensity = 0.7  # 最小触发强度
 admin_notification_enabled = true  # 启用管理员审核通知
+
+[api]
+enabled = true
+token = ""  # 为空表示不启用 Token 校验；也可用环境变量 SOUL_API_TOKEN 覆盖
 ```
 
 ### ID 格式说明
@@ -87,6 +95,26 @@ admin_notification_enabled = true  # 启用管理员审核通知
 
 重置为中立状态。
 
+### 4. 思维阁（可选，推荐作为主体验点）
+
+启用：
+```toml
+[thought_cabinet]
+enabled = true
+```
+
+思维阁会在每次群聊演化时（见 `monitor.monitored_groups`）产出少量待审核「思维种子」，并通知管理员私聊（可关）。
+
+管理员命令：
+
+- 查看待审核种子：`/soul_seeds`
+- 批准内化：`/soul_approve <seed_id>`（会创建 `trait_id` 并写入 LPMM）
+- 拒绝并删除种子：`/soul_reject <seed_id>`
+- 查看已固化 traits：`/soul_traits`（可选：`/soul_traits <stream_id>`）
+- 禁用 trait：`/soul_trait_disable <trait_id>`（并从 LPMM 中移除该条）
+- 启用 trait：`/soul_trait_enable <trait_id>`（并写回 LPMM）
+- 删除 trait：`/soul_trait_delete <trait_id>`（软删除，并从 LPMM 中移除）
+
 ## 意识形态维度
 
 | 维度 | 左端（0） | 右端（100） | 影响范围 |
@@ -112,6 +140,14 @@ admin_notification_enabled = true  # 启用管理员审核通知
 - `GET /api/v1/soul/export`
 
 默认注册到 **Core Server**：`http://HOST:PORT/api/v1/soul/*`
+
+#### 按群查看/切换（stream_id）
+
+以下接口支持 `stream_id` 查询参数（用于前端「按群查看/切换」）：
+
+- `GET /api/v1/soul/cabinet?stream_id=<stream_id>`
+- `GET /api/v1/soul/introspection?stream_id=<stream_id>`
+- `GET /api/v1/soul/injection?stream_id=<stream_id>`
 
 #### 鉴权
 

@@ -20,6 +20,7 @@ class SeedListCommand(BaseCommand):
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
         from ..thought.seed_manager import ThoughtSeedManager
+        from ..models.ideology_model import init_tables
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         # 从 message_info 中正确获取平台和用户信息
@@ -35,6 +36,8 @@ class SeedListCommand(BaseCommand):
             msg = "思维阁系统未启用"
             await self._send_response(msg)
             return True, msg, 2
+
+        init_tables()
 
         config = {
             "max_seeds": self.get_config("thought_cabinet.max_seeds", 20),
@@ -63,6 +66,7 @@ class SeedApproveCommand(BaseCommand):
         from ..utils.spectrum_utils import match_user
         from ..thought.seed_manager import ThoughtSeedManager
         from ..thought.internalization_engine import InternalizationEngine
+        from ..models.ideology_model import init_tables
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         # 从 message_info 中正确获取平台和用户信息
@@ -78,6 +82,8 @@ class SeedApproveCommand(BaseCommand):
             msg = "思维阁系统未启用"
             await self._send_response(msg)
             return True, msg, 2
+
+        init_tables()
 
         # 从 processed_plain_text 获取消息内容
         content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
@@ -111,7 +117,13 @@ class SeedApproveCommand(BaseCommand):
             await manager.delete_seed(seed_id)
             impact = result["spectrum_impact"]
             impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
-            msg = f"✅ 种子 {seed_id} 已批准内化\n\n固化观点: {result['thought'][:100]}...\n\n光谱影响: {impact_str or '无'}"
+            trait_id = result.get("trait_id", "")
+            trait_line = f"\ntrait_id: {trait_id}" if trait_id else ""
+            msg = (
+                f"✅ 种子 {seed_id} 已批准内化{trait_line}\n\n"
+                f"固化观点: {result['thought'][:100]}...\n\n"
+                f"光谱影响: {impact_str or '无'}"
+            )
             await self._send_response(msg)
             return True, msg, 2
         else:
@@ -132,6 +144,7 @@ class SeedRejectCommand(BaseCommand):
 
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import init_tables
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         # 从 message_info 中正确获取平台和用户信息
@@ -147,6 +160,8 @@ class SeedRejectCommand(BaseCommand):
             msg = "思维阁系统未启用"
             await self._send_response(msg)
             return True, msg, 2
+
+        init_tables()
 
         # 从 processed_plain_text 获取消息内容
         content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
@@ -178,5 +193,270 @@ class SeedRejectCommand(BaseCommand):
         await manager.delete_seed(seed_id)
         logger.info(f"管理员拒绝思维种子: {seed_id}")
         msg = f"✅ 种子 {seed_id} 已拒绝并删除"
+        await self._send_response(msg)
+        return True, msg, 2
+
+
+class TraitListCommand(BaseCommand):
+    command_name = "soul_traits"
+    command_description = "查看已固化的 traits（可按群过滤）"
+    command_pattern = r"^/soul_traits(?:\s+(\S+))?\s*$"
+
+    async def _send_response(self, text: str):
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
+    async def execute(self) -> Tuple[bool, Optional[str], int]:
+        from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+
+        admin_user_id = self.get_config("admin.admin_user_id", "")
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = (
+            str(self.message.message_info.user_info.user_id)
+            if self.message.message_info and self.message.message_info.user_info
+            else ""
+        )
+
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以查看 traits"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if not self.get_config("thought_cabinet.enabled", False):
+            msg = "思维阁系统未启用"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
+        match = re.match(self.command_pattern, str(content))
+        stream_id = match.group(1).strip() if match and match.group(1) else None
+
+        init_tables()
+
+        query = CrystallizedTrait.select().where(CrystallizedTrait.deleted == False)  # noqa: E712
+        if stream_id and stream_id != "global":
+            query = query.where(CrystallizedTrait.stream_id == stream_id)
+
+        traits = list(query.order_by(CrystallizedTrait.created_at.desc()).limit(50))
+        if not traits:
+            msg = "当前没有已固化的 traits"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        lines = ["🧠 已固化 traits：", ""]
+        if stream_id:
+            lines.append(f"过滤 stream_id: {stream_id}")
+            lines.append("")
+
+        for t in traits:
+            status = "enabled" if t.enabled else "disabled"
+            lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}")
+            snippet = (t.thought or "").replace("\n", " ").strip()
+            if len(snippet) > 80:
+                snippet = f"{snippet[:80]}..."
+            if snippet:
+                lines.append(f"  {snippet}")
+
+        msg = "\n".join(lines)
+        await self._send_response(msg)
+        return True, msg, 2
+
+
+class TraitDisableCommand(BaseCommand):
+    command_name = "soul_trait_disable"
+    command_description = "禁用指定 trait（并从 LPMM 中移除）"
+    command_pattern = r"^/soul_trait_disable\s+(\w+)\s*$"
+
+    async def _send_response(self, text: str):
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
+    async def execute(self) -> Tuple[bool, Optional[str], int]:
+        from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+        from src.chat.knowledge.lpmm_ops import lpmm_ops
+
+        admin_user_id = self.get_config("admin.admin_user_id", "")
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = (
+            str(self.message.message_info.user_info.user_id)
+            if self.message.message_info and self.message.message_info.user_info
+            else ""
+        )
+
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以禁用 trait"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if not self.get_config("thought_cabinet.enabled", False):
+            msg = "思维阁系统未启用"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
+        match = re.match(self.command_pattern, str(content))
+        if not match:
+            msg = "用法: /soul_trait_disable <trait_id>"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait_id = match.group(1)
+        init_tables()
+
+        trait = CrystallizedTrait.get_or_none(CrystallizedTrait.trait_id == trait_id)
+        if not trait or trait.deleted:
+            msg = f"未找到 trait {trait_id}"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait.enabled = False
+        trait.save()
+
+        delete_result = await lpmm_ops.delete(keyword=f"trait_id: {trait_id}", exact_match=False)
+        deleted_count = int(delete_result.get("deleted_count", 0) or 0) if isinstance(delete_result, dict) else 0
+
+        msg = f"✅ trait {trait_id} 已禁用（LPMM 删除 {deleted_count} 条）"
+        await self._send_response(msg)
+        return True, msg, 2
+
+
+class TraitEnableCommand(BaseCommand):
+    command_name = "soul_trait_enable"
+    command_description = "启用指定 trait（并写回 LPMM）"
+    command_pattern = r"^/soul_trait_enable\s+(\w+)\s*$"
+
+    async def _send_response(self, text: str):
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
+    async def execute(self) -> Tuple[bool, Optional[str], int]:
+        from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+        from src.chat.knowledge.lpmm_ops import lpmm_ops
+
+        admin_user_id = self.get_config("admin.admin_user_id", "")
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = (
+            str(self.message.message_info.user_info.user_id)
+            if self.message.message_info and self.message.message_info.user_info
+            else ""
+        )
+
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以启用 trait"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if not self.get_config("thought_cabinet.enabled", False):
+            msg = "思维阁系统未启用"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
+        match = re.match(self.command_pattern, str(content))
+        if not match:
+            msg = "用法: /soul_trait_enable <trait_id>"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait_id = match.group(1)
+        init_tables()
+
+        trait = CrystallizedTrait.get_or_none(CrystallizedTrait.trait_id == trait_id)
+        if not trait or trait.deleted:
+            msg = f"未找到 trait {trait_id}"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        import json
+
+        try:
+            impact = json.loads(trait.spectrum_impact_json or "{}")
+        except json.JSONDecodeError:
+            impact = {}
+        impact_str = ", ".join([f"{k}:{int(v):+d}" for k, v in (impact or {}).items() if int(v) != 0])
+
+        await lpmm_ops.delete(keyword=f"trait_id: {trait_id}", exact_match=False)
+        await lpmm_ops.add_content(
+            f"""思维固化 - {trait.name}
+
+固化观点: {trait.thought}
+
+光谱影响: {impact_str or "无"}
+影响原因:
+原始种子: {trait.seed_id}
+trait_id: {trait.trait_id}
+固化时间: {(trait.created_at.isoformat() if trait.created_at else '')}
+
+这是一个经过深层内化的观点，已经成为我价值观的一部分。""",
+            auto_split=False,
+        )
+
+        trait.enabled = True
+        trait.save()
+
+        msg = f"✅ trait {trait_id} 已启用（已写回 LPMM）"
+        await self._send_response(msg)
+        return True, msg, 2
+
+
+class TraitDeleteCommand(BaseCommand):
+    command_name = "soul_trait_delete"
+    command_description = "删除指定 trait（软删除，并从 LPMM 中移除）"
+    command_pattern = r"^/soul_trait_delete\s+(\w+)\s*$"
+
+    async def _send_response(self, text: str):
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
+    async def execute(self) -> Tuple[bool, Optional[str], int]:
+        from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+        from src.chat.knowledge.lpmm_ops import lpmm_ops
+
+        admin_user_id = self.get_config("admin.admin_user_id", "")
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = (
+            str(self.message.message_info.user_info.user_id)
+            if self.message.message_info and self.message.message_info.user_info
+            else ""
+        )
+
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以删除 trait"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if not self.get_config("thought_cabinet.enabled", False):
+            msg = "思维阁系统未启用"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
+        match = re.match(self.command_pattern, str(content))
+        if not match:
+            msg = "用法: /soul_trait_delete <trait_id>"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait_id = match.group(1)
+        init_tables()
+
+        trait = CrystallizedTrait.get_or_none(CrystallizedTrait.trait_id == trait_id)
+        if not trait or trait.deleted:
+            msg = f"未找到 trait {trait_id}"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait.enabled = False
+        trait.deleted = True
+        trait.save()
+
+        delete_result = await lpmm_ops.delete(keyword=f"trait_id: {trait_id}", exact_match=False)
+        deleted_count = int(delete_result.get("deleted_count", 0) or 0) if isinstance(delete_result, dict) else 0
+
+        msg = f"✅ trait {trait_id} 已删除（LPMM 删除 {deleted_count} 条）"
         await self._send_response(msg)
         return True, msg, 2

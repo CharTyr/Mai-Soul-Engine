@@ -23,6 +23,7 @@ class MaiSoulEngine(BasePlugin):
         "evolution": "演化设置",
         "monitor": "监控范围",
         "threshold": "档位阈值",
+        "injection": "注入设置",
         "thought_cabinet": "思维阁设置",
         "api": "API 设置",
     }
@@ -60,6 +61,14 @@ class MaiSoulEngine(BasePlugin):
         "threshold": {
             "enable_extreme": ConfigField(type=bool, default=False, description="启用极端档位(98-100触发)"),
             "custom_prompts": ConfigField(type=dict, default={}, description="自定义提示词模板(覆盖默认)"),
+        },
+        "injection": {
+            "scope": ConfigField(
+                type=str,
+                default="global",
+                description="群聊注入范围：global=所有群，monitored_only=仅 monitored_groups（仍受 excluded_groups 影响）",
+            ),
+            "inject_private": ConfigField(type=bool, default=True, description="是否允许私聊注入（默认开启）"),
         },
         "thought_cabinet": {
             "enabled": ConfigField(type=bool, default=False, description="启用思维阁系统（默认关闭）"),
@@ -106,7 +115,15 @@ class MaiSoulEngine(BasePlugin):
         from .components.reset_command import ResetCommand
         from .components.ideology_injector import IdeologyInjector
         from .components.evolution_task import EvolutionTaskHandler
-        from .components.thought_commands import SeedListCommand, SeedApproveCommand, SeedRejectCommand
+        from .components.thought_commands import (
+            SeedListCommand,
+            SeedApproveCommand,
+            SeedRejectCommand,
+            TraitListCommand,
+            TraitDisableCommand,
+            TraitEnableCommand,
+            TraitDeleteCommand,
+        )
 
         return [
             (SetupCommand.get_command_info(), SetupCommand),
@@ -118,4 +135,8 @@ class MaiSoulEngine(BasePlugin):
             (SeedListCommand.get_command_info(), SeedListCommand),
             (SeedApproveCommand.get_command_info(), SeedApproveCommand),
             (SeedRejectCommand.get_command_info(), SeedRejectCommand),
+            (TraitListCommand.get_command_info(), TraitListCommand),
+            (TraitDisableCommand.get_command_info(), TraitDisableCommand),
+            (TraitEnableCommand.get_command_info(), TraitEnableCommand),
+            (TraitDeleteCommand.get_command_info(), TraitDeleteCommand),
         ]

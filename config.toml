@@ -61,6 +61,15 @@ enable_extreme = false
 # 自定义提示词模板(覆盖默认)
 custom_prompts = { }
 
+# 注入设置
+[injection]
+
+# 群聊注入范围：global=所有群，monitored_only=仅 monitored_groups（仍受 excluded_groups 影响）
+scope = "global"
+
+# 是否允许私聊注入（默认开启）
+inject_private = true
+
 
 # 思维阁设置
 [thought_cabinet]

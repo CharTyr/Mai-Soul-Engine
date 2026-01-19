@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException
 
 
-SCHEMA_VERSION = 110
+SCHEMA_VERSION = 120
 
 
 @dataclass(frozen=True)
@@ -21,11 +21,16 @@ class SoulApiConfig:
 
 _START_TIME = time.time()
 _LAST_INJECTION: dict[str, Any] = {}
+_LAST_INJECTION_BY_STREAM: dict[str, dict[str, Any]] = {}
 
 
-def record_last_injection(payload: dict[str, Any]) -> None:
+def record_last_injection(payload: dict[str, Any], stream_id: str | None = None) -> None:
     _LAST_INJECTION.clear()
     _LAST_INJECTION.update(payload)
+    if stream_id:
+        if len(_LAST_INJECTION_BY_STREAM) > 256:
+            _LAST_INJECTION_BY_STREAM.clear()
+        _LAST_INJECTION_BY_STREAM[stream_id] = dict(payload)
 
 
 def _format_uptime(seconds: float) -> str:
@@ -48,6 +53,38 @@ def _value_0_100_to_signed(value: int) -> int:
     return _clamp_int(int(round((value - 50) * 2)), -100, 100)
 
 
+def _impact_dict_to_effects(impact: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """将 impact dict（economic/social/diplomatic/progressive）转换为前端所需 impacts 列表与 source_dimension。"""
+    impacts: list[dict[str, Any]] = []
+    axis_map = [
+        ("sincerity-absurdism", impact.get("economic", 0), "sincerity", "absurdism"),
+        ("normies-otakuism", impact.get("social", 0), "normies", "otakuism"),
+        ("traditionalism-radicalism", impact.get("diplomatic", 0), "traditionalism", "radicalism"),
+        ("heroism-nihilism", impact.get("progressive", 0), "heroism", "nihilism"),
+    ]
+
+    strongest: tuple[str, int, str, str] | None = None
+    for axis, raw_delta, left_pole, right_pole in axis_map:
+        try:
+            delta = int(raw_delta)
+        except Exception:
+            continue
+        if strongest is None or abs(delta) > abs(strongest[1]):
+            strongest = (axis, delta, left_pole, right_pole)
+        if delta == 0:
+            continue
+        impacts.append(
+            {
+                "dimension": axis,
+                "direction": "right" if delta > 0 else "left",
+                "strength": _clamp_int(delta, -10, 10),
+            }
+        )
+
+    source_dimension = strongest[3] if strongest and strongest[1] > 0 else strongest[2] if strongest else "sincerity"
+    return impacts, source_dimension
+
+
 def _get_api_config(plugin) -> SoulApiConfig:
     enabled = bool(plugin.get_config("api.enabled", True))
 
@@ -67,7 +104,7 @@ def _require_token(plugin, token: str | None) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _read_audit_fragments(plugin_dir: Path, limit: int) -> list[dict[str, Any]]:
+def _read_audit_fragments(plugin_dir: Path, limit: int, stream_id: str | None = None) -> list[dict[str, Any]]:
     audit_path = plugin_dir / "data" / "audit.jsonl"
     if not audit_path.exists():
         return []
@@ -93,6 +130,9 @@ def _read_audit_fragments(plugin_dir: Path, limit: int) -> list[dict[str, Any]]:
         group_id = str(entry.get("group_id") or "")
         reason = str(entry.get("reason") or "")
         deltas = entry.get("deltas") or {}
+
+        if stream_id and stream_id != "global" and typ == "evolution" and group_id != stream_id:
+            continue
 
         if typ == "evolution":
             delta_str = ", ".join(
@@ -196,13 +236,18 @@ def create_soul_api_router(plugin) -> APIRouter:
         }
 
     @router.get("/cabinet")
-    async def get_cabinet(x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")) -> dict[str, Any]:
+    async def get_cabinet(
+        stream_id: str | None = None, x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")
+    ) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
 
-        from ..models.ideology_model import ThoughtSeed, init_tables
+        from ..models.ideology_model import ThoughtSeed, CrystallizedTrait, init_tables
 
         init_tables()
-        seeds = list(ThoughtSeed.select().where(ThoughtSeed.status == "pending").order_by(ThoughtSeed.created_at.desc()))
+        seed_query = ThoughtSeed.select().where(ThoughtSeed.status == "pending")
+        if stream_id and stream_id != "global":
+            seed_query = seed_query.where(ThoughtSeed.stream_id == stream_id)
+        seeds = list(seed_query.order_by(ThoughtSeed.created_at.desc()))
 
         import json
 
@@ -213,33 +258,7 @@ def create_soul_api_router(plugin) -> APIRouter:
             except json.JSONDecodeError:
                 impact = {}
 
-            impacts = []
-            axis_map = [
-                ("sincerity-absurdism", impact.get("economic", 0), "sincerity", "absurdism"),
-                ("normies-otakuism", impact.get("social", 0), "normies", "otakuism"),
-                ("traditionalism-radicalism", impact.get("diplomatic", 0), "traditionalism", "radicalism"),
-                ("heroism-nihilism", impact.get("progressive", 0), "heroism", "nihilism"),
-            ]
-
-            strongest = None
-            for axis, raw_delta, left_pole, right_pole in axis_map:
-                try:
-                    delta = int(raw_delta)
-                except Exception:
-                    continue
-                if strongest is None or abs(delta) > abs(strongest[1]):
-                    strongest = (axis, delta, left_pole, right_pole)
-                if delta == 0:
-                    continue
-                impacts.append(
-                    {
-                        "dimension": axis,
-                        "direction": "right" if delta > 0 else "left",
-                        "strength": _clamp_int(delta, -10, 10),
-                    }
-                )
-
-            source_dimension = strongest[3] if strongest and strongest[1] > 0 else strongest[2] if strongest else "sincerity"
+            impacts, source_dimension = _impact_dict_to_effects(impact)
 
             slots.append(
                 {
@@ -256,19 +275,44 @@ def create_soul_api_router(plugin) -> APIRouter:
                 }
             )
 
+        trait_query = CrystallizedTrait.select().where((CrystallizedTrait.deleted == False) & (CrystallizedTrait.enabled == True))  # noqa: E712
+        if stream_id and stream_id != "global":
+            trait_query = trait_query.where(CrystallizedTrait.stream_id == stream_id)
+        traits = list(trait_query.order_by(CrystallizedTrait.created_at.desc()).limit(80))
+
+        trait_cards: list[dict[str, Any]] = []
+        for t in traits:
+            try:
+                impact = json.loads(t.spectrum_impact_json or "{}")
+            except json.JSONDecodeError:
+                impact = {}
+            effects, source_dimension = _impact_dict_to_effects(impact)
+            trait_cards.append(
+                {
+                    "id": t.trait_id,
+                    "name": t.name,
+                    "source_dimension": source_dimension,
+                    "crystallized_at": t.created_at.isoformat() if t.created_at else _now_iso(),
+                    "description": t.thought or "",
+                    "permanent_effects": effects,
+                }
+            )
+
         return {
             "slots": slots,
-            "traits": [],
+            "traits": trait_cards,
             "dissonance": {"active": False, "conflicting_thoughts": [], "severity": "low"},
         }
 
     @router.get("/introspection")
     async def get_introspection(
-        limit: int = 60, x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")
+        limit: int = 60,
+        stream_id: str | None = None,
+        x_soul_token: str | None = Header(default=None, alias="X-Soul-Token"),
     ) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
 
-        fragments = _read_audit_fragments(plugin_dir, limit=limit)
+        fragments = _read_audit_fragments(plugin_dir, limit=limit, stream_id=stream_id)
         return {"fragments": fragments, "next_injection": None, "updated_at": _now_iso()}
 
     @router.get("/fragments")
@@ -348,9 +392,12 @@ def create_soul_api_router(plugin) -> APIRouter:
         return {"targets": targets, "updated_at": _now_iso()}
 
     @router.get("/injection")
-    async def get_injection(x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")) -> dict[str, Any]:
+    async def get_injection(
+        stream_id: str | None = None, x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")
+    ) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
-        return {"last_injection": _LAST_INJECTION, "updated_at": _now_iso()}
+        payload: dict[str, Any] = _LAST_INJECTION_BY_STREAM.get(stream_id, {}) if stream_id else _LAST_INJECTION
+        return {"last_injection": payload, "updated_at": _now_iso()}
 
     @router.get("/health")
     async def get_health(x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")) -> dict[str, Any]:
@@ -442,4 +489,3 @@ def create_soul_api_router(plugin) -> APIRouter:
         }
 
     return router
-
