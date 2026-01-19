@@ -20,11 +20,16 @@
 
 ## 配置
 
-在 `plugins/MaiBot_Soul_Engine/config.toml` 中配置：
+本仓库不提交 `config.toml`（避免把管理员 ID / Token 等环境信息带入版本库）。
+
+请先复制模板：
+
+1) `plugins/MaiBot_Soul_Engine/config_template.toml` → `plugins/MaiBot_Soul_Engine/config.toml`  
+2) 按需修改 `config.toml`
 
 ```toml
 [admin]
-admin_user_id = "qq:768295235"  # 管理员用户ID（必填，格式：平台:ID）
+admin_user_id = "qq:123456"  # 管理员用户ID（必填，格式：平台:ID）
 enabled = true
 
 [evolution]

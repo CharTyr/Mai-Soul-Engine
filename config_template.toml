@@ -1,11 +1,14 @@
-# Mai-Soul-Engine - 配置文件
-# Mai-Soul-Engine - 通过问卷初始化意识形态光谱，根据聊天内容动态演化，影响MaiBot的回复风格
+# Mai-Soul-Engine - 配置模板
+# 使用方式：
+# 1) 复制本文件为 config.toml
+# 2) 按需修改配置
+# 3) config.toml 已加入 .gitignore（不要提交包含你私人信息的配置）
 
 # 管理员配置
 [admin]
 
-# 管理员用户ID（必填，格式：平台:ID，如qq:768295235）
-admin_user_id = "qq:768295235"
+# 管理员用户ID（必填，格式：平台:ID，如 qq:768295235）
+admin_user_id = ""
 
 # 启用插件
 enabled = true
@@ -36,7 +39,7 @@ max_messages_per_analysis = 200
 max_chars_per_message = 200
 
 
-# 监控范围
+# 监控范围（演化仅针对监控群）
 [monitor]
 
 # 监控的群ID列表(空=不分析任何群)，格式：平台:群号:group（或直接填stream_id）
@@ -60,6 +63,7 @@ enable_extreme = false
 
 # 自定义提示词模板(覆盖默认)
 custom_prompts = { }
+
 
 # 注入设置
 [injection]
@@ -95,3 +99,4 @@ enabled = true
 
 # 访问令牌（可选）。前端请求头：X-Soul-Token；也可用环境变量 SOUL_API_TOKEN 覆盖
 token = ""
+
