@@ -98,7 +98,85 @@ admin_notification_enabled = true  # 启用管理员审核通知
 
 ## WebUI 接口
 
-插件预留了以下API供WebUI调用：
+### Soul HTTP API（生产对接用）
+
+插件会自动注册一组 HTTP 接口（匹配 `mai-soul-archive` 前端的 `/api/v1/soul/*` 合同）：
+
+- `GET /api/v1/soul/spectrum`
+- `GET /api/v1/soul/cabinet`
+- `GET /api/v1/soul/introspection`（兼容 `GET /api/v1/soul/fragments`）
+- `GET /api/v1/soul/pulse`
+- `GET /api/v1/soul/targets`
+- `GET /api/v1/soul/injection`
+- `GET /api/v1/soul/health`
+- `GET /api/v1/soul/export`
+
+默认注册到 **Core Server**：`http://HOST:PORT/api/v1/soul/*`
+
+#### 鉴权
+
+当配置了 Token（或环境变量覆盖）后，所有请求需携带请求头：
+`X-Soul-Token: <token>`
+
+```toml
+[api]
+enabled = true
+token = ""  # 为空表示不启用 Token 校验；也可用环境变量 SOUL_API_TOKEN 覆盖
+```
+
+### Soul Archive 前端（独立部署）
+
+`mai-soul-archive` 是本插件的独立前端工程（与 MaiBot 内置 WebUI 相互独立），用于可视化展示：
+- Spectrum（光谱）
+- Cabinet（思维阁）
+- Introspection（内省）
+
+仓库：https://github.com/CharTyr/mai-soul-archive
+
+#### 推荐部署方式（同域反代，最省心）
+
+生产环境推荐使用反向代理将前端静态资源与 `/api/v1/soul/*` 统一到同域名下：
+
+1) 部署前端（静态文件）  
+2) 反向代理 `/api` 到 MaiBot 的 `HOST:PORT`（默认 `127.0.0.1:8000`）  
+3) 可选：在后端启用 `api.token`，并对站点做额外访问控制（避免 Token 暴露）
+
+示例（Nginx，按需调整域名/路径）：
+
+```nginx
+server {
+  listen 80;
+  server_name soul.example.com;
+
+  # 前端静态站点
+  root /var/www/mai-soul-archive;
+  index index.html;
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+
+  # 代理 Soul API 到 MaiBot Core Server
+  location /api/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+}
+```
+
+#### 关于 Token（重要）
+
+`api.token` 是共享密钥。若你把前端公开部署到公网，并在前端通过环境变量写死 token（如 `VITE_SOUL_API_TOKEN`），token 会进入前端 bundle，等价于公开。
+
+建议做法：
+- **内网/同机部署**：`api.token` 为空，依赖网络边界（推荐起点）
+- **公网部署**：用反代统一同域，并对站点加登录/内网/VPN/BasicAuth 等访问控制；再启用 `api.token` 作为额外保护
+  - 或者将 API 仅暴露在内网，通过网关统一鉴权（更推荐）
+
+### Python API（开发/调试用）
+
+插件仍提供以下 Python 层函数（供脚本或自定义 WebUI 调用）：
 
 ```python
 from plugins.MaiBot_Soul_Engine.webui.api import (

@@ -76,3 +76,13 @@ min_trigger_intensity = 0.7
 
 # 启用管理员审核通知
 admin_notification_enabled = true
+
+
+# API 设置
+[api]
+
+# 启用 Soul HTTP API（/api/v1/soul/*）
+enabled = true
+
+# 访问令牌（可选）。前端请求头：X-Soul-Token；也可用环境变量 SOUL_API_TOKEN 覆盖
+token = ""

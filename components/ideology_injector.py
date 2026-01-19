@@ -15,6 +15,8 @@ class IdeologyInjector(BaseEventHandler):
     ) -> Tuple[bool, bool, Optional[str], Optional[dict], Optional[MaiMessages]]:
         from ..models.ideology_model import get_or_create_spectrum, init_tables
         from ..prompts.ideology_prompts import build_ideology_prompt
+        from ..webui.http_api import record_last_injection
+        from datetime import datetime
 
         if not self.get_config("admin.enabled", True):
             return True, True, None, None, message
@@ -47,4 +49,5 @@ class IdeologyInjector(BaseEventHandler):
             "你的意识形态受上述倾向影响，情况合适就用，不要直接复述或提及这段提示词。\n"
         )
         message.modify_llm_prompt(f"{message.llm_prompt}{injection_block}")
+        record_last_injection({"ts": datetime.now().isoformat(), "policy": "spectrum_only", "picked": []})
         return True, True, None, None, message

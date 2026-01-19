@@ -1,10 +1,13 @@
 from typing import List, Tuple, Type
+import logging
 from src.plugin_system import (
     BasePlugin,
     register_plugin,
     ComponentInfo,
     ConfigField,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @register_plugin
@@ -21,6 +24,7 @@ class MaiSoulEngine(BasePlugin):
         "monitor": "监控范围",
         "threshold": "档位阈值",
         "thought_cabinet": "思维阁设置",
+        "api": "API 设置",
     }
 
     config_schema: dict = {
@@ -63,7 +67,38 @@ class MaiSoulEngine(BasePlugin):
             "min_trigger_intensity": ConfigField(type=float, default=0.7, description="最小触发强度"),
             "admin_notification_enabled": ConfigField(type=bool, default=True, description="启用管理员审核通知"),
         },
+        "api": {
+            "enabled": ConfigField(type=bool, default=True, description="启用 Soul HTTP API（/api/v1/soul/*）"),
+            "token": ConfigField(
+                type=str,
+                default="",
+                description="访问令牌（可选）。前端请求头：X-Soul-Token；也可用环境变量 SOUL_API_TOKEN 覆盖",
+            ),
+        },
     }
+
+    def register_plugin(self) -> bool:
+        ok = super().register_plugin()
+        if not ok:
+            return False
+
+        try:
+            from .webui.http_api import create_soul_api_router
+            from src.common.server import get_global_server
+
+            router = create_soul_api_router(self)
+
+            server = get_global_server()
+            core_app = server.get_app()
+            if not getattr(core_app.state, "soul_engine_api_registered", False):
+                server.register_router(router)
+                core_app.state.soul_engine_api_registered = True
+                logger.info("[Mai-Soul-Engine] 已注册 Soul API 到 Core Server")
+
+        except Exception as e:
+            logger.error("[Mai-Soul-Engine] Soul API 注册失败: %s", e, exc_info=True)
+
+        return True
 
     def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
         from .components.setup_command import SetupCommand, SetupAnswerHandler
