@@ -39,6 +39,26 @@ def parse_chat_id(config_id: str) -> tuple[str, str, str]:
     return "", config_id, "group"
 
 
+def chat_config_to_stream_id(config_id: str) -> str:
+    """
+    将配置中的聊天标识转换为 MaiBot 使用的 stream_id。
+
+    配置支持两种形式：
+    - 平台:ID:private/group（推荐，便于人工配置）
+    - 直接填写 stream_id（例如 md5 值）
+    """
+    import hashlib
+
+    platform, chat_id, chat_type = parse_chat_id(config_id)
+    if not platform:
+        return chat_id
+
+    is_private = chat_type == "private"
+    components = [platform, chat_id, "private"] if is_private else [platform, chat_id]
+    key = "_".join(components)
+    return hashlib.md5(key.encode()).hexdigest()
+
+
 def match_user(platform: str, user_id: str, config_id: str) -> bool:
     """检查用户是否匹配配置的ID"""
     cfg_platform, cfg_user_id = parse_user_id(config_id)

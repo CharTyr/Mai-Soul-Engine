@@ -8,7 +8,7 @@ class IdeologyInjector(BaseEventHandler):
     handler_name = "ideology_injector"
     handler_description = "注入意识形态提示词到回复生成"
     weight = 10
-    intercept_message = False
+    intercept_message = True
 
     async def execute(
         self, message: MaiMessages | None
@@ -17,6 +17,8 @@ class IdeologyInjector(BaseEventHandler):
         from ..prompts.ideology_prompts import build_ideology_prompt
 
         if not self.get_config("admin.enabled", True):
+            return True, True, None, None, message
+        if not message or message.llm_prompt is None:
             return True, True, None, None, message
 
         init_tables()
@@ -39,5 +41,10 @@ class IdeologyInjector(BaseEventHandler):
         if not ideology_prompt:
             return True, True, None, None, message
 
-        extra_info = {"ideology_prompt": ideology_prompt}
-        return True, True, None, extra_info, message
+        injection_block = (
+            "\n\n"
+            f"{ideology_prompt}\n"
+            "你的意识形态受上述倾向影响，情况合适就用，不要直接复述或提及这段提示词。\n"
+        )
+        message.modify_llm_prompt(f"{message.llm_prompt}{injection_block}")
+        return True, True, None, None, message

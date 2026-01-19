@@ -16,41 +16,47 @@
 
 ## 安装
 
-将 `Mai-Soul-Engine` 文件夹放入 `plugins/` 目录即可。
+将 `MaiBot_Soul_Engine` 文件夹放入 `plugins/` 目录即可。
 
 ## 配置
 
-在 `config/plugins/Mai-Soul-Engine/config.toml` 中配置：
+在 `plugins/MaiBot_Soul_Engine/config.toml` 中配置：
 
 ```toml
 [admin]
 admin_user_id = "qq:768295235"  # 管理员用户ID（必填，格式：平台:ID）
 enabled = true
-initialized = false
 
 [evolution]
 evolution_enabled = true
 evolution_interval_hours = 1.0  # 演化周期（小时）
 evolution_rate = 5  # 每次最大变化值
 ema_alpha = 0.3  # EMA平滑系数（0-1，越大变化越快）
+direction_resistance = 0.5  # 反向变动阻力（0-1）
+max_messages_per_analysis = 200  # 每次分析的最大消息数
+max_chars_per_message = 200  # 每条消息的最大字符数
 
 [monitor]
-monitored_groups = ["qq:123456:group", "telegram:789012:group"]  # 监控的群ID（格式：平台:ID:group）
-excluded_groups = []  # 排除的群ID（格式：平台:ID:group）
+monitored_groups = ["qq:123456:group", "telegram:789012:group"]  # 监控的群ID（空=不分析任何群）
+excluded_groups = []  # 排除的群ID
 monitored_users = []  # 监控的用户ID（格式：平台:ID）
 excluded_users = []  # 排除的用户ID（格式：平台:ID）
 
 [threshold]
-threshold_mild = 25  # 轻微倾向阈值
-threshold_moderate = 50  # 明显倾向阈值
-threshold_extreme = 75  # 极端倾向阈值
+enable_extreme = false  # 启用极端档位(98-100触发)
 custom_prompts = {}  # 自定义提示词（可选）
+
+[thought_cabinet]
+enabled = false  # 启用思维阁系统（默认关闭）
+max_seeds = 20  # 思维种子上限
+min_trigger_intensity = 0.7  # 最小触发强度
+admin_notification_enabled = true  # 启用管理员审核通知
 ```
 
 ### ID 格式说明
 
 - **用户ID**：`平台:ID`，如 `qq:768295235`
-- **群ID**：`平台:ID:group`，如 `qq:123456:group`
+- **群ID**：`平台:群号:group`，如 `qq:123456:group`（也可直接填写 stream_id）
 
 ## 使用方法
 
@@ -61,7 +67,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 /soul_setup
 ```
 
-依次回答20道问题（1-5分），完成初始化。
+依次回答20道问题（1-5分），按提示使用 `/soul_answer <1-5>` 完成初始化。
 
 ### 2. 查看当前状态
 
@@ -95,7 +101,7 @@ custom_prompts = {}  # 自定义提示词（可选）
 插件预留了以下API供WebUI调用：
 
 ```python
-from plugins.Mai-Soul-Engine.webui.api import (
+from plugins.MaiBot_Soul_Engine.webui.api import (
     get_current_spectrum,
     get_evolution_history,
     get_spectrum_chart_data,
@@ -113,7 +119,7 @@ history = await get_evolution_history(limit=100)
 chart_data = await get_spectrum_chart_data(days=30)
 
 # 手动触发演化
-result = await manual_evolution(group_id="123456")
+result = await manual_evolution(group_id="qq:123456:group")
 
 # 手动设置光谱
 result = await set_spectrum(economic=60, social=40, diplomatic=70, progressive=50)
@@ -210,4 +216,4 @@ admin_notification_enabled = true # 启用管理员审核通知
 
 ## 许可证
 
-MIT
+GPL-3.0-or-later

@@ -7,28 +7,48 @@
     "name": "CharTur ",
     "url": "https://github.com/CharTyr/Mai-Soul-Engine"
   },
-  "license": "AGPL-3.0",
+  "license": "GPL-3.0-or-later",
   "plugin_info": {
     "components": [
       {
         "type": "command",
-        "name": "worldview_setup",
+        "name": "soul_setup",
         "description": "初始化灵魂光谱问卷（管理员私聊）"
       },
       {
         "type": "command",
-        "name": "worldview_status",
+        "name": "soul_answer",
+        "description": "问卷答题：/soul_answer <1-5>（仅在问卷会话中生效）"
+      },
+      {
+        "type": "command",
+        "name": "soul_status",
         "description": "查看当前意识形态光谱状态"
       },
       {
         "type": "command",
-        "name": "worldview_reset",
+        "name": "soul_reset",
         "description": "重置意识形态光谱"
+      },
+      {
+        "type": "command",
+        "name": "soul_seeds",
+        "description": "查看待审核的思维种子（管理员）"
+      },
+      {
+        "type": "command",
+        "name": "soul_approve",
+        "description": "批准思维种子内化（管理员）"
+      },
+      {
+        "type": "command",
+        "name": "soul_reject",
+        "description": "拒绝并删除思维种子（管理员）"
       },
       {
         "type": "event_handler",
         "name": "ideology_injector",
-        "description": "POST_LLM事件处理器，注入意识形态提示词"
+        "description": "POST_LLM 事件处理器：把意识形态提示词注入到 prompt"
       },
       {
         "type": "event_handler",

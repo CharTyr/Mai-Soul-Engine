@@ -10,9 +10,6 @@ admin_user_id = "qq:768295235"
 # 启用插件
 enabled = true
 
-# 是否已完成初始化问卷
-initialized = false
-
 
 # 演化设置
 [evolution]
@@ -42,10 +39,10 @@ max_chars_per_message = 200
 # 监控范围
 [monitor]
 
-# 监控的群ID列表(空=全部)，格式：平台:ID:private/group
+# 监控的群ID列表(空=不分析任何群)，格式：平台:群号:group（或直接填stream_id）
 monitored_groups = []
 
-# 排除的群ID列表，格式：平台:ID:private/group
+# 排除的群ID列表，格式：平台:群号:group（或直接填stream_id）
 excluded_groups = []
 
 # 监控的用户ID列表(空=全部)，格式：平台:ID

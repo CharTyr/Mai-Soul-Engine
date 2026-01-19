@@ -29,7 +29,6 @@ class MaiSoulEngine(BasePlugin):
                 type=str, default="", description="管理员用户ID（必填，格式：平台:ID，如qq:768295235）"
             ),
             "enabled": ConfigField(type=bool, default=True, description="启用插件"),
-            "initialized": ConfigField(type=bool, default=False, description="是否已完成初始化问卷"),
         },
         "evolution": {
             "evolution_enabled": ConfigField(type=bool, default=True, description="启用自动演化"),
@@ -42,10 +41,12 @@ class MaiSoulEngine(BasePlugin):
         },
         "monitor": {
             "monitored_groups": ConfigField(
-                type=list, default=[], description="监控的群ID列表(空=全部)，格式：平台:ID:private/group"
+                type=list,
+                default=[],
+                description="监控的群ID列表(空=不分析任何群)，格式：平台:群号:group（或直接填stream_id）",
             ),
             "excluded_groups": ConfigField(
-                type=list, default=[], description="排除的群ID列表，格式：平台:ID:private/group"
+                type=list, default=[], description="排除的群ID列表，格式：平台:群号:group（或直接填stream_id）"
             ),
             "monitored_users": ConfigField(
                 type=list, default=[], description="监控的用户ID列表(空=全部)，格式：平台:ID"

@@ -60,7 +60,7 @@ class SetupCommand(BaseCommand):
         session_key = f"{platform}:{user_id}"
         if session_key in questionnaire_sessions:
             session = questionnaire_sessions[session_key]
-            msg = f"问卷进行中，当前第{session['current'] + 1}题，请回复1-5"
+            msg = f"问卷进行中，当前第{session['current'] + 1}题，请使用 /soul_answer <1-5> 作答"
             await self._send_response(msg)
             return True, msg, 2
 
@@ -71,7 +71,7 @@ class SetupCommand(BaseCommand):
         }
 
         q = QUESTIONS[0]
-        msg = f"灵魂光谱问卷开始！共20题，请回复1-5分。\n\n第1题：{q['text']}"
+        msg = f"灵魂光谱问卷开始！共20题，请使用 /soul_answer <1-5> 作答。\n\n第1题：{q['text']}"
         await self._send_response(msg)
         return True, msg, 2
 
@@ -79,7 +79,7 @@ class SetupCommand(BaseCommand):
 class SetupAnswerHandler(BaseCommand):
     command_name = "soul_answer"
     command_description = "处理问卷回答"
-    command_pattern = r"^[1-5]\s*$"
+    command_pattern = r"^/soul_answer\s+(?P<answer>[1-5])\s*$"
 
     async def _send_response(self, text: str):
         """发送响应消息到聊天"""
@@ -100,13 +100,18 @@ class SetupAnswerHandler(BaseCommand):
         user_id = str(self.message.message_info.user_info.user_id) if self.message.message_info and self.message.message_info.user_info else ""
         session_key = f"{platform}:{user_id}"
 
-        if not match_user(platform, user_id, admin_user_id) or session_key not in questionnaire_sessions:
-            return False, None, 0
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以进行问卷答题"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if session_key not in questionnaire_sessions:
+            msg = "当前没有进行中的问卷，请先使用 /soul_setup 开始"
+            await self._send_response(msg)
+            return True, msg, 2
 
         session = questionnaire_sessions[session_key]
-        # 从 processed_plain_text 获取消息内容
-        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
-        answer = int(str(content).strip())
+        answer = int(self.matched_groups.get("answer", "0") or 0)
         session["answers"].append(answer)
         session["current"] += 1
 

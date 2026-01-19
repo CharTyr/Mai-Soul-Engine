@@ -44,6 +44,7 @@ class EvolutionTaskHandler(BaseEventHandler):
 
     async def _evolution_loop(self):
         from ..models.ideology_model import get_or_create_spectrum, init_tables
+        from ..utils.spectrum_utils import match_chat, parse_chat_id
 
         init_tables()
         logger.debug("演化循环已初始化数据库表")
@@ -64,14 +65,29 @@ class EvolutionTaskHandler(BaseEventHandler):
                     continue
 
                 evolution_rate = self.get_config("evolution.evolution_rate", 5)
-                monitored_groups = self.get_config("monitor.monitored_groups", [])
-                logger.debug(f"演化参数: rate={evolution_rate}, groups={monitored_groups}")
+                monitored_groups = self.get_config("monitor.monitored_groups", []) or []
+                excluded_groups = self.get_config("monitor.excluded_groups", []) or []
+                logger.debug(
+                    f"演化参数: rate={evolution_rate}, groups={monitored_groups}, excluded_groups={excluded_groups}"
+                )
 
                 if not monitored_groups:
                     logger.debug("无监控群组，跳过本轮")
                     continue
 
+                groups_to_analyze: list[str] = []
                 for group_config_id in monitored_groups:
+                    platform, chat_id, chat_type = parse_chat_id(group_config_id)
+                    if any(match_chat(platform, chat_id, chat_type, exc) for exc in excluded_groups):
+                        logger.debug(f"群组已在排除列表中，跳过: {group_config_id}")
+                        continue
+                    groups_to_analyze.append(group_config_id)
+
+                if not groups_to_analyze:
+                    logger.debug("监控群组全部被排除，跳过本轮")
+                    continue
+
+                for group_config_id in groups_to_analyze:
                     logger.debug(f"开始分析群组: {group_config_id}")
                     await self._analyze_group(group_config_id, evolution_rate)
 
@@ -91,24 +107,31 @@ class EvolutionTaskHandler(BaseEventHandler):
         from ..prompts.ideology_prompts import EVOLUTION_ANALYSIS_PROMPT
         from ..utils.spectrum_utils import (
             update_spectrum_value,
-            parse_chat_id,
+            chat_config_to_stream_id,
             sanitize_text,
             smooth_delta,
             apply_resistance,
+            is_user_monitored,
         )
         from ..utils.audit_log import log_evolution
+        from src.chat.utils.utils import is_bot_self
         from src.llm_models.utils_model import LLMRequest
         from src.plugin_system.apis.message_api import get_messages_by_time_in_chat
 
         try:
-            platform, chat_id, chat_type = parse_chat_id(group_config_id)
-            stream_id = f"{platform}:{chat_id}:{chat_type}" if platform else chat_id
+            stream_id = chat_config_to_stream_id(group_config_id)
 
             record, _ = GroupEvolutionRecord.get_or_create(group_id=stream_id)
             last_time = record.last_analyzed
             now = datetime.now()
 
-            messages = await get_messages_by_time_in_chat(stream_id, last_time.timestamp(), now.timestamp())
+            messages = await get_messages_by_time_in_chat(
+                stream_id,
+                last_time.timestamp(),
+                now.timestamp(),
+                filter_command=True,
+                filter_intercept_message_level=1,
+            )
             logger.debug(f"群{stream_id}获取消息: {len(messages) if messages else 0}条, 时间范围: {last_time} - {now}")
 
             if not messages or len(messages) < 5:
@@ -118,12 +141,39 @@ class EvolutionTaskHandler(BaseEventHandler):
             max_messages = self.get_config("evolution.max_messages_per_analysis", 200)
             max_chars = self.get_config("evolution.max_chars_per_message", 200)
 
+            monitor_config = {
+                "monitored_users": self.get_config("monitor.monitored_users", []) or [],
+                "excluded_users": self.get_config("monitor.excluded_users", []) or [],
+            }
+            filtered_messages = []
+            for m in messages:
+                user_info = getattr(m, "user_info", None)
+                msg_platform = str(getattr(user_info, "platform", "") or "")
+                msg_user_id = str(getattr(user_info, "user_id", "") or "")
+                if is_bot_self(msg_platform, msg_user_id):
+                    continue
+                if not is_user_monitored(msg_platform, msg_user_id, monitor_config):
+                    continue
+                filtered_messages.append(m)
+
+            messages = filtered_messages
+            if len(messages) < 5:
+                logger.debug(f"群{stream_id}过滤后消息不足5条，跳过分析")
+                return
+
             msg_lines = []
             for m in messages[:max_messages]:
-                nickname = getattr(m, "sender_nickname", "user")
-                content = str(getattr(m, "content", ""))
-                sanitized = sanitize_text(content, max_chars=max_chars)
-                msg_lines.append(f"{nickname}: {sanitized}")
+                user_info = getattr(m, "user_info", None)
+                nickname = (
+                    getattr(user_info, "user_cardname", None)
+                    or getattr(user_info, "user_nickname", None)
+                    or getattr(user_info, "user_id", None)
+                    or "user"
+                )
+                content = getattr(m, "processed_plain_text", None) or getattr(m, "display_message", None) or ""
+                sanitized = sanitize_text(str(content), max_chars=max_chars)
+                if sanitized:
+                    msg_lines.append(f"{nickname}: {sanitized}")
             msg_text = "\n".join(msg_lines)
 
             prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
@@ -261,3 +311,41 @@ class EvolutionTaskHandler(BaseEventHandler):
             seed_id = await manager.create_seed(seed_data)
             if seed_id:
                 logger.info(f"群{stream_id}创建思维种子: {seed_id}")
+                if self.get_config("thought_cabinet.admin_notification_enabled", True):
+                    await self._notify_admin_seed(manager, seed_id, seed_data)
+
+    async def _notify_admin_seed(self, manager, seed_id: str, seed_data: dict) -> None:
+        """向管理员私聊发送思维种子通知（尽量不影响主流程）。"""
+        from maim_message import UserInfo
+        from src.chat.message_receive.chat_stream import get_chat_manager
+        from ..utils.spectrum_utils import parse_user_id
+
+        admin_config_id = self.get_config("admin.admin_user_id", "")
+        if not admin_config_id:
+            return
+
+        platform, user_id = parse_user_id(admin_config_id)
+        if not platform or not user_id:
+            return
+
+        chat_manager = get_chat_manager()
+        admin_stream_id = chat_manager.get_stream_id(platform, user_id, is_group=False)
+        if not chat_manager.get_stream(admin_stream_id):
+            try:
+                await chat_manager.get_or_create_stream(
+                    platform=platform,
+                    user_info=UserInfo(platform=platform, user_id=user_id, user_nickname=user_id),
+                    group_info=None,
+                )
+            except Exception:
+                logger.exception("创建管理员私聊聊天流失败，无法发送种子通知")
+                return
+
+        try:
+            await self.send_text(
+                admin_stream_id,
+                manager.format_seed_notification(seed_id, seed_data),
+                storage_message=False,
+            )
+        except Exception:
+            logger.exception("发送思维种子通知失败")
