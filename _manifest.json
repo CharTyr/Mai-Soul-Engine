@@ -7,6 +7,9 @@
     "name": "CharTyr ",
     "url": "https://github.com/CharTyr/Mai-Soul-Engine"
   },
+  "host_application": {
+    "min_version": "0.12.0"
+  },
   "license": "GPL-3.0-or-later",
   "plugin_info": {
     "components": [
