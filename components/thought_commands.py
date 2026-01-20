@@ -252,6 +252,14 @@ class TraitListCommand(BaseCommand):
         for t in traits:
             status = "enabled" if t.enabled else "disabled"
             lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}")
+            try:
+                from ..utils.trait_tags import parse_tags_json
+
+                tags = parse_tags_json(getattr(t, "tags_json", "[]") or "[]")
+            except Exception:
+                tags = []
+            if tags:
+                lines.append(f"  tags: {', '.join(tags)}")
             q = (getattr(t, "question", "") or "").replace("\n", " ").strip()
             if q:
                 if len(q) > 80:
@@ -264,6 +272,66 @@ class TraitListCommand(BaseCommand):
                 lines.append(f"  {snippet}")
 
         msg = "\n".join(lines)
+        await self._send_response(msg)
+        return True, msg, 2
+
+
+class TraitSetTagsCommand(BaseCommand):
+    command_name = "soul_trait_set_tags"
+    command_description = "设置指定 trait 的 tags（逗号或空格分隔）"
+    command_pattern = r"^/soul_trait_set_tags\s+(\w+)\s+(.+?)\s*$"
+
+    async def _send_response(self, text: str):
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
+    async def execute(self) -> Tuple[bool, Optional[str], int]:
+        from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+        from ..utils.trait_tags import dumps_tags_json, parse_tags_json
+
+        admin_user_id = self.get_config("admin.admin_user_id", "")
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = (
+            str(self.message.message_info.user_info.user_id)
+            if self.message.message_info and self.message.message_info.user_info
+            else ""
+        )
+
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以设置 trait tags"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if not self.get_config("thought_cabinet.enabled", False):
+            msg = "思维阁系统未启用"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        init_tables()
+
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
+        match = re.match(self.command_pattern, str(content))
+        if not match:
+            msg = "用法: /soul_trait_set_tags <trait_id> <tag1 tag2 / tag1,tag2>"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait_id = match.group(1)
+        tags_text = (match.group(2) or "").strip().replace("，", ",")
+        raw_tags = [t for t in re.split(r"[,\\s]+", tags_text) if t]
+
+        trait = CrystallizedTrait.get_or_none(CrystallizedTrait.trait_id == trait_id)
+        if not trait or trait.deleted:
+            msg = f"未找到 trait {trait_id}"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        trait.tags_json = dumps_tags_json(raw_tags)
+        trait.save()
+
+        tags = parse_tags_json(getattr(trait, "tags_json", "[]") or "[]")
+        msg = f"✅ trait {trait_id} tags 已更新: {', '.join(tags) if tags else '(empty)'}"
         await self._send_response(msg)
         return True, msg, 2
 

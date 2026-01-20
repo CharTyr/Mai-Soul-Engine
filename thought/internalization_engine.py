@@ -1,4 +1,3 @@
-import json
 import logging
 import uuid
 from datetime import datetime
@@ -26,7 +25,7 @@ INTERNALIZATION_PROMPT = """基于以下思维种子，进行深层的哲学内�
 - progressive: 对变化vs传统的看法 (-10到+10)
 
 请以JSON格式返回:
-{{"thought": "我形成的深层观点...", "spectrum_impact": {{"economic": 0, "social": 0, "diplomatic": 0, "progressive": 0}}, "reasoning": "为什么会产生这样的光谱影响"}}"""
+{{"thought": "我形成的深层观点...", "spectrum_impact": {{"economic": 0, "social": 0, "diplomatic": 0, "progressive": 0}}, "reasoning": "为什么会产生这样的光谱影响", "tags": ["关键词1", "关键词2"]}}"""
 
 
 def _compact_line(text: str, limit: int) -> str:
@@ -40,6 +39,7 @@ class InternalizationEngine:
     async def internalize_seed(self, seed: dict) -> dict:
         from src.llm_models.utils_model import LLMRequest
         from ..models.ideology_model import init_tables
+        from ..utils.trait_tags import normalize_tags
 
         try:
             init_tables()
@@ -81,6 +81,8 @@ class InternalizationEngine:
             if reason:
                 question_text = f"{question_text}\n线索: {reason}"
             seed_info["question"] = question_text
+            tags = result.get("tags") or []
+            seed_info["tags"] = normalize_tags(tags)
             await self._store_crystallized_trait(seed_info, result, spectrum_impact, trait_id=trait_id, now=now)
 
             logger.info(f"种子内化成功: {seed_info.get('id', '')}, 观点: {result['thought'][:50]}...")
@@ -91,11 +93,16 @@ class InternalizationEngine:
             return {"success": False, "error": str(e)}
 
     def _parse_response(self, response: str) -> Optional[dict]:
+        import json
+
         try:
             response = response.strip()
             if response.startswith("```"):
                 response = response.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(response)
+            result = json.loads(response)
+            if isinstance(result, dict) and "tags" in result and not isinstance(result.get("tags"), list):
+                result["tags"] = []
+            return result
         except json.JSONDecodeError:
             logger.warning(f"无法解析内化响应: {response}")
             return None
@@ -129,7 +136,10 @@ class InternalizationEngine:
         return result
 
     async def _store_crystallized_trait(self, seed_info: dict, result: dict, impact: dict, trait_id: str, now: datetime) -> None:
+        import json
+
         from ..models.ideology_model import CrystallizedTrait
+        from ..utils.trait_tags import dumps_tags_json
 
         CrystallizedTrait.create(
             trait_id=trait_id,
@@ -138,6 +148,7 @@ class InternalizationEngine:
             name=seed_info.get("type", "trait"),
             question=seed_info.get("question", "") or "",
             thought=result.get("thought", "") or "",
+            tags_json=dumps_tags_json(seed_info.get("tags")),
             spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
             created_at=now,
             enabled=True,

@@ -73,6 +73,7 @@ class CrystallizedTrait(Model):
     name = CharField()
     question = TextField(default="")
     thought = TextField()
+    tags_json = TextField(default="[]")
     spectrum_impact_json = TextField(default="{}")
     created_at = DateTimeField(default=datetime.now)
     enabled = BooleanField(default=True)
@@ -102,6 +103,8 @@ def init_tables():
         _sqlite_add_column(ThoughtSeed._meta.table_name, "stream_id", "TEXT DEFAULT ''")
     if not _sqlite_has_column(CrystallizedTrait._meta.table_name, "question"):
         _sqlite_add_column(CrystallizedTrait._meta.table_name, "question", "TEXT DEFAULT ''")
+    if not _sqlite_has_column(CrystallizedTrait._meta.table_name, "tags_json"):
+        _sqlite_add_column(CrystallizedTrait._meta.table_name, "tags_json", "TEXT DEFAULT '[]'")
 
 
 def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:

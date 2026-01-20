@@ -116,9 +116,18 @@ enabled = true
 - 批准内化：`/soul_approve <seed_id>`（会创建 `trait_id` 并固化为 trait，用于后续回复注入）
 - 拒绝并删除种子：`/soul_reject <seed_id>`
 - 查看已固化 traits：`/soul_traits`（可选：`/soul_traits <stream_id>`）
+- 设置 trait tags：`/soul_trait_set_tags <trait_id> <tag1 tag2 / tag1,tag2>`
 - 禁用 trait：`/soul_trait_disable <trait_id>`
 - 启用 trait：`/soul_trait_enable <trait_id>`
 - 删除 trait：`/soul_trait_delete <trait_id>`（软删除）
+
+#### tags/关键词（非常重要）
+
+traits 的注入选择优先依赖 tags：当一条消息文本命中某个 trait 的 tags 时，该 trait 才会被挑选进入注入（最多 3 条）。
+
+tags 的来源：
+- `/soul_approve` 内化时，LLM 会给出一组初始 tags（可用但不一定准）
+- 你可以用 `/soul_trait_set_tags` 手工调整，使命中更贴题、更稳定
 
 ## 意识形态维度
 
