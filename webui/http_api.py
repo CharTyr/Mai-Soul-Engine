@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException
 
 
-SCHEMA_VERSION = 120
+SCHEMA_VERSION = 130
 
 
 @dataclass(frozen=True)
@@ -295,6 +295,7 @@ def create_soul_api_router(plugin) -> APIRouter:
                     "crystallized_at": t.created_at.isoformat() if t.created_at else _now_iso(),
                     "description": t.thought or "",
                     "permanent_effects": effects,
+                    "definition": getattr(t, "question", "") or "",
                 }
             )
 

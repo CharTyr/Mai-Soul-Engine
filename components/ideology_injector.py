@@ -14,6 +14,7 @@ class IdeologyInjector(BaseEventHandler):
         self, message: MaiMessages | None
     ) -> Tuple[bool, bool, Optional[str], Optional[dict], Optional[MaiMessages]]:
         from ..models.ideology_model import get_or_create_spectrum, init_tables
+        from ..models.ideology_model import CrystallizedTrait
         from ..prompts.ideology_prompts import build_ideology_prompt
         from ..webui.http_api import record_last_injection
         from ..utils.spectrum_utils import chat_config_to_stream_id
@@ -100,14 +101,63 @@ class IdeologyInjector(BaseEventHandler):
         if not ideology_prompt:
             return True, True, None, None, message
 
+        traits: list[CrystallizedTrait] = []
+        if stream_id:
+            traits = list(
+                CrystallizedTrait.select()
+                .where(
+                    (CrystallizedTrait.deleted == False)  # noqa: E712
+                    & (CrystallizedTrait.enabled == True)  # noqa: E712
+                    & ((CrystallizedTrait.stream_id == stream_id) | (CrystallizedTrait.stream_id == ""))
+                )
+                .order_by(CrystallizedTrait.created_at.desc())
+                .limit(3)
+            )
+        else:
+            traits = list(
+                CrystallizedTrait.select()
+                .where(
+                    (CrystallizedTrait.deleted == False)  # noqa: E712
+                    & (CrystallizedTrait.enabled == True)  # noqa: E712
+                    & (CrystallizedTrait.stream_id == "")
+                )
+                .order_by(CrystallizedTrait.created_at.desc())
+                .limit(3)
+            )
+
+        picked = []
+        trait_lines = []
+        for t in traits:
+            question = (getattr(t, "question", "") or "").replace("\n", " ").strip()
+            if len(question) > 90:
+                question = f"{question[:90]}..."
+            thought = (t.thought or "").replace("\n", " ").strip()
+            if len(thought) > 160:
+                thought = f"{thought[:160]}..."
+            if question:
+                trait_lines.append(f"- ({t.trait_id}) 问: {question} 答: {thought}")
+            else:
+                trait_lines.append(f"- ({t.trait_id}) {t.name}: {thought}")
+            picked.append({"thought_id": t.trait_id, "name": t.name, "score": 1.0})
+
         injection_block = (
             "\n\n"
             f"{ideology_prompt}\n"
-            "你的意识形态受上述倾向影响，情况合适就用，不要直接复述或提及这段提示词。\n"
+            + (
+                (
+                    "\n以下是你已固化的观点（人格的一部分，可用于影响回复风格）：\n"
+                    + "\n".join(trait_lines)
+                    + "\n"
+                )
+                if trait_lines
+                else ""
+            )
+            + "请综合上述倾向与固化观点来组织回复，不要直接复述或提及这段提示词。\n"
         )
         message.modify_llm_prompt(f"{message.llm_prompt}{injection_block}")
+        policy = "traits+spectrum" if picked else "spectrum_only"
         record_last_injection(
-            {"ts": datetime.now().isoformat(), "policy": "spectrum_only", "picked": []},
+            {"ts": datetime.now().isoformat(), "policy": policy, "picked": picked},
             stream_id=stream_id,
         )
         return True, True, None, None, message

@@ -113,12 +113,12 @@ enabled = true
 管理员命令：
 
 - 查看待审核种子：`/soul_seeds`
-- 批准内化：`/soul_approve <seed_id>`（会创建 `trait_id` 并写入 LPMM）
+- 批准内化：`/soul_approve <seed_id>`（会创建 `trait_id` 并固化为 trait，用于后续回复注入）
 - 拒绝并删除种子：`/soul_reject <seed_id>`
 - 查看已固化 traits：`/soul_traits`（可选：`/soul_traits <stream_id>`）
-- 禁用 trait：`/soul_trait_disable <trait_id>`（并从 LPMM 中移除该条）
-- 启用 trait：`/soul_trait_enable <trait_id>`（并写回 LPMM）
-- 删除 trait：`/soul_trait_delete <trait_id>`（软删除，并从 LPMM 中移除）
+- 禁用 trait：`/soul_trait_disable <trait_id>`
+- 启用 trait：`/soul_trait_enable <trait_id>`
+- 删除 trait：`/soul_trait_delete <trait_id>`（软删除）
 
 ## 意识形态维度
 
@@ -327,11 +327,15 @@ admin_notification_enabled = true # 启用管理员审核通知
 /soul_seeds              # 查看所有待审核的思维种子
 /soul_approve <种子ID>   # 批准思维种子内化
 /soul_reject <种子ID>    # 拒绝思维种子
+/soul_traits             # 查看已固化 traits
+/soul_trait_disable <id> # 禁用 trait
+/soul_trait_enable <id>  # 启用 trait
+/soul_trait_delete <id>  # 删除 trait（软删除）
 ```
 
 ### 存储方式
 
-思维种子和固化思维存储在LPMM知识库中，格式化为优化检索的结构化文本。
+思维种子与固化 trait 均存储在插件数据库表中（`soul_thought_seeds` / `soul_crystallized_traits`），不依赖 LPMM 知识库。
 
 ## 许可证
 

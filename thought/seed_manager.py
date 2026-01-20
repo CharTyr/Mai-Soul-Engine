@@ -22,7 +22,7 @@ class ThoughtSeedManager:
         self.admin_user_id = config.get("admin_user_id", "")
 
     async def create_seed(self, seed_data: dict, stream_id: str = "") -> Optional[str]:
-        """创建思维种子并存入数据库（不存入LPMM）"""
+        """创建思维种子并存入数据库（不写入外部知识库）"""
         from ..models.ideology_model import ThoughtSeed
 
         logger.debug(f"尝试创建种子, 强度: {seed_data.get('intensity', 0)}, 阈值: {self.min_intensity}")
@@ -35,7 +35,7 @@ class ThoughtSeedManager:
 
         seed_id = f"seed_{uuid.uuid4().hex[:8]}"
 
-        # 存入数据库而非LPMM
+        # 存入数据库
         ThoughtSeed.create(
             seed_id=seed_id,
             stream_id=stream_id or "",

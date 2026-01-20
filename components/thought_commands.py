@@ -252,6 +252,11 @@ class TraitListCommand(BaseCommand):
         for t in traits:
             status = "enabled" if t.enabled else "disabled"
             lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}")
+            q = (getattr(t, "question", "") or "").replace("\n", " ").strip()
+            if q:
+                if len(q) > 80:
+                    q = f"{q[:80]}..."
+                lines.append(f"  问: {q}")
             snippet = (t.thought or "").replace("\n", " ").strip()
             if len(snippet) > 80:
                 snippet = f"{snippet[:80]}..."
@@ -265,7 +270,7 @@ class TraitListCommand(BaseCommand):
 
 class TraitDisableCommand(BaseCommand):
     command_name = "soul_trait_disable"
-    command_description = "禁用指定 trait（并从 LPMM 中移除）"
+    command_description = "禁用指定 trait"
     command_pattern = r"^/soul_trait_disable\s+(\w+)\s*$"
 
     async def _send_response(self, text: str):
@@ -275,7 +280,6 @@ class TraitDisableCommand(BaseCommand):
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
         from ..models.ideology_model import CrystallizedTrait, init_tables
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = self.message.message_info.platform if self.message.message_info else ""
@@ -314,17 +318,14 @@ class TraitDisableCommand(BaseCommand):
         trait.enabled = False
         trait.save()
 
-        delete_result = await lpmm_ops.delete(keyword=f"trait_id: {trait_id}", exact_match=False)
-        deleted_count = int(delete_result.get("deleted_count", 0) or 0) if isinstance(delete_result, dict) else 0
-
-        msg = f"✅ trait {trait_id} 已禁用（LPMM 删除 {deleted_count} 条）"
+        msg = f"✅ trait {trait_id} 已禁用"
         await self._send_response(msg)
         return True, msg, 2
 
 
 class TraitEnableCommand(BaseCommand):
     command_name = "soul_trait_enable"
-    command_description = "启用指定 trait（并写回 LPMM）"
+    command_description = "启用指定 trait"
     command_pattern = r"^/soul_trait_enable\s+(\w+)\s*$"
 
     async def _send_response(self, text: str):
@@ -334,7 +335,6 @@ class TraitEnableCommand(BaseCommand):
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
         from ..models.ideology_model import CrystallizedTrait, init_tables
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = self.message.message_info.platform if self.message.message_info else ""
@@ -370,41 +370,17 @@ class TraitEnableCommand(BaseCommand):
             await self._send_response(msg)
             return True, msg, 2
 
-        import json
-
-        try:
-            impact = json.loads(trait.spectrum_impact_json or "{}")
-        except json.JSONDecodeError:
-            impact = {}
-        impact_str = ", ".join([f"{k}:{int(v):+d}" for k, v in (impact or {}).items() if int(v) != 0])
-
-        await lpmm_ops.delete(keyword=f"trait_id: {trait_id}", exact_match=False)
-        await lpmm_ops.add_content(
-            f"""思维固化 - {trait.name}
-
-固化观点: {trait.thought}
-
-光谱影响: {impact_str or "无"}
-影响原因:
-原始种子: {trait.seed_id}
-trait_id: {trait.trait_id}
-固化时间: {(trait.created_at.isoformat() if trait.created_at else '')}
-
-这是一个经过深层内化的观点，已经成为我价值观的一部分。""",
-            auto_split=False,
-        )
-
         trait.enabled = True
         trait.save()
 
-        msg = f"✅ trait {trait_id} 已启用（已写回 LPMM）"
+        msg = f"✅ trait {trait_id} 已启用"
         await self._send_response(msg)
         return True, msg, 2
 
 
 class TraitDeleteCommand(BaseCommand):
     command_name = "soul_trait_delete"
-    command_description = "删除指定 trait（软删除，并从 LPMM 中移除）"
+    command_description = "删除指定 trait（软删除）"
     command_pattern = r"^/soul_trait_delete\s+(\w+)\s*$"
 
     async def _send_response(self, text: str):
@@ -414,7 +390,6 @@ class TraitDeleteCommand(BaseCommand):
     async def execute(self) -> Tuple[bool, Optional[str], int]:
         from ..utils.spectrum_utils import match_user
         from ..models.ideology_model import CrystallizedTrait, init_tables
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
 
         admin_user_id = self.get_config("admin.admin_user_id", "")
         platform = self.message.message_info.platform if self.message.message_info else ""
@@ -454,9 +429,6 @@ class TraitDeleteCommand(BaseCommand):
         trait.deleted = True
         trait.save()
 
-        delete_result = await lpmm_ops.delete(keyword=f"trait_id: {trait_id}", exact_match=False)
-        deleted_count = int(delete_result.get("deleted_count", 0) or 0) if isinstance(delete_result, dict) else 0
-
-        msg = f"✅ trait {trait_id} 已删除（LPMM 删除 {deleted_count} 条）"
+        msg = f"✅ trait {trait_id} 已删除"
         await self._send_response(msg)
         return True, msg, 2

@@ -29,6 +29,13 @@ INTERNALIZATION_PROMPT = """基于以下思维种子，进行深层的哲学内�
 {{"thought": "我形成的深层观点...", "spectrum_impact": {{"economic": 0, "social": 0, "diplomatic": 0, "progressive": 0}}, "reasoning": "为什么会产生这样的光谱影响"}}"""
 
 
+def _compact_line(text: str, limit: int) -> str:
+    s = (text or "").replace("\n", " ").replace("\r", " ").strip()
+    while "  " in s:
+        s = s.replace("  ", " ")
+    return s[:limit]
+
+
 class InternalizationEngine:
     async def internalize_seed(self, seed: dict) -> dict:
         from src.llm_models.utils_model import LLMRequest
@@ -68,7 +75,12 @@ class InternalizationEngine:
 
             now = datetime.now()
             trait_id = f"trait_{uuid.uuid4().hex[:8]}"
-            await self._store_solidified_thought(seed_info, result, spectrum_impact, trait_id=trait_id, now=now)
+            question = _compact_line(seed_info.get("event", ""), 140)
+            reason = _compact_line(seed_info.get("reasoning", ""), 140)
+            question_text = f"{seed_info.get('type', '思维')}: {question}" if question else f"{seed_info.get('type', '思维')}"
+            if reason:
+                question_text = f"{question_text}\n线索: {reason}"
+            seed_info["question"] = question_text
             await self._store_crystallized_trait(seed_info, result, spectrum_impact, trait_id=trait_id, now=now)
 
             logger.info(f"种子内化成功: {seed_info.get('id', '')}, 观点: {result['thought'][:50]}...")
@@ -116,29 +128,7 @@ class InternalizationEngine:
         logger.debug(f"应用光谱影响后: {result}")
         return result
 
-    async def _store_solidified_thought(self, seed_info: dict, result: dict, impact: dict, trait_id: str, now: datetime):
-        from src.chat.knowledge.lpmm_ops import lpmm_ops
-
-        impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
-
-        solidified_content = f"""思维固化 - {seed_info.get("type", "未知")}
-
-固化观点: {result["thought"]}
-
-光谱影响: {impact_str or "无"}
-影响原因: {result.get("reasoning", "")}
-原始种子: {seed_info.get("id", "")}
-trait_id: {trait_id}
-固化时间: {now.isoformat()}
-
-这是一个经过深层内化的观点，已经成为我价值观的一部分。"""
-
-        await lpmm_ops.add_content(solidified_content, auto_split=False)
-        logger.info(f"思维固化完成: {seed_info.get('id', '')}")
-
-    async def _store_crystallized_trait(
-        self, seed_info: dict, result: dict, impact: dict, trait_id: str, now: datetime
-    ) -> None:
+    async def _store_crystallized_trait(self, seed_info: dict, result: dict, impact: dict, trait_id: str, now: datetime) -> None:
         from ..models.ideology_model import CrystallizedTrait
 
         CrystallizedTrait.create(
@@ -146,6 +136,7 @@ trait_id: {trait_id}
             stream_id=seed_info.get("stream_id", "") or "",
             seed_id=seed_info.get("id", "") or "",
             name=seed_info.get("type", "trait"),
+            question=seed_info.get("question", "") or "",
             thought=result.get("thought", "") or "",
             spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
             created_at=now,
