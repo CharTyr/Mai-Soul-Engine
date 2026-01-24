@@ -24,8 +24,6 @@
 
 ## 配置
 
-本仓库不提交 `config.toml`（避免把管理员 ID / Token 等环境信息带入版本库）。
-
 请先复制模板：
 
 1) `plugins/MaiBot_Soul_Engine/config_template.toml` → `plugins/MaiBot_Soul_Engine/config.toml`  
