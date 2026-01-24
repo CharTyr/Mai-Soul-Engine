@@ -54,12 +54,17 @@ custom_prompts = {}  # 自定义提示词（可选）
 [injection]
 scope = "global"  # 群聊注入范围：global=所有群，monitored_only=仅 monitored_groups（仍受 excluded_groups 影响）
 inject_private = true  # 是否允许私聊注入（默认开启）
+max_traits = 3  # 每次注入最多携带的 trait 数量
+fallback_recent_impact = true  # 当无 tags 命中时，是否 fallback 注入“最近影响最大”的 traits（避免完全空窗）
+trait_cooldown_seconds = 180  # trait 冷却时间（秒）。冷却期间同一 trait 不会被重复注入（避免刷屏）
 
 [thought_cabinet]
 enabled = false  # 启用思维阁系统（默认关闭）
 max_seeds = 20  # 思维种子上限
 min_trigger_intensity = 0.7  # 最小触发强度
 admin_notification_enabled = true  # 启用管理员审核通知
+auto_dedup_enabled = true  # 自动合并相似 trait（去重，避免同义 trait 越积越多）
+auto_dedup_threshold = 0.78  # 自动去重阈值（0-1，越高越严格）
 
 [api]
 enabled = true
@@ -117,6 +122,7 @@ enabled = true
 - 拒绝并删除种子：`/soul_reject <seed_id>`
 - 查看已固化 traits：`/soul_traits`（可选：`/soul_traits <stream_id>`）
 - 设置 trait tags：`/soul_trait_set_tags <trait_id> <tag1 tag2 / tag1,tag2>`
+- 合并 trait：`/soul_trait_merge <source_trait_id> <target_trait_id>`（合并后 source 会被软删除）
 - 禁用 trait：`/soul_trait_disable <trait_id>`
 - 启用 trait：`/soul_trait_enable <trait_id>`
 - 删除 trait：`/soul_trait_delete <trait_id>`（软删除）
@@ -128,6 +134,16 @@ traits 的注入选择优先依赖 tags：当一条消息文本命中某个 trai
 tags 的来源：
 - `/soul_approve` 内化时，LLM 会给出一组初始 tags（可用但不一定准）
 - 你可以用 `/soul_trait_set_tags` 手工调整，使命中更贴题、更稳定
+
+当无 tags 命中时（或命中为空），可选启用 fallback：
+- `injection.fallback_recent_impact = true`：注入“最近影响最大”的 traits，避免完全空窗
+- `injection.trait_cooldown_seconds`：为 trait 加冷却，避免同一 trait 连续刷屏
+
+#### 形成证据与置信度（便于理解“怎么得来的”）
+
+每个 trait 会记录：
+- `evidence`：来源片段（来自群聊原始对话的引用/摘要，随 seed 一起产生并随合并累计）
+- `confidence`：0-1 的置信度（用于表示该 trait 是否“值得内化/稳定”）
 
 ## 意识形态维度
 

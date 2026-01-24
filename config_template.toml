@@ -74,6 +74,15 @@ scope = "global"
 # 是否允许私聊注入（默认开启）
 inject_private = true
 
+# 每次注入最多携带的 trait 数量
+max_traits = 3
+
+# 当无 tags 命中时，是否 fallback 注入“最近影响最大”的 traits（避免完全空窗）
+fallback_recent_impact = true
+
+# trait 冷却时间（秒）。冷却期间同一 trait 不会被重复注入（避免刷屏）
+trait_cooldown_seconds = 180
+
 
 # 思维阁设置
 [thought_cabinet]
@@ -90,6 +99,12 @@ min_trigger_intensity = 0.7
 # 启用管理员审核通知
 admin_notification_enabled = true
 
+# 自动合并相似 trait（去重，避免同义 trait 越积越多）
+auto_dedup_enabled = true
+
+# 自动去重阈值（0-1，越高越严格）
+auto_dedup_threshold = 0.78
+
 
 # API 设置
 [api]
@@ -99,4 +114,3 @@ enabled = true
 
 # 访问令牌（可选）。前端请求头：X-Soul-Token；也可用环境变量 SOUL_API_TOKEN 覆盖
 token = ""
-

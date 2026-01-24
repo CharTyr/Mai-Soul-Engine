@@ -13,6 +13,10 @@ ENHANCED_EVOLUTION_PROMPT = """分析以下群聊内容，完成两个任务：
 
 类型：道德审判、权力质疑、存在焦虑、集体认同、变革渴望
 
+每个思维种子需要补充：
+- confidence: 0-1 之间的置信度（你对该种子是否“确实值得内化”的把握）
+- evidence: 1-3 条来自群聊内容的原始对话片段（直接引用，尽量短，格式保持“昵称: 内容”）
+
 群聊内容:
 {messages}
 
@@ -24,6 +28,8 @@ ENHANCED_EVOLUTION_PROMPT = """分析以下群聊内容，完成两个任务：
       "type": "道德审判",
       "event": "具体的价值观表达或冲突事件",
       "intensity": 0.85,
+      "confidence": 0.75,
+      "evidence": ["A: 原始对话片段1", "B: 原始对话片段2"],
       "reasoning": "为什么这值得内化为深层观点",
       "potential_impact": {{"economic": 2, "social": -1, "diplomatic": 0, "progressive": 1}}
     }}

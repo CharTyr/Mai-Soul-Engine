@@ -111,14 +111,29 @@ class SeedApproveCommand(BaseCommand):
             return True, msg, 2
 
         engine = InternalizationEngine()
-        result = await engine.internalize_seed(seed)
+        try:
+            threshold = float(self.get_config("thought_cabinet.auto_dedup_threshold", 0.78))
+        except Exception:
+            threshold = 0.78
+        dedup_cfg = {"enabled": bool(self.get_config("thought_cabinet.auto_dedup_enabled", True)), "threshold": threshold}
+        result = await engine.internalize_seed(seed, dedup=dedup_cfg)
 
         if result["success"]:
             await manager.delete_seed(seed_id)
             impact = result["spectrum_impact"]
             impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
             trait_id = result.get("trait_id", "")
+            merged = bool(result.get("merged", False))
+            similarity = result.get("dedup_similarity", None)
             trait_line = f"\ntrait_id: {trait_id}" if trait_id else ""
+            if merged:
+                sim_text = ""
+                try:
+                    if similarity is not None:
+                        sim_text = f" (similarity={float(similarity):.2f})"
+                except Exception:
+                    sim_text = ""
+                trait_line = f"\ntrait_id: {trait_id}（已合并）{sim_text}"
             msg = (
                 f"✅ 种子 {seed_id} 已批准内化{trait_line}\n\n"
                 f"固化观点: {result['thought'][:100]}...\n\n"
@@ -258,8 +273,20 @@ class TraitListCommand(BaseCommand):
                 tags = parse_tags_json(getattr(t, "tags_json", "[]") or "[]")
             except Exception:
                 tags = []
+            try:
+                from ..utils.trait_evidence import parse_evidence_json
+
+                evidence_count = len(parse_evidence_json(getattr(t, "evidence_json", "[]") or "[]"))
+            except Exception:
+                evidence_count = 0
+            try:
+                confidence = float(getattr(t, "confidence", 0) or 0) / 100.0
+            except Exception:
+                confidence = 0.0
             if tags:
                 lines.append(f"  tags: {', '.join(tags)}")
+            if confidence > 0.0 or evidence_count > 0:
+                lines.append(f"  confidence: {confidence:.2f} evidence: {evidence_count}")
             q = (getattr(t, "question", "") or "").replace("\n", " ").strip()
             if q:
                 if len(q) > 80:
@@ -332,6 +359,87 @@ class TraitSetTagsCommand(BaseCommand):
 
         tags = parse_tags_json(getattr(trait, "tags_json", "[]") or "[]")
         msg = f"✅ trait {trait_id} tags 已更新: {', '.join(tags) if tags else '(empty)'}"
+        await self._send_response(msg)
+        return True, msg, 2
+
+
+class TraitMergeCommand(BaseCommand):
+    command_name = "soul_trait_merge"
+    command_description = "合并两个 trait（把 source 合并进 target，并软删除 source）"
+    command_pattern = r"^/soul_trait_merge\s+(\w+)\s+(\w+)\s*$"
+
+    async def _send_response(self, text: str):
+        if self.message.chat_stream:
+            await send_api.text_to_stream(text, self.message.chat_stream.stream_id, typing=False, storage_message=False)
+
+    async def execute(self) -> Tuple[bool, Optional[str], int]:
+        from ..utils.spectrum_utils import match_user
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+        from ..utils.trait_tags import dumps_tags_json, parse_tags_json
+        from ..utils.trait_evidence import dumps_evidence_json, parse_evidence_json
+
+        admin_user_id = self.get_config("admin.admin_user_id", "")
+        platform = self.message.message_info.platform if self.message.message_info else ""
+        user_id = (
+            str(self.message.message_info.user_info.user_id)
+            if self.message.message_info and self.message.message_info.user_info
+            else ""
+        )
+
+        if not match_user(platform, user_id, admin_user_id):
+            msg = "只有管理员可以合并 trait"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        if not self.get_config("thought_cabinet.enabled", False):
+            msg = "思维阁系统未启用"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        content = self.message.processed_plain_text if hasattr(self.message, "processed_plain_text") else ""
+        match = re.match(self.command_pattern, str(content))
+        if not match:
+            msg = "用法: /soul_trait_merge <source_trait_id> <target_trait_id>"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        source_id = match.group(1)
+        target_id = match.group(2)
+        if source_id == target_id:
+            msg = "source 和 target 不能相同"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        init_tables()
+
+        source = CrystallizedTrait.get_or_none(CrystallizedTrait.trait_id == source_id)
+        target = CrystallizedTrait.get_or_none(CrystallizedTrait.trait_id == target_id)
+        if not source or source.deleted:
+            msg = f"未找到 source trait {source_id}"
+            await self._send_response(msg)
+            return True, msg, 2
+        if not target or target.deleted:
+            msg = f"未找到 target trait {target_id}"
+            await self._send_response(msg)
+            return True, msg, 2
+
+        source_tags = parse_tags_json(getattr(source, "tags_json", "[]") or "[]")
+        target_tags = parse_tags_json(getattr(target, "tags_json", "[]") or "[]")
+        merged_tags = list(dict.fromkeys([*target_tags, *source_tags]))
+        target.tags_json = dumps_tags_json(merged_tags)
+
+        target_evidence = parse_evidence_json(getattr(target, "evidence_json", "[]") or "[]")
+        source_evidence = parse_evidence_json(getattr(source, "evidence_json", "[]") or "[]")
+        target.evidence_json = dumps_evidence_json([*target_evidence, *source_evidence])
+
+        target.confidence = max(int(getattr(target, "confidence", 0) or 0), int(getattr(source, "confidence", 0) or 0))
+        target.save()
+
+        source.enabled = False
+        source.deleted = True
+        source.save()
+
+        msg = f"✅ 已合并 {source_id} -> {target_id}"
         await self._send_response(msg)
         return True, msg, 2
 

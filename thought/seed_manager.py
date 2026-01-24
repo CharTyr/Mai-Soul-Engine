@@ -24,6 +24,7 @@ class ThoughtSeedManager:
     async def create_seed(self, seed_data: dict, stream_id: str = "") -> Optional[str]:
         """创建思维种子并存入数据库（不写入外部知识库）"""
         from ..models.ideology_model import ThoughtSeed
+        from ..utils.evidence_utils import dumps_evidence_json, normalize_evidence
 
         logger.debug(f"尝试创建种子, 强度: {seed_data.get('intensity', 0)}, 阈值: {self.min_intensity}")
 
@@ -35,6 +36,19 @@ class ThoughtSeedManager:
 
         seed_id = f"seed_{uuid.uuid4().hex[:8]}"
 
+        raw_confidence = seed_data.get("confidence", 0.0)
+        try:
+            confidence = float(raw_confidence)
+        except Exception:
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+        confidence_int = int(round(confidence * 100))
+
+        evidence = seed_data.get("evidence", None)
+        if evidence is None:
+            evidence = seed_data.get("evidence_quotes", [])
+        normalized_evidence = normalize_evidence(evidence, max_items=3, max_len=180)
+
         # 存入数据库
         ThoughtSeed.create(
             seed_id=seed_id,
@@ -42,6 +56,8 @@ class ThoughtSeedManager:
             seed_type=seed_data["type"],
             event=seed_data["event"],
             intensity=int(seed_data["intensity"] * 100),  # 转换为0-100整数
+            confidence=confidence_int,
+            evidence_json=dumps_evidence_json(normalized_evidence),
             reasoning=seed_data["reasoning"],
             potential_impact_json=json.dumps(seed_data.get("potential_impact", {}), ensure_ascii=False),
             status="pending",
@@ -80,6 +96,7 @@ class ThoughtSeedManager:
     async def get_pending_seeds(self, stream_id: str | None = None) -> List[dict]:
         """获取所有待审核种子"""
         from ..models.ideology_model import ThoughtSeed
+        from ..utils.evidence_utils import parse_evidence_json
 
         query = ThoughtSeed.select().where(ThoughtSeed.status == "pending")
         if stream_id and stream_id != "global":
@@ -90,6 +107,7 @@ class ThoughtSeedManager:
         # 转换为字典格式以保持兼容性
         result = []
         for seed in seeds:
+            evidence = parse_evidence_json(getattr(seed, "evidence_json", "[]") or "[]")
             result.append(
                 {
                     "seed_id": seed.seed_id,
@@ -97,6 +115,8 @@ class ThoughtSeedManager:
                     "type": seed.seed_type,
                     "event": seed.event,
                     "intensity": seed.intensity / 100.0,  # 转回0-1范围
+                    "confidence": float(getattr(seed, "confidence", 0) or 0) / 100.0,
+                    "evidence": evidence,
                     "reasoning": seed.reasoning,
                     "potential_impact": json.loads(seed.potential_impact_json),
                     "created_at": seed.created_at.isoformat(),
@@ -108,17 +128,21 @@ class ThoughtSeedManager:
     async def get_seed_by_id(self, seed_id: str) -> Optional[dict]:
         """根据ID获取种子"""
         from ..models.ideology_model import ThoughtSeed
+        from ..utils.evidence_utils import parse_evidence_json
 
         logger.debug(f"查询种子: {seed_id}")
         try:
             seed = ThoughtSeed.get(ThoughtSeed.seed_id == seed_id)
             logger.debug(f"找到种子: {seed_id}")
+            evidence = parse_evidence_json(getattr(seed, "evidence_json", "[]") or "[]")
             return {
                 "seed_id": seed.seed_id,
                 "stream_id": getattr(seed, "stream_id", "") or "",
                 "type": seed.seed_type,
                 "event": seed.event,
                 "intensity": seed.intensity / 100.0,
+                "confidence": float(getattr(seed, "confidence", 0) or 0) / 100.0,
+                "evidence": evidence,
                 "reasoning": seed.reasoning,
                 "potential_impact": json.loads(seed.potential_impact_json),
                 "created_at": seed.created_at.isoformat(),
@@ -132,6 +156,19 @@ class ThoughtSeedManager:
         """格式化种子通知消息"""
         impact = seed_data.get("potential_impact", {})
         impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
+        confidence = seed_data.get("confidence", None)
+        confidence_line = ""
+        try:
+            if confidence is not None:
+                confidence_line = f"\n置信度: {float(confidence):.2f}"
+        except Exception:
+            confidence_line = ""
+        evidence = seed_data.get("evidence", []) or []
+        evidence_block = ""
+        if isinstance(evidence, list):
+            lines = [str(x).strip() for x in evidence if str(x).strip()]
+            if lines:
+                evidence_block = "\n证据片段:\n" + "\n".join([f"- {x[:120]}{'...' if len(x) > 120 else ''}" for x in lines[:3]])
 
         return f"""🧠 新思维种子待审核
 
@@ -139,6 +176,7 @@ class ThoughtSeedManager:
 类型: {seed_data["type"]}
 事件: {seed_data["event"][:100]}...
 强度: {seed_data["intensity"]:.2f}
+{confidence_line}{evidence_block}
 预期影响: {impact_str or "无"}
 
 审核命令:

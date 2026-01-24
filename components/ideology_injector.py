@@ -1,4 +1,6 @@
 from typing import Optional, Tuple
+import json
+import time
 from src.plugin_system import BaseEventHandler, EventType
 from src.plugin_system.base.component_types import MaiMessages
 
@@ -10,6 +12,62 @@ def _compact_one_line(text: str, limit: int) -> str:
     if len(s) > limit:
         return f"{s[:limit]}..."
     return s
+
+
+_RECENT_TRAIT_INJECTION: dict[str, dict[str, float]] = {}
+
+
+def _stream_key(stream_id: str | None) -> str:
+    return stream_id or "global"
+
+
+def _prune_recent_injection(now: float, ttl_seconds: int = 3600) -> None:
+    for sid, entries in list(_RECENT_TRAIT_INJECTION.items()):
+        for trait_id, ts in list(entries.items()):
+            if now - float(ts) > ttl_seconds:
+                entries.pop(trait_id, None)
+        if not entries:
+            _RECENT_TRAIT_INJECTION.pop(sid, None)
+
+
+def _in_cooldown(stream_id: str | None, trait_id: str, now: float, cooldown_seconds: int) -> bool:
+    if cooldown_seconds <= 0:
+        return False
+    sid = _stream_key(stream_id)
+    ts = _RECENT_TRAIT_INJECTION.get(sid, {}).get(trait_id)
+    if not ts:
+        return False
+    return (now - float(ts)) < float(cooldown_seconds)
+
+
+def _mark_injected(stream_id: str | None, trait_ids: list[str], now: float) -> None:
+    sid = _stream_key(stream_id)
+    if len(_RECENT_TRAIT_INJECTION) > 512:
+        _RECENT_TRAIT_INJECTION.clear()
+    bucket = _RECENT_TRAIT_INJECTION.setdefault(sid, {})
+    for tid in trait_ids:
+        if tid:
+            bucket[tid] = float(now)
+    if len(bucket) > 128:
+        items = sorted(bucket.items(), key=lambda x: x[1], reverse=True)[:64]
+        _RECENT_TRAIT_INJECTION[sid] = dict(items)
+
+
+def _trait_impact_score(trait) -> float:
+    try:
+        raw = getattr(trait, "spectrum_impact_json", "") or "{}"
+        impact = json.loads(raw) if isinstance(raw, str) else {}
+        if not isinstance(impact, dict):
+            return 0.0
+        score = 0.0
+        for k in ("economic", "social", "diplomatic", "progressive"):
+            try:
+                score += abs(float(impact.get(k, 0) or 0))
+            except Exception:
+                continue
+        return float(score)
+    except Exception:
+        return 0.0
 
 
 class IdeologyInjector(BaseEventHandler):
@@ -41,6 +99,9 @@ class IdeologyInjector(BaseEventHandler):
 
         scope = str(self.get_config("injection.scope", "global") or "global").strip().lower()
         inject_private = bool(self.get_config("injection.inject_private", True))
+        max_traits = max(0, int(self.get_config("injection.max_traits", 3)))
+        fallback_recent_impact = bool(self.get_config("injection.fallback_recent_impact", True))
+        cooldown_seconds = max(0, int(self.get_config("injection.trait_cooldown_seconds", 180)))
 
         if is_private and not inject_private:
             record_last_injection(
@@ -128,6 +189,9 @@ class IdeologyInjector(BaseEventHandler):
         )
         text_norm = str(text).casefold()
 
+        now_ts = time.time()
+        _prune_recent_injection(now_ts)
+
         scored: list[tuple[float, CrystallizedTrait]] = []
         for t in traits:
             tags = parse_tags_json(getattr(t, "tags_json", "[]") or "[]")
@@ -141,7 +205,30 @@ class IdeologyInjector(BaseEventHandler):
                 scored.append((float(hit), t))
 
         scored.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
-        selected = [t for _score, t in scored[:3]]
+        selected: list[CrystallizedTrait] = []
+        cooldown_skipped: list[str] = []
+        if max_traits > 0:
+            for _score, t in scored:
+                if len(selected) >= max_traits:
+                    break
+                if _in_cooldown(stream_id, t.trait_id, now_ts, cooldown_seconds):
+                    cooldown_skipped.append(t.trait_id)
+                    continue
+                selected.append(t)
+
+        selection_mode = "tag_hit" if selected else "spectrum_only"
+
+        if not selected and fallback_recent_impact and max_traits > 0:
+            fallback_candidates: list[tuple[float, datetime, CrystallizedTrait]] = []
+            for t in traits:
+                if _in_cooldown(stream_id, t.trait_id, now_ts, cooldown_seconds):
+                    continue
+                impact_score = _trait_impact_score(t)
+                fallback_candidates.append((impact_score, t.created_at, t))
+            fallback_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            selected = [t for _score, _ts, t in fallback_candidates[:max_traits] if _score > 0.0]
+            if selected:
+                selection_mode = "fallback_recent_impact"
 
         picked: list[dict] = []
         trait_lines: list[str] = []
@@ -156,9 +243,21 @@ class IdeologyInjector(BaseEventHandler):
                 trait_lines.append(f"- ({t.trait_id}){tags_text} {t.name}: {thought}")
 
             score = 0.0
+            hit_tags: list[str] = []
             if tags:
-                score = float(sum(1 for tag in tags if tag and tag.casefold() in text_norm))
-            picked.append({"thought_id": t.trait_id, "name": t.name, "score": score})
+                for tag in tags:
+                    if tag and tag.casefold() in text_norm:
+                        score += 1.0
+                        hit_tags.append(tag)
+            picked.append(
+                {
+                    "thought_id": t.trait_id,
+                    "name": t.name,
+                    "score": score if selection_mode == "tag_hit" else _trait_impact_score(t),
+                    "mode": selection_mode,
+                    "hit_tags": hit_tags,
+                }
+            )
 
         injection_block = (
             "\n\n"
@@ -175,9 +274,25 @@ class IdeologyInjector(BaseEventHandler):
             + "请综合上述倾向与固化观点来组织回复，不要直接复述或提及这段提示词。\n"
         )
         message.modify_llm_prompt(f"{message.llm_prompt}{injection_block}")
-        policy = "traits+spectrum" if picked else "spectrum_only"
+        if not picked:
+            policy = "spectrum_only"
+        elif selection_mode == "tag_hit":
+            policy = "tags+spectrum"
+        elif selection_mode == "fallback_recent_impact":
+            policy = "fallback+spectrum"
+        else:
+            policy = "traits+spectrum"
         record_last_injection(
-            {"ts": datetime.now().isoformat(), "policy": policy, "picked": picked},
+            {
+                "ts": datetime.now().isoformat(),
+                "policy": policy,
+                "picked": picked,
+                "selection_mode": selection_mode,
+                "cooldown_seconds": cooldown_seconds,
+                "cooldown_skipped": cooldown_skipped[:20],
+            },
             stream_id=stream_id,
         )
+        if selected:
+            _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)
         return True, True, None, None, message

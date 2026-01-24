@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException
 
 
-SCHEMA_VERSION = 140
+SCHEMA_VERSION = 141
 
 
 @dataclass(frozen=True)
@@ -294,6 +294,16 @@ def create_soul_api_router(plugin) -> APIRouter:
                 tags = [str(x) for x in tags if str(x).strip()]
             except Exception:
                 tags = []
+            try:
+                from ..utils.trait_evidence import parse_evidence_json
+
+                evidence = parse_evidence_json(getattr(t, "evidence_json", "[]") or "[]")
+            except Exception:
+                evidence = []
+            try:
+                confidence = float(getattr(t, "confidence", 0) or 0) / 100.0
+            except Exception:
+                confidence = 0.0
             trait_cards.append(
                 {
                     "id": t.trait_id,
@@ -305,6 +315,8 @@ def create_soul_api_router(plugin) -> APIRouter:
                     "definition": getattr(t, "question", "") or "",
                     "digest": ", ".join(tags) if tags else "",
                     "tags": tags,
+                    "confidence": confidence,
+                    "evidence": evidence,
                 }
             )
 

@@ -69,12 +69,29 @@ class MaiSoulEngine(BasePlugin):
                 description="群聊注入范围：global=所有群，monitored_only=仅 monitored_groups（仍受 excluded_groups 影响）",
             ),
             "inject_private": ConfigField(type=bool, default=True, description="是否允许私聊注入（默认开启）"),
+            "max_traits": ConfigField(type=int, default=3, description="每次注入最多携带的 trait 数量"),
+            "fallback_recent_impact": ConfigField(
+                type=bool,
+                default=True,
+                description="当无 tags 命中时，是否 fallback 注入“最近影响最大”的 traits（避免完全空窗）",
+            ),
+            "trait_cooldown_seconds": ConfigField(
+                type=int,
+                default=180,
+                description="trait 冷却时间（秒）。冷却期间同一 trait 不会被重复注入（避免刷屏）",
+            ),
         },
         "thought_cabinet": {
             "enabled": ConfigField(type=bool, default=False, description="启用思维阁系统（默认关闭）"),
             "max_seeds": ConfigField(type=int, default=20, description="思维种子上限"),
             "min_trigger_intensity": ConfigField(type=float, default=0.7, description="最小触发强度"),
             "admin_notification_enabled": ConfigField(type=bool, default=True, description="启用管理员审核通知"),
+            "auto_dedup_enabled": ConfigField(
+                type=bool, default=True, description="自动合并相似 trait（去重，避免同义 trait 越积越多）"
+            ),
+            "auto_dedup_threshold": ConfigField(
+                type=float, default=0.78, description="自动去重阈值（0-1，越高越严格）"
+            ),
         },
         "api": {
             "enabled": ConfigField(type=bool, default=True, description="启用 Soul HTTP API（/api/v1/soul/*）"),
@@ -121,6 +138,7 @@ class MaiSoulEngine(BasePlugin):
             SeedRejectCommand,
             TraitListCommand,
             TraitSetTagsCommand,
+            TraitMergeCommand,
             TraitDisableCommand,
             TraitEnableCommand,
             TraitDeleteCommand,
@@ -138,6 +156,7 @@ class MaiSoulEngine(BasePlugin):
             (SeedRejectCommand.get_command_info(), SeedRejectCommand),
             (TraitListCommand.get_command_info(), TraitListCommand),
             (TraitSetTagsCommand.get_command_info(), TraitSetTagsCommand),
+            (TraitMergeCommand.get_command_info(), TraitMergeCommand),
             (TraitDisableCommand.get_command_info(), TraitDisableCommand),
             (TraitEnableCommand.get_command_info(), TraitEnableCommand),
             (TraitDeleteCommand.get_command_info(), TraitDeleteCommand),

@@ -54,6 +54,8 @@ class ThoughtSeed(Model):
     seed_type = CharField()  # 道德审判、权力质疑等
     event = TextField()  # 触发事件
     intensity = IntegerField()  # 强度 (0-100)
+    confidence = IntegerField(default=0)  # 置信度 (0-100)
+    evidence_json = TextField(default="[]")  # JSON 格式的来源片段（最多若干条）
     reasoning = TextField()  # 检测原因
     potential_impact_json = TextField()  # JSON格式的预期光谱影响
     created_at = DateTimeField(default=datetime.now)
@@ -74,6 +76,8 @@ class CrystallizedTrait(Model):
     question = TextField(default="")
     thought = TextField()
     tags_json = TextField(default="[]")
+    confidence = IntegerField(default=0)  # 置信度 (0-100)
+    evidence_json = TextField(default="[]")  # JSON 格式的来源片段/形成证据（可累计）
     spectrum_impact_json = TextField(default="{}")
     created_at = DateTimeField(default=datetime.now)
     enabled = BooleanField(default=True)
@@ -101,10 +105,18 @@ def init_tables():
 
     if not _sqlite_has_column(ThoughtSeed._meta.table_name, "stream_id"):
         _sqlite_add_column(ThoughtSeed._meta.table_name, "stream_id", "TEXT DEFAULT ''")
+    if not _sqlite_has_column(ThoughtSeed._meta.table_name, "confidence"):
+        _sqlite_add_column(ThoughtSeed._meta.table_name, "confidence", "INTEGER DEFAULT 0")
+    if not _sqlite_has_column(ThoughtSeed._meta.table_name, "evidence_json"):
+        _sqlite_add_column(ThoughtSeed._meta.table_name, "evidence_json", "TEXT DEFAULT '[]'")
     if not _sqlite_has_column(CrystallizedTrait._meta.table_name, "question"):
         _sqlite_add_column(CrystallizedTrait._meta.table_name, "question", "TEXT DEFAULT ''")
     if not _sqlite_has_column(CrystallizedTrait._meta.table_name, "tags_json"):
         _sqlite_add_column(CrystallizedTrait._meta.table_name, "tags_json", "TEXT DEFAULT '[]'")
+    if not _sqlite_has_column(CrystallizedTrait._meta.table_name, "confidence"):
+        _sqlite_add_column(CrystallizedTrait._meta.table_name, "confidence", "INTEGER DEFAULT 0")
+    if not _sqlite_has_column(CrystallizedTrait._meta.table_name, "evidence_json"):
+        _sqlite_add_column(CrystallizedTrait._meta.table_name, "evidence_json", "TEXT DEFAULT '[]'")
 
 
 def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:
