@@ -215,8 +215,24 @@ tags 的来源：
 [api]
 enabled = true
 token = ""  # 为空表示不启用 Token 校验；也可用环境变量 SOUL_API_TOKEN 覆盖
-public_mode = false # 公告展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）
+public_mode = false # 公共展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）
 ```
+
+#### 公共展示模式（api.public_mode）
+
+当你把配套前端部署到公网做“对外公共展示”时，建议在后端开启：
+
+```toml
+[api]
+public_mode = true
+```
+
+开启后端公共模式会对接口做脱敏/降能力（避免仅靠前端隐藏导致数据仍可被直接请求抓取），主要行为：
+- `GET /api/v1/soul/targets` 返回空列表（隐藏群/会话信息）
+- `GET /api/v1/soul/trait_merge_suggestions` 返回空建议（隐藏治理信息）
+- `GET /api/v1/soul/injection` / `GET /api/v1/soul/injections` 去除命中详情（`picked` 为空等）
+- `GET /api/v1/soul/cabinet` 隐藏 trait 的 `evidence`，隐藏 slots 的 `introspection/debug_params`
+- `GET /api/v1/soul/introspection` 内容统一返回 `[REDACTED]`
 
 ### Soul Archive 前端（独立部署）
 

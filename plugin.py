@@ -103,7 +103,7 @@ class MaiSoulEngine(BasePlugin):
             "public_mode": ConfigField(
                 type=bool,
                 default=False,
-                description="公告展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）",
+                description="公共展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）",
             ),
         },
     }
