@@ -5,12 +5,13 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 
 
-SCHEMA_VERSION = 141
+SCHEMA_VERSION = 142
 
 
 @dataclass(frozen=True)
@@ -22,15 +23,75 @@ class SoulApiConfig:
 _START_TIME = time.time()
 _LAST_INJECTION: dict[str, Any] = {}
 _LAST_INJECTION_BY_STREAM: dict[str, dict[str, Any]] = {}
+_INJECTION_HISTORY: deque[dict[str, Any]] = deque(maxlen=400)
+_INJECTION_HISTORY_BY_STREAM: dict[str, deque[dict[str, Any]]] = {}
+_INJECTION_LOG_LOCK = Lock()
 
 
-def record_last_injection(payload: dict[str, Any], stream_id: str | None = None) -> None:
+def _append_jsonl(path: Path, entry: dict[str, Any]) -> None:
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _INJECTION_LOG_LOCK:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _trim_jsonl(path: Path, *, max_bytes: int, max_lines: int) -> None:
+    if max_bytes <= 0 or max_lines <= 0:
+        return
+    try:
+        size = int(path.stat().st_size)
+    except FileNotFoundError:
+        return
+    except Exception:
+        return
+    if size <= max_bytes:
+        return
+
+    tail: deque[str] = deque(maxlen=max_lines)
+    with _INJECTION_LOG_LOCK:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    tail.append(line)
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            for line in tail:
+                f.write(line + "\n")
+        tmp.replace(path)
+
+
+def record_last_injection(payload: dict[str, Any], *, stream_id: str | None = None, plugin_dir: Path | None = None) -> None:
     _LAST_INJECTION.clear()
     _LAST_INJECTION.update(payload)
-    if stream_id:
-        if len(_LAST_INJECTION_BY_STREAM) > 256:
-            _LAST_INJECTION_BY_STREAM.clear()
-        _LAST_INJECTION_BY_STREAM[stream_id] = dict(payload)
+
+    sid = stream_id or "global"
+    if len(_LAST_INJECTION_BY_STREAM) > 256:
+        _LAST_INJECTION_BY_STREAM.clear()
+    _LAST_INJECTION_BY_STREAM[sid] = dict(payload)
+
+    entry = dict(payload)
+    entry.setdefault("ts", _now_iso())
+    entry["stream_id"] = sid
+    _INJECTION_HISTORY.append(entry)
+    if len(_INJECTION_HISTORY_BY_STREAM) > 512:
+        _INJECTION_HISTORY_BY_STREAM.clear()
+    bucket = _INJECTION_HISTORY_BY_STREAM.get(sid)
+    if bucket is None:
+        bucket = deque(maxlen=400)
+        _INJECTION_HISTORY_BY_STREAM[sid] = bucket
+    bucket.append(entry)
+
+    if plugin_dir:
+        try:
+            path = plugin_dir / "data" / "injections.jsonl"
+            _append_jsonl(path, entry)
+            _trim_jsonl(path, max_bytes=2_000_000, max_lines=4_000)
+        except Exception:
+            pass
 
 
 def _format_uptime(seconds: float) -> str:
@@ -168,6 +229,20 @@ def create_soul_api_router(plugin) -> APIRouter:
     router = APIRouter(prefix="/api/v1/soul", tags=["soul"])
     plugin_dir = Path(plugin.plugin_dir)
 
+    def _public_mode() -> bool:
+        try:
+            return bool(plugin.get_config("api.public_mode", False))
+        except Exception:
+            return False
+
+    def _sanitize_injection_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        if not payload:
+            return {}
+        out = dict(payload)
+        out["picked"] = []
+        out.pop("cooldown_skipped", None)
+        return out
+
     @router.get("/spectrum")
     async def get_spectrum(x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
@@ -240,6 +315,9 @@ def create_soul_api_router(plugin) -> APIRouter:
         stream_id: str | None = None, x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")
     ) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
+        public_mode = _public_mode()
+        if public_mode:
+            stream_id = None
 
         from ..models.ideology_model import ThoughtSeed, CrystallizedTrait, init_tables
 
@@ -320,11 +398,152 @@ def create_soul_api_router(plugin) -> APIRouter:
                 }
             )
 
+        if public_mode:
+            for s in slots:
+                s["introspection"] = "（已隐藏）"
+                s["debug_params"] = None
+            for t in trait_cards:
+                t["evidence"] = []
+
         return {
             "slots": slots,
             "traits": trait_cards,
             "dissonance": {"active": False, "conflicting_thoughts": [], "severity": "low"},
         }
+
+    @router.get("/trait_merge_suggestions")
+    async def get_trait_merge_suggestions(
+        limit: int = 20,
+        threshold: float | None = None,
+        stream_id: str | None = None,
+        include_disabled: bool = False,
+        x_soul_token: str | None = Header(default=None, alias="X-Soul-Token"),
+    ) -> dict[str, Any]:
+        _require_token(plugin, x_soul_token)
+        if _public_mode():
+            if threshold is None:
+                try:
+                    threshold = float(plugin.get_config("thought_cabinet.auto_dedup_threshold", 0.78))
+                except Exception:
+                    threshold = 0.78
+            threshold = float(max(0.0, min(1.0, float(threshold))))
+            return {"threshold": threshold, "suggestions": [], "updated_at": _now_iso()}
+
+        from ..models.ideology_model import CrystallizedTrait, init_tables
+        from ..utils.trait_tags import parse_tags_json
+
+        init_tables()
+
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 20
+        limit = max(1, min(200, limit))
+
+        if threshold is None:
+            try:
+                threshold = float(plugin.get_config("thought_cabinet.auto_dedup_threshold", 0.78))
+            except Exception:
+                threshold = 0.78
+        threshold = float(max(0.0, min(1.0, float(threshold))))
+
+        query = CrystallizedTrait.select().where(CrystallizedTrait.deleted == False)  # noqa: E712
+        if not include_disabled:
+            query = query.where(CrystallizedTrait.enabled == True)  # noqa: E712
+
+        requested_sid = str(stream_id or "").strip()
+        if not requested_sid or requested_sid == "global":
+            requested_sid = ""
+        query = query.where(CrystallizedTrait.stream_id == requested_sid)
+
+        traits = list(query.order_by(CrystallizedTrait.created_at.desc()).limit(140))
+
+        import difflib
+
+        def _sim_text(a: str, b: str, *, max_len: int) -> float:
+            a = (a or "").strip()
+            b = (b or "").strip()
+            if not a or not b:
+                return 0.0
+            return float(difflib.SequenceMatcher(None, a[:max_len], b[:max_len]).ratio())
+
+        def _jaccard(a: list[str], b: list[str]) -> float:
+            sa = {x.casefold() for x in (a or []) if str(x).strip()}
+            sb = {x.casefold() for x in (b or []) if str(x).strip()}
+            if not sa or not sb:
+                return 0.0
+            return float(len(sa & sb) / len(sa | sb))
+
+        def _confidence(t: CrystallizedTrait) -> float:
+            try:
+                return float(getattr(t, "confidence", 0) or 0) / 100.0
+            except Exception:
+                return 0.0
+
+        def _tags(t: CrystallizedTrait) -> list[str]:
+            return parse_tags_json(getattr(t, "tags_json", "[]") or "[]")
+
+        suggestions: list[dict[str, Any]] = []
+        scope_stream_id = requested_sid or "global"
+
+        for i in range(len(traits)):
+            a = traits[i]
+            a_tags = _tags(a)
+            for j in range(i + 1, len(traits)):
+                b = traits[j]
+                b_tags = _tags(b)
+
+                tags_sim = _jaccard(a_tags, b_tags)
+                thought_sim = _sim_text(a.thought or "", b.thought or "", max_len=420)
+                question_sim = _sim_text(getattr(a, "question", "") or "", getattr(b, "question", "") or "", max_len=220)
+                text_sim = max(thought_sim, question_sim)
+                sim = (text_sim * 0.65) + (tags_sim * 0.35)
+
+                shared = sorted({x for x in a_tags if x.casefold() in {y.casefold() for y in b_tags}})
+                if sim < threshold:
+                    continue
+                if tags_sim <= 0.0 and text_sim < 0.92:
+                    continue
+
+                a_conf = _confidence(a)
+                b_conf = _confidence(b)
+
+                target, source = (a, b)
+                if b_conf > a_conf:
+                    target, source = (b, a)
+                elif b_conf == a_conf:
+                    a_ts = a.created_at.timestamp() if getattr(a, "created_at", None) else 0.0
+                    b_ts = b.created_at.timestamp() if getattr(b, "created_at", None) else 0.0
+                    target, source = (a, b) if a_ts <= b_ts else (b, a)
+
+                suggestions.append(
+                    {
+                        "source_trait_id": source.trait_id,
+                        "target_trait_id": target.trait_id,
+                        "similarity": round(sim, 4),
+                        "metrics": {"text": round(text_sim, 4), "tags": round(tags_sim, 4)},
+                        "shared_tags": shared[:16],
+                        "scope_stream_id": scope_stream_id,
+                        "source": {
+                            "id": source.trait_id,
+                            "name": source.name,
+                            "confidence": round(_confidence(source), 4),
+                            "created_at": source.created_at.isoformat() if getattr(source, "created_at", None) else _now_iso(),
+                            "tags": _tags(source),
+                        },
+                        "target": {
+                            "id": target.trait_id,
+                            "name": target.name,
+                            "confidence": round(_confidence(target), 4),
+                            "created_at": target.created_at.isoformat() if getattr(target, "created_at", None) else _now_iso(),
+                            "tags": _tags(target),
+                        },
+                        "merge_command": f"/soul_trait_merge {source.trait_id} {target.trait_id}",
+                    }
+                )
+
+        suggestions.sort(key=lambda x: (x.get("similarity", 0.0), x.get("scope_stream_id", "")), reverse=True)
+        return {"threshold": threshold, "suggestions": suggestions[:limit], "updated_at": _now_iso()}
 
     @router.get("/introspection")
     async def get_introspection(
@@ -333,8 +552,20 @@ def create_soul_api_router(plugin) -> APIRouter:
         x_soul_token: str | None = Header(default=None, alias="X-Soul-Token"),
     ) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
+        public_mode = _public_mode()
+        if public_mode:
+            stream_id = None
 
         fragments = _read_audit_fragments(plugin_dir, limit=limit, stream_id=stream_id)
+        if public_mode:
+            for f in fragments:
+                f["content"] = "[REDACTED]"
+                f["redacted"] = True
+                tags = f.get("tags") or []
+                if isinstance(tags, list) and tags:
+                    f["tags"] = [str(tags[0])]
+                else:
+                    f["tags"] = []
         return {"fragments": fragments, "next_injection": None, "updated_at": _now_iso()}
 
     @router.get("/fragments")
@@ -378,6 +609,8 @@ def create_soul_api_router(plugin) -> APIRouter:
     @router.get("/targets")
     async def get_targets(x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
+        if _public_mode():
+            return {"targets": [], "updated_at": _now_iso()}
 
         from ..utils.spectrum_utils import chat_config_to_stream_id, parse_chat_id
 
@@ -418,8 +651,48 @@ def create_soul_api_router(plugin) -> APIRouter:
         stream_id: str | None = None, x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")
     ) -> dict[str, Any]:
         _require_token(plugin, x_soul_token)
-        payload: dict[str, Any] = _LAST_INJECTION_BY_STREAM.get(stream_id, {}) if stream_id else _LAST_INJECTION
+        public_mode = _public_mode()
+        if public_mode:
+            stream_id = None
+        if stream_id and stream_id != "global":
+            payload: dict[str, Any] = _LAST_INJECTION_BY_STREAM.get(stream_id, {})
+        else:
+            payload = _LAST_INJECTION_BY_STREAM.get("global", {}) or _LAST_INJECTION
+        if public_mode:
+            payload = _sanitize_injection_payload(payload)
         return {"last_injection": payload, "updated_at": _now_iso()}
+
+    @router.get("/injections")
+    async def get_injections(
+        limit: int = 30,
+        stream_id: str | None = None,
+        x_soul_token: str | None = Header(default=None, alias="X-Soul-Token"),
+    ) -> dict[str, Any]:
+        _require_token(plugin, x_soul_token)
+        public_mode = _public_mode()
+        if public_mode:
+            stream_id = None
+
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 30
+        limit = max(1, min(200, limit))
+
+        if stream_id and stream_id != "global":
+            bucket = _INJECTION_HISTORY_BY_STREAM.get(stream_id)
+            entries = list(bucket) if bucket else []
+        else:
+            entries = list(_INJECTION_HISTORY)
+        if public_mode:
+            redacted: list[dict[str, Any]] = []
+            for e in entries:
+                out = _sanitize_injection_payload(e)
+                out.pop("stream_id", None)
+                redacted.append(out)
+            entries = redacted
+        entries = entries[-limit:][::-1]
+        return {"entries": entries, "updated_at": _now_iso()}
 
     @router.get("/health")
     async def get_health(x_soul_token: str | None = Header(default=None, alias="X-Soul-Token")) -> dict[str, Any]:

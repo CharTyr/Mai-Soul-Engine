@@ -168,10 +168,33 @@ tags 的来源：
 - `GET /api/v1/soul/pulse`
 - `GET /api/v1/soul/targets`
 - `GET /api/v1/soul/injection`
+- `GET /api/v1/soul/injections`
+- `GET /api/v1/soul/trait_merge_suggestions`
 - `GET /api/v1/soul/health`
 - `GET /api/v1/soul/export`
 
 默认注册到 **Core Server**：`http://HOST:PORT/api/v1/soul/*`
+
+### 版本与迁移（重要）
+
+本插件同时维护两类版本号：
+
+1) **插件版本（SemVer）**：`plugins/MaiBot_Soul_Engine/_manifest.json` 的 `version`
+- `MAJOR`：存在破坏性变更（配置键移除/语义变更、API 破坏性调整、数据库不可自动兼容的结构变更等）
+- `MINOR`：新增功能且保持向后兼容（新增可选配置/新增只读 API/新增字段等）
+- `PATCH`：仅修复 bug / 文档，不改变对外行为
+
+2) **API Schema 版本**：`plugins/MaiBot_Soul_Engine/webui/http_api.py` 的 `SCHEMA_VERSION`
+- 只要 **API 合同发生变化**（新增/修改字段、增加新端点等）就递增
+- 前端可通过 `GET /api/v1/soul/health` 的 `schema_version` 做兼容判断/提示更新
+
+#### 数据库迁移策略
+
+为保证“可迁移、可回滚”：
+
+- 所有数据库表结构变更都通过 `init_tables()` 执行 **幂等迁移**（仅 `ALTER TABLE ADD COLUMN`，并提供默认值）
+- 升级后首次运行会自动补齐缺失字段；旧数据不会丢失
+- 降级不会自动移除新字段（SQLite 不支持安全的列删除）；如需严格降级请备份数据库后手工处理
 
 #### 按群查看/切换（stream_id）
 
@@ -180,6 +203,8 @@ tags 的来源：
 - `GET /api/v1/soul/cabinet?stream_id=<stream_id>`
 - `GET /api/v1/soul/introspection?stream_id=<stream_id>`
 - `GET /api/v1/soul/injection?stream_id=<stream_id>`
+- `GET /api/v1/soul/injections?stream_id=<stream_id>`
+- `GET /api/v1/soul/trait_merge_suggestions?stream_id=<stream_id>`
 
 #### 鉴权
 
@@ -190,6 +215,7 @@ tags 的来源：
 [api]
 enabled = true
 token = ""  # 为空表示不启用 Token 校验；也可用环境变量 SOUL_API_TOKEN 覆盖
+public_mode = false # 公告展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）
 ```
 
 ### Soul Archive 前端（独立部署）

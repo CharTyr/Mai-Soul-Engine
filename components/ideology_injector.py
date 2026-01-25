@@ -87,11 +87,14 @@ class IdeologyInjector(BaseEventHandler):
         from ..utils.spectrum_utils import chat_config_to_stream_id
         from ..utils.trait_tags import parse_tags_json
         from datetime import datetime
+        from pathlib import Path
 
         if not self.get_config("admin.enabled", True):
             return True, True, None, None, message
         if not message or message.llm_prompt is None:
             return True, True, None, None, message
+
+        plugin_dir = Path(__file__).parent.parent
 
         stream_id = getattr(message, "stream_id", None) or getattr(getattr(message, "chat_stream", None), "stream_id", None)
         is_group = bool(getattr(message, "is_group_message", False))
@@ -107,6 +110,7 @@ class IdeologyInjector(BaseEventHandler):
             record_last_injection(
                 {"ts": datetime.now().isoformat(), "skipped": True, "reason": "private injection disabled", "policy": "disabled"},
                 stream_id=stream_id,
+                plugin_dir=plugin_dir,
             )
             return True, True, None, None, message
 
@@ -125,6 +129,7 @@ class IdeologyInjector(BaseEventHandler):
                         "policy": "disabled",
                     },
                     stream_id=stream_id,
+                    plugin_dir=plugin_dir,
                 )
                 return True, True, None, None, message
 
@@ -138,6 +143,7 @@ class IdeologyInjector(BaseEventHandler):
                             "policy": "disabled",
                         },
                         stream_id=stream_id,
+                        plugin_dir=plugin_dir,
                     )
                     return True, True, None, None, message
                 if not stream_id or stream_id not in monitored_ids:
@@ -149,6 +155,7 @@ class IdeologyInjector(BaseEventHandler):
                             "policy": "disabled",
                         },
                         stream_id=stream_id,
+                        plugin_dir=plugin_dir,
                     )
                     return True, True, None, None, message
 
@@ -292,6 +299,7 @@ class IdeologyInjector(BaseEventHandler):
                 "cooldown_skipped": cooldown_skipped[:20],
             },
             stream_id=stream_id,
+            plugin_dir=plugin_dir,
         )
         if selected:
             _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)

@@ -100,6 +100,11 @@ class MaiSoulEngine(BasePlugin):
                 default="",
                 description="访问令牌（可选）。前端请求头：X-Soul-Token；也可用环境变量 SOUL_API_TOKEN 覆盖",
             ),
+            "public_mode": ConfigField(
+                type=bool,
+                default=False,
+                description="公告展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）",
+            ),
         },
     }
 
