@@ -115,6 +115,11 @@ class MaiSoulEngine(BasePlugin):
                 description="Notion Integration Token（可选）。也可用环境变量 MAIBOT_SOUL_NOTION_TOKEN 覆盖",
             ),
             "database_id": ConfigField(type=str, default="", description="Notion 数据库 ID（复制链接取 32 位 ID）"),
+            "sync_spectrum": ConfigField(type=bool, default=True, description="是否同步意识形态光谱到 Notion（需要配置 spectrum_database_id）"),
+            "spectrum_database_id": ConfigField(
+                type=str, default="", description="Notion 光谱数据库 ID（复制链接取 32 位 ID，用于存放全局光谱）"
+            ),
+            "spectrum_scope_id": ConfigField(type=str, default="global", description="光谱记录 scope_id（默认 global）"),
             "sync_interval_seconds": ConfigField(type=int, default=600, description="同步间隔（秒，最小 60）"),
             "first_delay_seconds": ConfigField(type=int, default=5, description="启动后首次同步延迟（秒）"),
             "max_traits": ConfigField(type=int, default=200, description="单次最多同步的 trait 数量（按创建时间倒序）"),
@@ -135,6 +140,19 @@ class MaiSoulEngine(BasePlugin):
             "property_status": ConfigField(type=str, default="Status", description="status 字段名（select）"),
             "property_visibility": ConfigField(type=str, default="Visibility", description="visibility 字段名（select）"),
             "property_updated_at": ConfigField(type=str, default="UpdatedAt", description="updated_at 字段名（date）"),
+            "spectrum_property_title": ConfigField(type=str, default="Name", description="光谱数据库 Title 字段名"),
+            "spectrum_property_scope_id": ConfigField(type=str, default="ScopeId", description="scope_id 字段名（rich_text）"),
+            "spectrum_property_economic": ConfigField(type=str, default="Economic", description="economic 字段名（number 0-100）"),
+            "spectrum_property_social": ConfigField(type=str, default="Social", description="social 字段名（number 0-100）"),
+            "spectrum_property_diplomatic": ConfigField(
+                type=str, default="Diplomatic", description="diplomatic 字段名（number 0-100）"
+            ),
+            "spectrum_property_progressive": ConfigField(
+                type=str, default="Progressive", description="progressive 字段名（number 0-100）"
+            ),
+            "spectrum_property_initialized": ConfigField(type=str, default="Initialized", description="initialized 字段名（checkbox）"),
+            "spectrum_property_last_evolution": ConfigField(type=str, default="LastEvolution", description="last_evolution 字段名（date）"),
+            "spectrum_property_updated_at": ConfigField(type=str, default="UpdatedAt", description="updated_at 字段名（date）"),
         },
     }
 

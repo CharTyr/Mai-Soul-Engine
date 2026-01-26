@@ -30,7 +30,7 @@ class NotionFrontendSyncTask(BaseEventHandler):
         return True, True, None, None, message
 
     async def _sync_loop(self) -> None:
-        from ..utils.notion_frontend import build_notion_frontend_config, sync_traits_to_notion
+        from ..utils.notion_frontend import build_notion_frontend_config, sync_notion_frontend
 
         plugin_dir = Path(__file__).parent.parent
         first_run = True
@@ -45,7 +45,7 @@ class NotionFrontendSyncTask(BaseEventHandler):
                     await asyncio.sleep(cfg.first_delay_seconds)
                 first_run = False
 
-                res = await asyncio.to_thread(sync_traits_to_notion, plugin_dir=plugin_dir, cfg=cfg)
+                res = await asyncio.to_thread(sync_notion_frontend, plugin_dir=plugin_dir, cfg=cfg)
                 logger.debug("[Mai-Soul-Engine] Notion 同步结果: %s", res)
 
                 await asyncio.sleep(cfg.sync_interval_seconds)

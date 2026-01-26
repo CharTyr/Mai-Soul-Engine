@@ -40,16 +40,33 @@ class NotionPropertyMap:
 
 
 @dataclass(frozen=True)
+class NotionSpectrumPropertyMap:
+    title: str = "Name"
+    scope_id: str = "ScopeId"
+    economic: str = "Economic"
+    social: str = "Social"
+    diplomatic: str = "Diplomatic"
+    progressive: str = "Progressive"
+    initialized: str = "Initialized"
+    last_evolution: str = "LastEvolution"
+    updated_at: str = "UpdatedAt"
+
+
+@dataclass(frozen=True)
 class NotionFrontendConfig:
     enabled: bool
     token: str
     database_id: str
+    sync_spectrum: bool
+    spectrum_database_id: str
+    spectrum_scope_id: str
     sync_interval_seconds: int
     first_delay_seconds: int
     max_traits: int
     visibility_default: str
     never_overwrite_user_fields: bool
     property_map: NotionPropertyMap
+    spectrum_property_map: NotionSpectrumPropertyMap
     max_rich_text_chars: int = 1800
 
 
@@ -61,6 +78,16 @@ def _normalize_notion_id(raw: str) -> str:
 
 def _iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _iso_from_datetime(value: Any) -> str:
+    if not isinstance(value, datetime):
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat(timespec="seconds")
 
 
 def _safe_text(text: str, limit: int) -> str:
@@ -137,6 +164,10 @@ def _prop_multi_select(names: list[str]) -> dict[str, Any]:
     return {"multi_select": items}
 
 
+def _prop_checkbox(value: bool) -> dict[str, Any]:
+    return {"checkbox": bool(value)}
+
+
 def _prop_date(iso: str) -> dict[str, Any]:
     s = (iso or "").strip()
     if not s:
@@ -166,11 +197,22 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
         logger.warning("[Notion] 保存 state 失败: %s", e)
 
 
-def _query_trait_page_id(*, token: str, database_id: str, trait_id_property: str, trait_id: str) -> Optional[str]:
-    if not trait_id_property:
+def _query_page_id_by_rich_text_equals(
+    *,
+    token: str,
+    database_id: str,
+    property_name: str,
+    equals_value: str,
+) -> Optional[str]:
+    prop = (property_name or "").strip()
+    if not prop:
         return None
+    v = str(equals_value or "").strip()
+    if not v:
+        return None
+
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
-    payload = {"page_size": 1, "filter": {"property": trait_id_property, "rich_text": {"equals": trait_id}}}
+    payload = {"page_size": 1, "filter": {"property": prop, "rich_text": {"equals": v}}}
     data = _json_request("POST", url, token, payload)
     results = data.get("results")
     if not isinstance(results, list) or not results:
@@ -181,6 +223,15 @@ def _query_trait_page_id(*, token: str, database_id: str, trait_id_property: str
         if isinstance(pid, str) and pid.strip():
             return pid
     return None
+
+
+def _query_trait_page_id(*, token: str, database_id: str, trait_id_property: str, trait_id: str) -> Optional[str]:
+    return _query_page_id_by_rich_text_equals(
+        token=token,
+        database_id=database_id,
+        property_name=trait_id_property,
+        equals_value=trait_id,
+    )
 
 
 def _create_trait_page(*, token: str, database_id: str, properties: dict[str, Any]) -> str:
@@ -223,6 +274,10 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
 
     database_id = _normalize_notion_id(str(plugin.get_config(f"{section}.database_id", "") or ""))
 
+    sync_spectrum = bool(plugin.get_config(f"{section}.sync_spectrum", True))
+    spectrum_database_id = _normalize_notion_id(str(plugin.get_config(f"{section}.spectrum_database_id", "") or ""))
+    spectrum_scope_id = str(plugin.get_config(f"{section}.spectrum_scope_id", "global") or "global").strip() or "global"
+
     sync_interval_seconds = max(60, int(plugin.get_config(f"{section}.sync_interval_seconds", 600)))
     first_delay_seconds = max(0, int(plugin.get_config(f"{section}.first_delay_seconds", 5)))
     max_traits = max(0, int(plugin.get_config(f"{section}.max_traits", 200)))
@@ -244,16 +299,32 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
         updated_at=str(plugin.get_config(f"{section}.property_updated_at", "UpdatedAt") or "UpdatedAt"),
     )
 
+    spectrum_property_map = NotionSpectrumPropertyMap(
+        title=str(plugin.get_config(f"{section}.spectrum_property_title", "Name") or "Name"),
+        scope_id=str(plugin.get_config(f"{section}.spectrum_property_scope_id", "ScopeId") or "ScopeId"),
+        economic=str(plugin.get_config(f"{section}.spectrum_property_economic", "Economic") or "Economic"),
+        social=str(plugin.get_config(f"{section}.spectrum_property_social", "Social") or "Social"),
+        diplomatic=str(plugin.get_config(f"{section}.spectrum_property_diplomatic", "Diplomatic") or "Diplomatic"),
+        progressive=str(plugin.get_config(f"{section}.spectrum_property_progressive", "Progressive") or "Progressive"),
+        initialized=str(plugin.get_config(f"{section}.spectrum_property_initialized", "Initialized") or "Initialized"),
+        last_evolution=str(plugin.get_config(f"{section}.spectrum_property_last_evolution", "LastEvolution") or "LastEvolution"),
+        updated_at=str(plugin.get_config(f"{section}.spectrum_property_updated_at", "UpdatedAt") or "UpdatedAt"),
+    )
+
     return NotionFrontendConfig(
         enabled=enabled,
         token=token,
         database_id=database_id,
+        sync_spectrum=sync_spectrum,
+        spectrum_database_id=spectrum_database_id,
+        spectrum_scope_id=spectrum_scope_id,
         sync_interval_seconds=sync_interval_seconds,
         first_delay_seconds=first_delay_seconds,
         max_traits=max_traits,
         visibility_default=visibility_default,
         never_overwrite_user_fields=never_overwrite_user_fields,
         property_map=property_map,
+        spectrum_property_map=spectrum_property_map,
         max_rich_text_chars=max_rich_text_chars,
     )
 
@@ -383,7 +454,7 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
             errors.append({"trait_id": trait_id, "op": "update", "error": str(e)})
 
     state["trait_page_map"] = page_map
-    state["last_sync"] = now_iso
+    state["traits_last_sync"] = now_iso
     _save_state(state_path, state)
 
     result: dict[str, Any] = {
@@ -398,3 +469,103 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
         result["errors"] = errors[:20]
     return result
 
+
+def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
+    if not cfg.enabled or not cfg.sync_spectrum:
+        return {"enabled": False, "updated": False}
+
+    if not cfg.token:
+        logger.warning("[Notion] 未配置 token：请在配置中填写或设置环境变量 %s", NOTION_ENV_TOKEN)
+        return {"enabled": True, "updated": False, "error": "missing_token"}
+
+    if not cfg.spectrum_database_id:
+        return {"enabled": True, "updated": False, "error": "missing_spectrum_database_id"}
+
+    from ..models.ideology_model import get_or_create_spectrum, init_tables
+
+    init_tables()
+    spectrum = get_or_create_spectrum("global")
+
+    state_path = _state_file(plugin_dir)
+    state = _load_state(state_path)
+    spectrum_page_map = state.get("spectrum_page_map")
+    if not isinstance(spectrum_page_map, dict):
+        spectrum_page_map = {}
+
+    scope_id = cfg.spectrum_scope_id
+    page_id = spectrum_page_map.get(scope_id)
+    if isinstance(page_id, str):
+        page_id = page_id.strip()
+    else:
+        page_id = ""
+
+    now_iso = _iso_utc_now()
+
+    pm = cfg.spectrum_property_map
+    props_update: dict[str, Any] = {}
+    if pm.scope_id:
+        props_update[pm.scope_id] = _prop_rich_text(scope_id, 80)
+    if pm.economic:
+        props_update[pm.economic] = _prop_number(int(getattr(spectrum, "economic", 50) or 50))
+    if pm.social:
+        props_update[pm.social] = _prop_number(int(getattr(spectrum, "social", 50) or 50))
+    if pm.diplomatic:
+        props_update[pm.diplomatic] = _prop_number(int(getattr(spectrum, "diplomatic", 50) or 50))
+    if pm.progressive:
+        props_update[pm.progressive] = _prop_number(int(getattr(spectrum, "progressive", 50) or 50))
+    if pm.initialized:
+        props_update[pm.initialized] = _prop_checkbox(bool(getattr(spectrum, "initialized", False)))
+    if pm.last_evolution:
+        last_evolution_iso = _iso_from_datetime(getattr(spectrum, "last_evolution", None)) or ""
+        props_update[pm.last_evolution] = _prop_date(last_evolution_iso or now_iso)
+    if pm.updated_at:
+        props_update[pm.updated_at] = _prop_date(now_iso)
+
+    if not page_id:
+        page_id = _query_page_id_by_rich_text_equals(
+            token=cfg.token,
+            database_id=cfg.spectrum_database_id,
+            property_name=pm.scope_id,
+            equals_value=scope_id,
+        ) or ""
+        if page_id:
+            spectrum_page_map[scope_id] = page_id
+
+    created = False
+    if not page_id:
+        props_create = dict(props_update)
+        if pm.title:
+            props_create[pm.title] = _prop_title(f"Ideology Spectrum ({scope_id})")
+        try:
+            page_id = _create_trait_page(token=cfg.token, database_id=cfg.spectrum_database_id, properties=props_create)
+            spectrum_page_map[scope_id] = page_id
+            created = True
+        except Exception as e:
+            return {"enabled": True, "updated": False, "error": str(e)}
+
+    try:
+        _update_trait_page(token=cfg.token, page_id=page_id, properties=props_update)
+    except NotionAPIError as e:
+        if e.status == 404:
+            spectrum_page_map.pop(scope_id, None)
+        return {"enabled": True, "updated": False, "status": e.status, "code": e.code, "message": e.message}
+    except Exception as e:
+        return {"enabled": True, "updated": False, "error": str(e)}
+
+    state["spectrum_page_map"] = spectrum_page_map
+    state["spectrum_last_sync"] = now_iso
+    _save_state(state_path, state)
+
+    return {
+        "enabled": True,
+        "database_id": cfg.spectrum_database_id,
+        "page_id": page_id,
+        "created": created,
+        "updated": True,
+    }
+
+
+def sync_notion_frontend(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
+    traits_result = sync_traits_to_notion(plugin_dir=plugin_dir, cfg=cfg)
+    spectrum_result = sync_spectrum_to_notion(plugin_dir=plugin_dir, cfg=cfg)
+    return {"enabled": bool(cfg.enabled), "traits": traits_result, "spectrum": spectrum_result}

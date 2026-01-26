@@ -163,6 +163,14 @@ tags 的来源：
 
 ## WebUI 接口
 
+### 展示前端（可选部署）
+
+本插件的“展示前端”是**可选**的：不部署任何前端也不影响插件运行（光谱/traits 仍会注入影响回复风格）。  
+如需对外公共展示，你可以二选一：
+
+- **Mai‑Soul‑Archive**：独立静态站点（更像传统 WebUI）
+- **Notion**：插件同步到 Notion 数据库，你用 Notion 自建页面/视图做公共展示（更偏内容运营/外部分享）
+
 ### Soul HTTP API（生产对接用）
 
 插件会自动注册一组 HTTP 接口（匹配 `mai-soul-archive` 前端的 `/api/v1/soul/*` 合同）：
@@ -291,12 +299,12 @@ server {
 
 ### Notion 前端（公共展示，可选）
 
-如果你不想部署 `mai-soul-archive`，也可以让插件把 traits 同步到 Notion 数据库，然后在 Notion 里基于该数据库自己做公共展示页面（筛选/排序/分组/画廊）。
+如果你不想部署 `mai-soul-archive`，也可以让插件把 **traits + 意识形态光谱** 同步到 Notion 数据库，然后在 Notion 里基于数据库自己做公共展示页面（筛选/排序/分组/画廊）。
 
 #### 你需要在 Notion 侧准备什么
 
 1) 创建 Integration：`https://www.notion.so/my-integrations` → `New integration`  
-2) 新建一个 Notion 数据库（表），并创建字段（建议命名如下；如需改名，可在插件配置里改字段映射）：  
+2) 新建 **traits 数据库**（表），并创建字段（建议命名如下；如需改名，可在插件配置里改字段映射）：  
    - `Name`（Title）
    - `TraitId`（Rich text，用于去重/更新）
    - `Tags`（Multi-select）
@@ -307,8 +315,20 @@ server {
    - `Status`（Select：Active/Disabled/Deleted）
    - `Visibility`（Select：Public/Internal...）
    - `UpdatedAt`（Date）
-3) 将该数据库所在页面 **Share 给 Integration（Can edit）**  
-4) 获取 `database_id`：复制数据库链接，取其中 32 位 ID（带不带短横线都行）
+3) 新建 **光谱数据库**（表），并创建字段（用于展示意识形态光谱，建议独立数据库）：  
+   - `Name`（Title）
+   - `ScopeId`（Rich text，固定 `global`）
+   - `Economic`（Number，0-100）
+   - `Social`（Number，0-100）
+   - `Diplomatic`（Number，0-100）
+   - `Progressive`（Number，0-100）
+   - `Initialized`（Checkbox）
+   - `LastEvolution`（Date）
+   - `UpdatedAt`（Date）
+4) 将这两个数据库所在页面 **Share 给 Integration（Can edit）**  
+5) 获取 ID：
+   - `database_id`：traits 数据库 ID（复制链接取 32 位 ID，带不带短横线都行）
+   - `spectrum_database_id`：光谱数据库 ID
 
 #### 插件侧配置（推荐用环境变量放 token）
 
@@ -316,7 +336,9 @@ server {
 [notion]
 enabled = true
 database_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+spectrum_database_id = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
 token = "" # 推荐留空，使用环境变量 MAIBOT_SOUL_NOTION_TOKEN
+sync_spectrum = true
 visibility_default = "Public"         # 你的选择：新建时直接 Public
 never_overwrite_user_fields = true    # 你的选择：永不覆盖可编辑字段
 ```
@@ -329,6 +351,7 @@ never_overwrite_user_fields = true    # 你的选择：永不覆盖可编辑字�
 - **仅公共展示**：不会把聊天原文、evidence、注入命中细节等敏感信息写入 Notion，只同步 trait 的「公开结构化信息」。
 - **新建时直接 Public**：新 trait 首次写入时会设置 `Visibility=Public`（可在 Notion 侧手动改为 Internal 并用视图过滤）。
 - **永不覆盖可编辑字段**：一旦页面创建，插件不会再更新 `Name/Question/Thought/Visibility`，方便你在 Notion 里润色公开展示文案。
+- **光谱同步**：会在光谱数据库里 upsert 一条 `ScopeId=global` 的记录，用于展示四维光谱与是否已初始化。
 
 ### Python API（开发/调试用）
 

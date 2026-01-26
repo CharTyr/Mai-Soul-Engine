@@ -121,7 +121,7 @@ public_mode = false
 
 # Notion 前端展示（可选）
 # 说明：
-# - 把 traits 同步到 Notion 数据库，你可以在 Notion 里基于这个数据库做自己的公共展示页（过滤/排序/分组/画廊都行）
+# - 把 traits 与意识形态光谱同步到 Notion 数据库，你可以在 Notion 里基于数据库自建公共展示页（过滤/排序/分组/画廊都行）
 # - 强烈建议：token 使用环境变量 MAIBOT_SOUL_NOTION_TOKEN 提供，避免写入配置文件
 [notion]
 
@@ -133,6 +133,15 @@ token = ""
 
 # Notion 数据库 ID（复制链接取 32 位 ID，带不带短横线都行）
 database_id = ""
+
+# 是否同步意识形态光谱到 Notion（需要配置 spectrum_database_id）
+sync_spectrum = true
+
+# Notion 光谱数据库 ID（复制链接取 32 位 ID，用于存放全局光谱）
+spectrum_database_id = ""
+
+# 光谱记录 scope_id（默认 global）
+spectrum_scope_id = "global"
 
 # 同步间隔（秒，最小 60）
 sync_interval_seconds = 600
@@ -163,3 +172,14 @@ property_impact_score = "ImpactScore" # number
 property_status = "Status"         # select: Active/Disabled/Deleted
 property_visibility = "Visibility" # select: Public/Internal...
 property_updated_at = "UpdatedAt"  # date
+
+# 光谱数据库字段名映射（建议使用独立数据库）
+spectrum_property_title = "Name"            # Title
+spectrum_property_scope_id = "ScopeId"      # rich_text
+spectrum_property_economic = "Economic"     # number (0-100)
+spectrum_property_social = "Social"         # number (0-100)
+spectrum_property_diplomatic = "Diplomatic" # number (0-100)
+spectrum_property_progressive = "Progressive" # number (0-100)
+spectrum_property_initialized = "Initialized" # checkbox
+spectrum_property_last_evolution = "LastEvolution" # date
+spectrum_property_updated_at = "UpdatedAt"  # date

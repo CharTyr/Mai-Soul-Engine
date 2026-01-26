@@ -97,16 +97,20 @@
 
 ### 3.5 Notion 前端同步（数据库模式，可选）
 
-> 目标：把 traits 写入 Notion 数据库，你可以在 Notion 里基于该数据库做公共展示页面；该前端仅用于展示，不做管理后台。
+> 目标：把 **traits + 意识形态光谱** 写入 Notion 数据库，你可以在 Notion 里基于数据库自建公共展示页面；该前端仅用于展示，不做管理后台。
 
 - 入口：`components/notion_frontend_sync.py`（`EventType.ON_START` 启动 loop）
 - 同步实现：`utils/notion_frontend.py`（标准库 `urllib`，不引入额外依赖）
 - 配置：
   - `notion.enabled=true`
-  - `notion.database_id`：数据库 ID（32 位）
+  - `notion.database_id`：traits 数据库 ID（32 位）
+  - `notion.sync_spectrum=true` + `notion.spectrum_database_id`：光谱数据库 ID（32 位）
   - `notion.token` 或环境变量 `MAIBOT_SOUL_NOTION_TOKEN`
-  - 字段映射：`notion.property_*`（默认 `Name/TraitId/Tags/...`）
+  - 字段映射：
+    - traits：`notion.property_*`（默认 `Name/TraitId/Tags/...`）
+    - spectrum：`notion.spectrum_property_*`（默认 `Name/ScopeId/Economic/...`）
 - 去重/关联：以 `TraitId` 字段为主键（`rich_text equals trait_id`），并在 `data/notion_frontend_state.json` 缓存 `trait_id -> page_id` 映射，减少 query 成本。
+- 光谱 upsert：以 `ScopeId` 字段为主键（默认 `global`），维护 `Economic/Social/Diplomatic/Progressive/Initialized/LastEvolution/UpdatedAt`。
 - “永不覆盖可编辑字段”：
   - `notion.never_overwrite_user_fields=true` 时，插件仅在 **新建页面** 时写入 `Name/Question/Thought/Visibility`
   - 后续更新只维护 `Tags/Confidence/ImpactScore/Status/UpdatedAt`，方便你在 Notion 里润色公开文案。
