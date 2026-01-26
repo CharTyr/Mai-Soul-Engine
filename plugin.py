@@ -26,6 +26,7 @@ class MaiSoulEngine(BasePlugin):
         "injection": "注入设置",
         "thought_cabinet": "思维阁设置",
         "api": "API 设置",
+        "notion": "Notion 前端展示（可选）",
     }
 
     config_schema: dict = {
@@ -106,6 +107,35 @@ class MaiSoulEngine(BasePlugin):
                 description="公共展示模式：对外展示时减少/脱敏敏感字段（targets、evidence、注入细节等）",
             ),
         },
+        "notion": {
+            "enabled": ConfigField(type=bool, default=False, description="启用 Notion 数据库同步（公共展示前端，可选）"),
+            "token": ConfigField(
+                type=str,
+                default="",
+                description="Notion Integration Token（可选）。也可用环境变量 MAIBOT_SOUL_NOTION_TOKEN 覆盖",
+            ),
+            "database_id": ConfigField(type=str, default="", description="Notion 数据库 ID（复制链接取 32 位 ID）"),
+            "sync_interval_seconds": ConfigField(type=int, default=600, description="同步间隔（秒，最小 60）"),
+            "first_delay_seconds": ConfigField(type=int, default=5, description="启动后首次同步延迟（秒）"),
+            "max_traits": ConfigField(type=int, default=200, description="单次最多同步的 trait 数量（按创建时间倒序）"),
+            "visibility_default": ConfigField(type=str, default="Public", description="新建 trait 时默认 Visibility 值"),
+            "never_overwrite_user_fields": ConfigField(
+                type=bool,
+                default=True,
+                description="永不覆盖用户可编辑字段（Name/Question/Thought/Visibility）。仅在新建时写入",
+            ),
+            "max_rich_text_chars": ConfigField(type=int, default=1800, description="写入 Notion 的长文本最大长度（字符）"),
+            "property_title": ConfigField(type=str, default="Name", description="数据库 Title 字段名"),
+            "property_trait_id": ConfigField(type=str, default="TraitId", description="trait_id 字段名（rich_text）"),
+            "property_tags": ConfigField(type=str, default="Tags", description="tags 字段名（multi_select）"),
+            "property_question": ConfigField(type=str, default="Question", description="question 字段名（rich_text）"),
+            "property_thought": ConfigField(type=str, default="Thought", description="thought 字段名（rich_text）"),
+            "property_confidence": ConfigField(type=str, default="Confidence", description="confidence 字段名（number）"),
+            "property_impact_score": ConfigField(type=str, default="ImpactScore", description="impact_score 字段名（number）"),
+            "property_status": ConfigField(type=str, default="Status", description="status 字段名（select）"),
+            "property_visibility": ConfigField(type=str, default="Visibility", description="visibility 字段名（select）"),
+            "property_updated_at": ConfigField(type=str, default="UpdatedAt", description="updated_at 字段名（date）"),
+        },
     }
 
     def register_plugin(self) -> bool:
@@ -137,6 +167,7 @@ class MaiSoulEngine(BasePlugin):
         from .components.reset_command import ResetCommand
         from .components.ideology_injector import IdeologyInjector
         from .components.evolution_task import EvolutionTaskHandler
+        from .components.notion_frontend_sync import NotionFrontendSyncTask
         from .components.thought_commands import (
             SeedListCommand,
             SeedApproveCommand,
@@ -156,6 +187,7 @@ class MaiSoulEngine(BasePlugin):
             (ResetCommand.get_command_info(), ResetCommand),
             (IdeologyInjector.get_handler_info(), IdeologyInjector),
             (EvolutionTaskHandler.get_handler_info(), EvolutionTaskHandler),
+            (NotionFrontendSyncTask.get_handler_info(), NotionFrontendSyncTask),
             (SeedListCommand.get_command_info(), SeedListCommand),
             (SeedApproveCommand.get_command_info(), SeedApproveCommand),
             (SeedRejectCommand.get_command_info(), SeedRejectCommand),

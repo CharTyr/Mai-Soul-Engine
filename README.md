@@ -6,12 +6,17 @@
 
 ![Mai-Soul-Engine 示例](./image.png)
 
+## 开发文档
+
+维护者/二次开发请阅读：`plugins/MaiBot_Soul_Engine/DEVELOPMENT.md`。
+
 ## 功能特性
 
 - **问卷初始化**：20道问题设定初始灵魂光谱
 - **四维度光谱**：经济观、社会观、文化观、变革观
 - **动态演化**：周期性分析群聊内容，自动调整光谱
 - **提示词注入**：根据当前光谱向回复注入性格倾向
+- **Notion 展示（可选）**：将 traits 同步到 Notion 数据库，便于对外公共展示（你可在 Notion 里自建页面/视图）
 - **回弹机制**：光谱值超出边界时可反向变化
 - **EMA平滑**：防止光谱剧烈波动，变化更平稳
 - **隐私脱敏**：分析前自动过滤敏感信息
@@ -283,6 +288,47 @@ server {
 - **内网/同机部署**：`api.token` 为空，依赖网络边界（推荐起点）
 - **公网部署**：用反代统一同域，并对站点加登录/内网/VPN/BasicAuth 等访问控制；再启用 `api.token` 作为额外保护
   - 或者将 API 仅暴露在内网，通过网关统一鉴权（更推荐）
+
+### Notion 前端（公共展示，可选）
+
+如果你不想部署 `mai-soul-archive`，也可以让插件把 traits 同步到 Notion 数据库，然后在 Notion 里基于该数据库自己做公共展示页面（筛选/排序/分组/画廊）。
+
+#### 你需要在 Notion 侧准备什么
+
+1) 创建 Integration：`https://www.notion.so/my-integrations` → `New integration`  
+2) 新建一个 Notion 数据库（表），并创建字段（建议命名如下；如需改名，可在插件配置里改字段映射）：  
+   - `Name`（Title）
+   - `TraitId`（Rich text，用于去重/更新）
+   - `Tags`（Multi-select）
+   - `Question`（Rich text）
+   - `Thought`（Rich text）
+   - `Confidence`（Number，0-100）
+   - `ImpactScore`（Number）
+   - `Status`（Select：Active/Disabled/Deleted）
+   - `Visibility`（Select：Public/Internal...）
+   - `UpdatedAt`（Date）
+3) 将该数据库所在页面 **Share 给 Integration（Can edit）**  
+4) 获取 `database_id`：复制数据库链接，取其中 32 位 ID（带不带短横线都行）
+
+#### 插件侧配置（推荐用环境变量放 token）
+
+```toml
+[notion]
+enabled = true
+database_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+token = "" # 推荐留空，使用环境变量 MAIBOT_SOUL_NOTION_TOKEN
+visibility_default = "Public"         # 你的选择：新建时直接 Public
+never_overwrite_user_fields = true    # 你的选择：永不覆盖可编辑字段
+```
+
+环境变量示例：
+`MAIBOT_SOUL_NOTION_TOKEN="secret_xxx"`
+
+#### 同步策略（重要）
+
+- **仅公共展示**：不会把聊天原文、evidence、注入命中细节等敏感信息写入 Notion，只同步 trait 的「公开结构化信息」。
+- **新建时直接 Public**：新 trait 首次写入时会设置 `Visibility=Public`（可在 Notion 侧手动改为 Internal 并用视图过滤）。
+- **永不覆盖可编辑字段**：一旦页面创建，插件不会再更新 `Name/Question/Thought/Visibility`，方便你在 Notion 里润色公开展示文案。
 
 ### Python API（开发/调试用）
 
