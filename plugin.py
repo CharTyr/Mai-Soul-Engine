@@ -120,6 +120,11 @@ class MaiSoulEngine(BasePlugin):
                 type=str, default="", description="Notion 光谱数据库 ID（复制链接取 32 位 ID，用于存放全局光谱）"
             ),
             "spectrum_scope_id": ConfigField(type=str, default="global", description="光谱记录 scope_id（默认 global）"),
+            "spectrum_mode": ConfigField(
+                type=str,
+                default="dimension_rows",
+                description="光谱同步模式：dimension_rows=四行一个 Value（按 Dimension 分组）；single_row=单行四列（Economic/Social/...）",
+            ),
             "sync_interval_seconds": ConfigField(type=int, default=600, description="同步间隔（秒，最小 60）"),
             "first_delay_seconds": ConfigField(type=int, default=5, description="启动后首次同步延迟（秒）"),
             "max_traits": ConfigField(type=int, default=200, description="单次最多同步的 trait 数量（按创建时间倒序）"),
@@ -150,6 +155,7 @@ class MaiSoulEngine(BasePlugin):
             "spectrum_property_progressive": ConfigField(
                 type=str, default="Progressive", description="progressive 字段名（number 0-100）"
             ),
+            "spectrum_property_value": ConfigField(type=str, default="Value", description="dimension_rows 模式的 Value 字段名（number 0-100）"),
             "spectrum_property_initialized": ConfigField(type=str, default="Initialized", description="initialized 字段名（checkbox）"),
             "spectrum_property_last_evolution": ConfigField(type=str, default="LastEvolution", description="last_evolution 字段名（date）"),
             "spectrum_property_updated_at": ConfigField(type=str, default="UpdatedAt", description="updated_at 字段名（date）"),

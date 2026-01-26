@@ -174,12 +174,23 @@ property_visibility = "Visibility" # select: Public/Internal...
 property_updated_at = "UpdatedAt"  # date
 
 # 光谱数据库字段名映射（建议使用独立数据库）
-spectrum_property_title = "Name"            # Title
-spectrum_property_scope_id = "ScopeId"      # rich_text
+# 光谱同步模式：
+# - dimension_rows：四行一个 Value（你现在的表结构，Title=Dimension，按 Dimension 分组画图）
+# - single_row：单行四列（Economic/Social/...）
+spectrum_mode = "dimension_rows"
+
+# 光谱数据库字段名映射（dimension_rows）
+spectrum_property_title = "Dimension" # Title（第一列，建议就叫 Dimension）
+spectrum_property_scope_id = "ScopeId" # rich_text 或 select（插件会兼容）
+spectrum_property_value = "Value"      # number (0-100)
+
+# 光谱数据库字段名映射（single_row，兼容旧结构；dimension_rows 下可不填）
 spectrum_property_economic = "Economic"     # number (0-100)
 spectrum_property_social = "Social"         # number (0-100)
 spectrum_property_diplomatic = "Diplomatic" # number (0-100)
 spectrum_property_progressive = "Progressive" # number (0-100)
+
+# 以下字段为可选：数据库不存在也不会影响同步（若你建了就会写入）
 spectrum_property_initialized = "Initialized" # checkbox
 spectrum_property_last_evolution = "LastEvolution" # date
 spectrum_property_updated_at = "UpdatedAt"  # date

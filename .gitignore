@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 webui/dist/
 config.toml
+config.toml.bak.*

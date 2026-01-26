@@ -315,16 +315,13 @@ server {
    - `Status`（Select：Active/Disabled/Deleted）
    - `Visibility`（Select：Public/Internal...）
    - `UpdatedAt`（Date）
-3) 新建 **光谱数据库**（表），并创建字段（用于展示意识形态光谱，建议独立数据库）：  
-   - `Name`（Title）
-   - `ScopeId`（Rich text，固定 `global`）
-   - `Economic`（Number，0-100）
-   - `Social`（Number，0-100）
-   - `Diplomatic`（Number，0-100）
-   - `Progressive`（Number，0-100）
-   - `Initialized`（Checkbox）
-   - `LastEvolution`（Date）
-   - `UpdatedAt`（Date）
+3) 新建 **光谱数据库**（表），并创建字段（用于展示意识形态光谱，建议独立数据库，推荐你现在这种“4 行 + Value”的结构）：  
+   - `Dimension`（Title：Economic/Social/Diplomatic/Progressive 四行）
+   - `ScopeId`（Rich text 或 Select：固定 `global`）
+   - `Value`（Number：0-100）
+   - （可选）`UpdatedAt`（Date：同步时间）
+   - （可选）`Initialized`（Checkbox）
+   - （可选）`LastEvolution`（Date）
 4) 将这两个数据库所在页面 **Share 给 Integration（Can edit）**  
 5) 获取 ID：
    - `database_id`：traits 数据库 ID（复制链接取 32 位 ID，带不带短横线都行）
@@ -339,6 +336,7 @@ database_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 spectrum_database_id = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
 token = "" # 推荐留空，使用环境变量 MAIBOT_SOUL_NOTION_TOKEN
 sync_spectrum = true
+spectrum_mode = "dimension_rows"
 visibility_default = "Public"         # 你的选择：新建时直接 Public
 never_overwrite_user_fields = true    # 你的选择：永不覆盖可编辑字段
 ```

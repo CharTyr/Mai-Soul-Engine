@@ -47,6 +47,7 @@ class NotionSpectrumPropertyMap:
     social: str = "Social"
     diplomatic: str = "Diplomatic"
     progressive: str = "Progressive"
+    value: str = "Value"
     initialized: str = "Initialized"
     last_evolution: str = "LastEvolution"
     updated_at: str = "UpdatedAt"
@@ -60,6 +61,7 @@ class NotionFrontendConfig:
     sync_spectrum: bool
     spectrum_database_id: str
     spectrum_scope_id: str
+    spectrum_mode: str
     sync_interval_seconds: int
     first_delay_seconds: int
     max_traits: int
@@ -225,6 +227,53 @@ def _query_page_id_by_rich_text_equals(
     return None
 
 
+def _query_page_id_by_title_and_scope(
+    *,
+    token: str,
+    database_id: str,
+    title_property: str,
+    title_equals: str,
+    scope_property: str,
+    scope_equals: str,
+) -> Optional[str]:
+    title_property = (title_property or "").strip()
+    scope_property = (scope_property or "").strip()
+    title_equals = str(title_equals or "").strip()
+    scope_equals = str(scope_equals or "").strip()
+    if not (title_property and scope_property and title_equals and scope_equals):
+        return None
+
+    url = f"{NOTION_API_BASE}/databases/{database_id}/query"
+    filters = []
+
+    filters.append({"property": title_property, "title": {"equals": title_equals}})
+
+    # ScopeId 可能是 rich_text 或 select（用户在 Notion 侧怎么建都行），这里做兼容查询。
+    scope_filters = [
+        {"property": scope_property, "rich_text": {"equals": scope_equals}},
+        {"property": scope_property, "select": {"equals": scope_equals}},
+    ]
+
+    for scope_filter in scope_filters:
+        payload = {"page_size": 1, "filter": {"and": [*filters, scope_filter]}}
+        try:
+            data = _json_request("POST", url, token, payload)
+        except NotionAPIError as e:
+            if e.code == "validation_error":
+                continue
+            raise
+
+        results = data.get("results")
+        if not isinstance(results, list) or not results:
+            continue
+        first = results[0]
+        if isinstance(first, dict):
+            pid = first.get("id")
+            if isinstance(pid, str) and pid.strip():
+                return pid
+    return None
+
+
 def _query_trait_page_id(*, token: str, database_id: str, trait_id_property: str, trait_id: str) -> Optional[str]:
     return _query_page_id_by_rich_text_equals(
         token=token,
@@ -277,6 +326,7 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
     sync_spectrum = bool(plugin.get_config(f"{section}.sync_spectrum", True))
     spectrum_database_id = _normalize_notion_id(str(plugin.get_config(f"{section}.spectrum_database_id", "") or ""))
     spectrum_scope_id = str(plugin.get_config(f"{section}.spectrum_scope_id", "global") or "global").strip() or "global"
+    spectrum_mode = str(plugin.get_config(f"{section}.spectrum_mode", "dimension_rows") or "dimension_rows").strip()
 
     sync_interval_seconds = max(60, int(plugin.get_config(f"{section}.sync_interval_seconds", 600)))
     first_delay_seconds = max(0, int(plugin.get_config(f"{section}.first_delay_seconds", 5)))
@@ -306,6 +356,7 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
         social=str(plugin.get_config(f"{section}.spectrum_property_social", "Social") or "Social"),
         diplomatic=str(plugin.get_config(f"{section}.spectrum_property_diplomatic", "Diplomatic") or "Diplomatic"),
         progressive=str(plugin.get_config(f"{section}.spectrum_property_progressive", "Progressive") or "Progressive"),
+        value=str(plugin.get_config(f"{section}.spectrum_property_value", "Value") or "Value"),
         initialized=str(plugin.get_config(f"{section}.spectrum_property_initialized", "Initialized") or "Initialized"),
         last_evolution=str(plugin.get_config(f"{section}.spectrum_property_last_evolution", "LastEvolution") or "LastEvolution"),
         updated_at=str(plugin.get_config(f"{section}.spectrum_property_updated_at", "UpdatedAt") or "UpdatedAt"),
@@ -318,6 +369,7 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
         sync_spectrum=sync_spectrum,
         spectrum_database_id=spectrum_database_id,
         spectrum_scope_id=spectrum_scope_id,
+        spectrum_mode=spectrum_mode,
         sync_interval_seconds=sync_interval_seconds,
         first_delay_seconds=first_delay_seconds,
         max_traits=max_traits,
@@ -491,17 +543,152 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
     spectrum_page_map = state.get("spectrum_page_map")
     if not isinstance(spectrum_page_map, dict):
         spectrum_page_map = {}
+    spectrum_row_page_map = state.get("spectrum_row_page_map")
+    if not isinstance(spectrum_row_page_map, dict):
+        spectrum_row_page_map = {}
 
     scope_id = cfg.spectrum_scope_id
+
+    now_iso = _iso_utc_now()
+
+    pm = cfg.spectrum_property_map
+    mode = (cfg.spectrum_mode or "dimension_rows").strip().lower()
+    if mode not in {"dimension_rows", "single_row"}:
+        mode = "dimension_rows"
+
+    # 你要求的结构：四行（Dimension 为 Title），一个 Value 字段；ScopeId 用于区分 scope（默认 global）。
+    if mode == "dimension_rows":
+        dims: list[tuple[str, int]] = [
+            ("Economic", int(getattr(spectrum, "economic", 50) or 50)),
+            ("Social", int(getattr(spectrum, "social", 50) or 50)),
+            ("Diplomatic", int(getattr(spectrum, "diplomatic", 50) or 50)),
+            ("Progressive", int(getattr(spectrum, "progressive", 50) or 50)),
+        ]
+
+        created = 0
+        updated = 0
+        errors: list[dict[str, Any]] = []
+
+        for dim, value in dims:
+            key = f"{scope_id}:{dim}"
+            page_id = spectrum_row_page_map.get(key)
+            if isinstance(page_id, str):
+                page_id = page_id.strip()
+            else:
+                page_id = ""
+
+            def _build_props_update(*, scope_as_select: bool = False, include_optional: bool = True) -> dict[str, Any]:
+                props: dict[str, Any] = {}
+                if pm.value:
+                    props[pm.value] = _prop_number(int(value))
+                if pm.scope_id:
+                    props[pm.scope_id] = _prop_select(scope_id) if scope_as_select else _prop_rich_text(scope_id, 80)
+                if include_optional:
+                    if pm.updated_at:
+                        props[pm.updated_at] = _prop_date(now_iso)
+                return props
+
+            props_update = _build_props_update(scope_as_select=False, include_optional=True)
+
+            if not page_id:
+                try:
+                    page_id = _query_page_id_by_title_and_scope(
+                        token=cfg.token,
+                        database_id=cfg.spectrum_database_id,
+                        title_property=pm.title,
+                        title_equals=dim,
+                        scope_property=pm.scope_id,
+                        scope_equals=scope_id,
+                    ) or ""
+                except NotionAPIError as e:
+                    errors.append({"dimension": dim, "op": "query", "status": e.status, "code": e.code, "message": e.message})
+                    continue
+
+                if page_id:
+                    spectrum_row_page_map[key] = page_id
+
+            if not page_id:
+                create_attempts = [
+                    {"scope_as_select": False, "include_optional": True},
+                    {"scope_as_select": True, "include_optional": True},
+                    {"scope_as_select": False, "include_optional": False},
+                    {"scope_as_select": True, "include_optional": False},
+                ]
+                created_ok = False
+                last_err: Optional[dict[str, Any]] = None
+                for attempt in create_attempts:
+                    props_create = _build_props_update(**attempt)
+                    if pm.title:
+                        props_create[pm.title] = _prop_title(dim)
+                    try:
+                        page_id = _create_trait_page(token=cfg.token, database_id=cfg.spectrum_database_id, properties=props_create)
+                        spectrum_row_page_map[key] = page_id
+                        created += 1
+                        created_ok = True
+                        break
+                    except NotionAPIError as e:
+                        last_err = {"dimension": dim, "op": "create", "status": e.status, "code": e.code, "message": e.message}
+                        if e.code == "validation_error":
+                            continue
+                        break
+                    except Exception as e:
+                        last_err = {"dimension": dim, "op": "create", "error": str(e)}
+                        break
+                if not created_ok:
+                    errors.append(last_err or {"dimension": dim, "op": "create", "error": "unknown"})
+                    continue
+
+            try:
+                _update_trait_page(token=cfg.token, page_id=page_id, properties=props_update)
+                updated += 1
+            except NotionAPIError as e:
+                # 兼容 ScopeId/UpdatedAt 字段类型或缺失导致的 validation_error：自动降级重试
+                if e.code == "validation_error":
+                    retry_attempts = [
+                        _build_props_update(scope_as_select=True, include_optional=True),
+                        _build_props_update(scope_as_select=False, include_optional=False),
+                        _build_props_update(scope_as_select=True, include_optional=False),
+                    ]
+                    for retry_props in retry_attempts:
+                        try:
+                            _update_trait_page(token=cfg.token, page_id=page_id, properties=retry_props)
+                            updated += 1
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        if e.status == 404:
+                            spectrum_row_page_map.pop(key, None)
+                        errors.append({"dimension": dim, "op": "update", "status": e.status, "code": e.code, "message": e.message})
+                    continue
+                if e.status == 404:
+                    spectrum_row_page_map.pop(key, None)
+                errors.append({"dimension": dim, "op": "update", "status": e.status, "code": e.code, "message": e.message})
+            except Exception as e:
+                errors.append({"dimension": dim, "op": "update", "error": str(e)})
+
+        state["spectrum_row_page_map"] = spectrum_row_page_map
+        state["spectrum_last_sync"] = now_iso
+        _save_state(state_path, state)
+
+        result: dict[str, Any] = {
+            "enabled": True,
+            "database_id": cfg.spectrum_database_id,
+            "mode": "dimension_rows",
+            "created": created,
+            "updated": updated,
+        }
+        if errors:
+            result["errors"] = errors[:20]
+        return result
+
+    # 兼容旧结构：单行四列（Economic/Social/...），以 ScopeId 为主键。
     page_id = spectrum_page_map.get(scope_id)
     if isinstance(page_id, str):
         page_id = page_id.strip()
     else:
         page_id = ""
 
-    now_iso = _iso_utc_now()
-
-    pm = cfg.spectrum_property_map
     props_update: dict[str, Any] = {}
     if pm.scope_id:
         props_update[pm.scope_id] = _prop_rich_text(scope_id, 80)
@@ -559,6 +746,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
     return {
         "enabled": True,
         "database_id": cfg.spectrum_database_id,
+        "mode": "single_row",
         "page_id": page_id,
         "created": created,
         "updated": True,
