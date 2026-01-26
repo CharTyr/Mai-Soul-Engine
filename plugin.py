@@ -114,7 +114,9 @@ class MaiSoulEngine(BasePlugin):
                 default="",
                 description="Notion Integration Token（可选）。也可用环境变量 MAIBOT_SOUL_NOTION_TOKEN 覆盖",
             ),
-            "database_id": ConfigField(type=str, default="", description="Notion 数据库 ID（复制链接取 32 位 ID）"),
+            "database_id": ConfigField(
+                type=str, default="", description="Notion traits（思维阁 / Traits）数据库 ID（复制链接取 32 位 ID）"
+            ),
             "sync_spectrum": ConfigField(type=bool, default=True, description="是否同步意识形态光谱到 Notion（需要配置 spectrum_database_id）"),
             "spectrum_database_id": ConfigField(
                 type=str, default="", description="Notion 光谱数据库 ID（复制链接取 32 位 ID，用于存放全局光谱）"

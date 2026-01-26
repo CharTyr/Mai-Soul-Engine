@@ -304,7 +304,7 @@ server {
 #### 你需要在 Notion 侧准备什么
 
 1) 创建 Integration：`https://www.notion.so/my-integrations` → `New integration`  
-2) 新建 **traits 数据库**（表），并创建字段（建议命名如下；如需改名，可在插件配置里改字段映射）：  
+2) 新建 **traits 数据库（思维阁 / Traits）**（表），并创建字段（建议命名如下；如需改名，可在插件配置里改字段映射）：  
    - `Name`（Title）
    - `TraitId`（Rich text，用于去重/更新）
    - `Tags`（Multi-select）

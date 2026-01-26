@@ -131,13 +131,15 @@ enabled = false
 # Notion Integration Token（可留空，推荐用环境变量 MAIBOT_SOUL_NOTION_TOKEN）
 token = ""
 
-# Notion 数据库 ID（复制链接取 32 位 ID，带不带短横线都行）
+# Notion traits（思维阁 / Traits）数据库 ID（复制链接取 32 位 ID，带不带短横线都行）
+# 说明：这里存放的是“固化 trait”（来自思维阁审核内化后的观点），用于公共展示。
 database_id = ""
 
 # 是否同步意识形态光谱到 Notion（需要配置 spectrum_database_id）
 sync_spectrum = true
 
-# Notion 光谱数据库 ID（复制链接取 32 位 ID，用于存放全局光谱）
+# Notion 光谱数据库 ID（复制链接取 32 位 ID）
+# 说明：这里存放的是“光谱图表数据”（按维度拆分为多行），用于画图展示。
 spectrum_database_id = ""
 
 # 光谱记录 scope_id（默认 global）
@@ -161,7 +163,7 @@ never_overwrite_user_fields = true
 # 写入 Notion 的长文本最大长度（字符）
 max_rich_text_chars = 1800
 
-# Notion 数据库字段名映射（按你在 Notion 里创建的属性名来填）
+# traits（思维阁 / Traits）数据库字段名映射（按你在 Notion 里创建的属性名来填）
 property_title = "Name"            # Title
 property_trait_id = "TraitId"      # rich_text（用于去重/更新）
 property_tags = "Tags"             # multi_select
@@ -179,7 +181,7 @@ property_updated_at = "UpdatedAt"  # date
 # - single_row：单行四列（Economic/Social/...）
 spectrum_mode = "dimension_rows"
 
-# 光谱数据库字段名映射（dimension_rows）
+# 光谱数据库字段名映射（dimension_rows：你当前的结构，4 行 + Value）
 spectrum_property_title = "Dimension" # Title（第一列，建议就叫 Dimension）
 spectrum_property_scope_id = "ScopeId" # rich_text 或 select（插件会兼容）
 spectrum_property_value = "Value"      # number (0-100)

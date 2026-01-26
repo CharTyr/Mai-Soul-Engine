@@ -103,7 +103,7 @@
 - 同步实现：`utils/notion_frontend.py`（标准库 `urllib`，不引入额外依赖）
 - 配置：
   - `notion.enabled=true`
-  - `notion.database_id`：traits 数据库 ID（32 位）
+  - `notion.database_id`：traits（思维阁 / Traits）数据库 ID（32 位）
   - `notion.sync_spectrum=true` + `notion.spectrum_database_id`：光谱数据库 ID（32 位）
   - `notion.spectrum_mode`：`dimension_rows`（四行一个 Value）或 `single_row`（单行四列）
   - `notion.token` 或环境变量 `MAIBOT_SOUL_NOTION_TOKEN`
