@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class NotionFrontendSyncTask(BaseEventHandler):
     event_type = EventType.ON_START
     handler_name = "notion_frontend_sync"
-    handler_description = "同步 traits 到 Notion 数据库（公共展示，可选）"
+    handler_description = "同步 traits 与意识形态光谱到 Notion 数据库（公共展示，可选）"
     weight = 2
     intercept_message = False
 
