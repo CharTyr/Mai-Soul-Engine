@@ -56,6 +56,7 @@ cd /path/to/Maibot
 
 ## 参考
 
+- 升级计划与 P0 验收：`MIGRATION_PLAN.md`
 - 用户向：`README.md`
 - 变更：`CHANGELOG.md`
 - SDK 指南：https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md
