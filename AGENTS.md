@@ -139,7 +139,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 
 ### 状态卡片可视化（`/soul_dashboard` + `/soul_trait` + `/soul_inspect`，v2.2.0）
 
-三个命令把 Soul 引擎状态渲染成图片卡片发到聊天（非 Web 页面——SDK 无插件前端注册机制，WebUI 只能生成配置表单；此处用 `ctx.render.html2png` 把内联 HTML/CSS 经宿主无头浏览器渲染成 PNG，再 `ctx.send.image` 发图，零宿主改动）。三个卡片**共用 `dashboard_renderer.py` 的 `_wrap_html` CSS 底座**（深色靛紫/青绿调性），各自根容器 id：`#soul-dashboard`/`#soul-trait`/`#soul-inspect`。
+三个命令把 Soul 引擎状态渲染成图片卡片发到聊天（非 Web 页面——SDK 无插件前端注册机制，WebUI 只能生成配置表单；此处用 `ctx.render.html2png` 把内联 HTML/CSS 经宿主无头浏览器渲染成 PNG，再 `ctx.send.image` 发图，零宿主改动）。三个卡片**共用 `dashboard_renderer.py` 的 `_wrap_html` CSS 底座**（Raycast 暗色开发工具风格：四级表面梯 + hairline 边框 + 无 drop-shadow + Inter ss03 + 生命周期语义色 chip + 顶部红色 hero stripe），各自根容器 id：`#soul-dashboard`/`#soul-trait`/`#soul-inspect`。视觉规范见 `DESIGN-raycast.md`。
 
 - **`/soul_dashboard` 全状态总览**：`components/dashboard_data.py` 的 `collect_dashboard_data(plugin, stream_id)` 聚合光谱四轴/P1 三层 trait 计数/六态生命周期分布/情绪/本群切片/待审种子/最近演化/图谱边去重计数/功能开关。
 - **`/soul_trait <id>` 详情卡片**：`handle_trait_detail` 聚合单 trait 全信息（分层/生命周期/置信度/光谱影响/证据/图谱边）→ `render_trait` 出图。**边展示覆盖全部 5 种关系**（`derived_from`/`supports`/`contradicted_by`/`weakened_by`/`revised_by`，此前文本版只展示前 2 种，已修）。

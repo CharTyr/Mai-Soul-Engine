@@ -18,6 +18,10 @@
 - **技术决策**：SDK 无插件前端页面注册机制（WebUI 只能生成配置表单），故用 `ctx.render.html2png`（宿主无头浏览器）+ `ctx.send.image` 实现可视化，零宿主改动。参考同仓 `plugins/chat_summary/renderer.py` 的已验证范式。
 - **测试**：新增 `tests/test_dashboard_data.py`（3 项）+ `tests/test_dashboard_renderer.py`（4 项）+ `tests/test_trait_card.py`（5 项，含 5 种边类型回归保护）+ `tests/test_inspect_card.py`（5 项），共 48 项插件测试。
 
+### 视觉重构（开发侧）
+
+- 三卡片（dashboard/trait/inspect）视觉风格按 `DESIGN-raycast.md` 重构为 **Raycast 暗色开发工具风格**：四级表面梯（`#07080a`→`#0d0d0d`→`#101111`→`#121212`）+ hairline 1px 边框（`#242728`）+ **去除所有 drop-shadow**（深度只靠表面色阶）；圆角收紧到 4–16px；Inter 字体 + `ss03` stylistic set（`allow_network=False` 不引外链，字体栈 `"Inter", system-ui, "Noto Sans CJK SC", "Microsoft YaHei"` 保留 CJK fallback）；生命周期六态映射到 Raycast 语义色（有效/强化→green、过期→yellow、矛盾→red、弱化→orange、修正→blue，soft 底+实色 chip）；每卡片顶部一条红色斜条 hero stripe（`#ff5757`→`#a1131a`，遵守 one-band rule）；列表用 command-palette-row 风格。**纯视觉重构，数据契约/根容器 id/降级逻辑/测试断言均不变**，68 项测试全通过。
+
 ## [2.1.0] — dev 分支（P1 三观生长 + 光谱重构）
 
 ### 用户可感知

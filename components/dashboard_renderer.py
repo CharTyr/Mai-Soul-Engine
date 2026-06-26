@@ -233,13 +233,15 @@ class DashboardRenderer:
         body = f"""
         <article id="{_ROOT_ID}" class="dash">
           <header class="hero">
-            <div class="hero-main">
-              <div class="eyebrow">Mai Soul Engine</div>
-              <h1>Soul 引擎状态</h1>
-              <p class="meta">生成于 {escape(generated_at)} · 视角 {escape(perspective)}</p>
-              {init_badge}
+            <div class="hero-stripe" aria-hidden="true"></div>
+            <div class="hero-inner">
+              <div class="hero-main">
+                <div class="eyebrow">Mai Soul Engine</div>
+                <h1>Soul 引擎状态</h1>
+                <p class="meta">生成于 {escape(generated_at)} · 视角 {escape(perspective)}</p>
+                {init_badge}
+              </div>
             </div>
-            <div class="hero-glyph" aria-hidden="true">◈</div>
           </header>
 
           <section class="grid two">
@@ -396,13 +398,13 @@ class DashboardRenderer:
             reason = _dash_or(item.get("reason"), empty="（无说明）")
             cards.append(
                 f"""
-                <div class="evo-card">
+                <div class="palette-row">
                   <div class="evo-head">
                     <span>群 {escape(_dash_or(item.get("group_id")))}</span>
                     <span class="muted">{escape(_dash_or(item.get("timestamp")))}</span>
                   </div>
                   <div class="evo-deltas">{escape(delta_text)}</div>
-                  <p>{escape(reason)}</p>
+                  <p class="row-detail">{escape(reason)}</p>
                 </div>
                 """
             )
@@ -456,17 +458,19 @@ class DashboardRenderer:
         body = f"""
         <article id="{_TRAIT_ROOT_ID}" class="dash">
           <header class="hero hero-compact">
-            <div class="hero-main">
-              <div class="eyebrow">Trait Detail</div>
-              <h1 class="title-trait">{escape(name)}</h1>
-              <p class="meta">ID {short_id} · 来源 {escape(stream_display)} · 创建于 {escape(created)}</p>
-              <div class="badge-row">
-                {enable_badge}
-                <span class="badge badge-layer">{escape(layer_label)}</span>
-                {lc_chip}
+            <div class="hero-stripe" aria-hidden="true"></div>
+            <div class="hero-inner">
+              <div class="hero-main">
+                <div class="eyebrow">Trait Detail</div>
+                <h1 class="title-trait">{escape(name)}</h1>
+                <p class="meta">ID {short_id} · 来源 {escape(stream_display)} · 创建于 {escape(created)}</p>
+                <div class="badge-row">
+                  {enable_badge}
+                  <span class="badge badge-layer">{escape(layer_label)}</span>
+                  {lc_chip}
+                </div>
               </div>
             </div>
-            <div class="hero-glyph" aria-hidden="true">◇</div>
           </header>
 
           <section class="panel">
@@ -517,7 +521,7 @@ class DashboardRenderer:
         normalized = [str(t).strip() for t in tags if str(t).strip()]
         if not normalized:
             return '<div class="empty">暂无</div>'
-        items = "".join(f'<span class="tag">{escape(t)}</span>' for t in normalized)
+        items = "".join(f'<span class="keycap">{escape(t)}</span>' for t in normalized)
         return f'<div class="tags">{items}</div>'
 
     def _render_spectrum_impact(self, impact: dict[str, Any]) -> str:
@@ -554,7 +558,7 @@ class DashboardRenderer:
             target = _dash_or(edge.get("target"), empty="—")
             rows.append(
                 f"""
-                <div class="edge-row">
+                <div class="palette-row edge-palette-row">
                   <span class="edge-badge {css}">{escape(label)}</span>
                   <span class="edge-target">{escape(target)}</span>
                 </div>
@@ -579,19 +583,21 @@ class DashboardRenderer:
         skipped_block = self._render_inspect_skipped(skipped)
         footnote = (
             f"从 {total_active} 个活跃 trait 中按规则选出最多 {max_traits} 个 · "
-            f"模式 {escape(mode_label)}"
+            f"模式 {mode_label}"
         )
 
         body = f"""
         <article id="{_INSPECT_ROOT_ID}" class="dash">
           <header class="hero hero-compact">
-            <div class="hero-main">
-              <div class="eyebrow">Injection Inspect</div>
-              <h1>注入命中预览</h1>
-              <p class="meta">视角 {escape(perspective)}</p>
-              <span class="badge badge-mode">{escape(mode_label)}</span>
+            <div class="hero-stripe" aria-hidden="true"></div>
+            <div class="hero-inner">
+              <div class="hero-main">
+                <div class="eyebrow">Injection Inspect</div>
+                <h1>注入命中预览</h1>
+                <p class="meta">视角 {escape(perspective)}</p>
+                <span class="badge badge-mode">{escape(mode_label)}</span>
+              </div>
             </div>
-            <div class="hero-glyph" aria-hidden="true">◎</div>
           </header>
 
           <section class="panel">
@@ -609,7 +615,7 @@ class DashboardRenderer:
             {skipped_block}
           </section>
 
-          <p class="footnote footnote-block">{footnote}</p>
+          <p class="footnote footnote-block">{escape(footnote)}</p>
         </article>
         """
         return self._wrap_html(body)
@@ -632,7 +638,7 @@ class DashboardRenderer:
             tag_part = self._render_matched_tags(tags)
             cards.append(
                 f"""
-                <div class="hit-card">
+                <div class="palette-row palette-row-active hit-card">
                   <div class="hit-head">
                     <span class="hit-rank">#{idx}</span>
                     <span class="hit-name">{escape(name)}</span>
@@ -655,7 +661,7 @@ class DashboardRenderer:
         normalized = [str(t).strip() for t in tags if str(t).strip()]
         if not normalized:
             return '<div class="hit-tags empty-inline">未命中标签</div>'
-        items = "".join(f'<span class="tag tag-hit">{escape(t)}</span>' for t in normalized)
+        items = "".join(f'<span class="keycap keycap-hit">{escape(t)}</span>' for t in normalized)
         return f'<div class="hit-tags">{items}</div>'
 
     def _render_inspect_skipped(self, items: list[Any]) -> str:
@@ -685,152 +691,208 @@ class DashboardRenderer:
 <meta charset="utf-8" />
 <style>
 :root {{
-  --ink: #e8eaf6;
-  --ink-soft: rgba(232, 234, 246, 0.72);
-  --bg-deep: #12131f;
-  --card: rgba(28, 30, 48, 0.94);
-  --line: rgba(140, 150, 220, 0.22);
-  --accent: #7c6cf0;
-  --accent-2: #3dd6c5;
-  --warn: #f0a04b;
-  --bad: #e85d6c;
-  --good: #5fd38d;
-  --shadow: 0 28px 90px rgba(8, 10, 24, 0.55);
+  --ink: #f4f4f6;
+  --body: #cdcdcd;
+  --mute: #9c9c9d;
+  --ash: #6a6b6c;
+  --canvas: #07080a;
+  --surface: #0d0d0d;
+  --surface-elevated: #101111;
+  --surface-card: #121212;
+  --hairline: #242728;
+  --hairline-soft: rgba(255,255,255,0.08);
+  --hairline-strong: rgba(255,255,255,0.16);
+  --accent-blue: #57c1ff;
+  --accent-blue-soft: rgba(87,193,255,0.15);
+  --accent-red: #ff6161;
+  --accent-red-soft: rgba(255,97,97,0.15);
+  --accent-green: #59d499;
+  --accent-green-soft: rgba(89,212,153,0.15);
+  --accent-yellow: #ffc533;
+  --accent-yellow-soft: rgba(255,197,51,0.15);
+  --hero-stripe-start: #ff5757;
+  --hero-stripe-end: #a1131a;
+  --key-bg-start: #121212;
+  --key-bg-end: #0d0d0d;
 }}
 * {{ box-sizing: border-box; }}
 body {{
   margin: 0;
-  padding: 32px;
-  color: var(--ink);
-  font-family: "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  background:
-    radial-gradient(circle at 12% 8%, rgba(124, 108, 240, 0.35), transparent 38%),
-    radial-gradient(circle at 88% 12%, rgba(61, 214, 197, 0.22), transparent 32%),
-    linear-gradient(145deg, #0d0e18 0%, #171a2b 55%, #10121c 100%);
+  padding: 24px;
+  color: var(--body);
+  font-family: "Inter", "Inter Fallback", system-ui, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-feature-settings: "calt", "kern", "liga", "ss03";
+  font-size: 16px;
+  line-height: 1.6;
+  background: var(--canvas);
 }}
 .dash {{
   width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  padding: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 28px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.04), transparent), var(--card);
-  box-shadow: var(--shadow);
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
 }}
 .hero {{
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 20px;
-  padding: 26px 28px;
-  border-radius: 22px;
-  background: linear-gradient(120deg, rgba(124,108,240,0.28), rgba(61,214,197,0.12));
-  border: 1px solid var(--line);
-  margin-bottom: 18px;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-elevated);
 }}
+.hero-stripe {{
+  height: 6px;
+  background:
+    repeating-linear-gradient(
+      105deg,
+      var(--hero-stripe-start) 0px,
+      var(--hero-stripe-end) 28px,
+      transparent 28px,
+      transparent 36px
+    ),
+    linear-gradient(90deg, var(--hero-stripe-start), var(--hero-stripe-end));
+  opacity: 0.95;
+}}
+.hero-inner {{
+  padding: 16px 20px;
+}}
+.hero-compact .hero-inner {{ padding: 14px 18px; }}
+.hero-main {{ min-width: 0; }}
 .eyebrow {{
-  font-size: 13px;
-  letter-spacing: 0.2em;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
-  color: var(--accent-2);
+  color: var(--mute);
 }}
 h1 {{
-  margin: 6px 0 8px;
-  font-size: 36px;
-  letter-spacing: -0.03em;
+  margin: 4px 0 6px;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: 0;
+  color: var(--ink);
 }}
+.title-trait {{ font-size: 20px; }}
 .meta {{
-  margin: 0 0 12px;
-  font-size: 15px;
-  color: var(--ink-soft);
-}}
-.hero-glyph {{
-  font-size: 42px;
-  color: var(--accent);
-  opacity: 0.85;
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--mute);
 }}
 .badge {{
   display: inline-flex;
-  padding: 8px 14px;
-  border-radius: 999px;
-  font-size: 14px;
-  font-weight: 700;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--hairline);
 }}
 .badge-ok {{
-  background: rgba(95, 211, 141, 0.18);
-  color: #b8f5d0;
-  border: 1px solid rgba(95, 211, 141, 0.35);
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+  border-color: transparent;
 }}
 .badge-alert {{
-  background: rgba(232, 93, 108, 0.2);
-  color: #ffc4cb;
-  border: 1px solid rgba(232, 93, 108, 0.45);
+  background: var(--accent-red-soft);
+  color: var(--accent-red);
+  border-color: transparent;
+}}
+.badge-muted {{
+  background: var(--surface-card);
+  color: var(--ash);
+  border-color: var(--hairline);
+}}
+.badge-layer {{
+  background: var(--accent-blue-soft);
+  color: var(--accent-blue);
+  border-color: transparent;
+}}
+.badge-mode {{
+  background: var(--accent-blue-soft);
+  color: var(--accent-blue);
+  border-color: transparent;
+}}
+.badge-row {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }}
 .grid {{
   display: grid;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }}
 .grid.two {{ grid-template-columns: 1fr 1fr; }}
 .grid.three {{ grid-template-columns: 1fr 1fr 1fr; }}
 .panel {{
-  padding: 20px 22px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--line);
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
 }}
 .panel-dim {{ opacity: 0.92; }}
-.label {{
-  margin-bottom: 12px;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  color: var(--accent-2);
+.panel-accent {{
+  background: var(--surface-elevated);
+  border-color: var(--hairline-strong);
 }}
-.label.sub {{ margin-top: 14px; }}
-.bars {{ display: grid; gap: 12px; }}
+.label {{
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  color: var(--mute);
+}}
+.label.sub {{ margin-top: 12px; }}
+.bars {{ display: grid; gap: 8px; }}
 .bar-row {{
   display: grid;
   grid-template-columns: 52px 1fr 40px;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }}
-.bar-name {{ font-size: 14px; color: var(--ink-soft); }}
+.bar-row-wide {{ grid-template-columns: 48px 1fr 52px; }}
+.bar-name {{ font-size: 14px; color: var(--mute); }}
 .bar-track {{
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.08);
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
   overflow: hidden;
 }}
 .bar-fill {{
   height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 3px;
+  background: var(--accent-blue);
 }}
-.bar-val {{ font-weight: 700; font-size: 15px; text-align: right; }}
+.bar-val {{ font-weight: 500; font-size: 14px; text-align: right; color: var(--ink); }}
 .stat-grid {{
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 8px;
 }}
 .stat-card {{
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(124, 108, 240, 0.12);
-  border: 1px solid rgba(124, 108, 240, 0.25);
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--hairline);
   text-align: center;
 }}
 .stat-card strong {{
   display: block;
-  font-size: 28px;
-  color: #c4b8ff;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--ink);
 }}
-.stat-card span {{ font-size: 13px; color: var(--ink-soft); }}
+.stat-card span {{ font-size: 13px; color: var(--mute); }}
 .divider {{
   height: 1px;
-  margin: 14px 0;
-  background: var(--line);
+  margin: 12px 0;
+  background: var(--hairline);
 }}
 .chips {{
   display: flex;
@@ -839,292 +901,272 @@ h1 {{
 }}
 .chip {{
   display: inline-flex;
-  gap: 6px;
-  padding: 7px 11px;
-  border-radius: 999px;
-  font-size: 13px;
-  border: 1px solid var(--line);
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid transparent;
 }}
-.chip b {{ font-weight: 800; }}
-.lc-active {{ background: rgba(95,211,141,0.12); color: #b8f5d0; }}
-.lc-strong {{ background: rgba(61,214,197,0.14); color: #aaf5ec; }}
-.lc-expired {{ background: rgba(160,170,200,0.12); color: #c5cbe0; }}
-.lc-bad {{ background: rgba(232,93,108,0.16); color: #ffc4cb; }}
-.lc-warn {{ background: rgba(240,160,75,0.16); color: #ffe0b8; }}
-.lc-revised {{ background: rgba(124,108,240,0.16); color: #d5ccff; }}
+.chip b {{ font-weight: 600; }}
+.lc-active {{ background: var(--accent-green-soft); color: var(--accent-green); }}
+.lc-strong {{ background: var(--accent-green-soft); color: var(--accent-green); }}
+.lc-expired {{ background: var(--accent-yellow-soft); color: var(--accent-yellow); }}
+.lc-bad {{ background: var(--accent-red-soft); color: var(--accent-red); }}
+.lc-warn {{ background: var(--accent-yellow-soft); color: var(--accent-yellow); }}
+.lc-revised {{ background: var(--accent-blue-soft); color: var(--accent-blue); }}
 .trait-total {{
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   font-size: 14px;
-  color: var(--ink-soft);
+  color: var(--mute);
 }}
-.trait-total strong {{ color: var(--ink); font-size: 18px; }}
-.bipolar {{ display: grid; gap: 10px; }}
+.trait-total strong {{ color: var(--ink); font-size: 16px; font-weight: 500; }}
+.bipolar {{ display: grid; gap: 8px; }}
 .bipolar-row {{
   display: grid;
   grid-template-columns: 52px 1fr 40px;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }}
 .bipolar-track {{
   position: relative;
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.08);
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
 }}
 .bipolar-mid {{
   position: absolute;
   left: 50%;
-  top: -2px;
-  width: 2px;
-  height: 14px;
-  background: rgba(255,255,255,0.35);
+  top: -1px;
+  width: 1px;
+  height: 10px;
+  background: var(--hairline-strong);
   transform: translateX(-50%);
 }}
 .bipolar-fill {{
   position: absolute;
   top: 1px;
-  width: 8px;
-  height: 8px;
-  margin-left: -4px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
   border-radius: 50%;
-  background: var(--accent-2);
-  box-shadow: 0 0 10px rgba(61,214,197,0.6);
+  background: var(--accent-blue);
 }}
 .slice-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
 .slice-row {{
   display: flex;
   justify-content: space-between;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.04);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--surface-card);
   font-size: 14px;
+  color: var(--body);
 }}
 .thought-box {{
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 88px;
+  min-height: 72px;
 }}
 .big-num {{
-  font-size: 40px;
-  font-weight: 800;
-  color: #c4b8ff;
+  font-size: 32px;
+  font-weight: 500;
+  color: var(--ink);
   line-height: 1;
 }}
-.big-label {{ font-size: 14px; color: var(--ink-soft); margin-top: 6px; }}
-.evo-stack {{ display: grid; gap: 10px; }}
-.evo-card {{
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid var(--line);
+.big-label {{ font-size: 13px; color: var(--mute); margin-top: 4px; }}
+.evo-stack {{ display: grid; gap: 6px; }}
+.palette-row {{
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+}}
+.palette-row-active {{
+  background: var(--surface-card);
+  border-color: var(--hairline);
+}}
+.edge-palette-row {{
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
 }}
 .evo-head {{
   display: flex;
   justify-content: space-between;
   font-size: 13px;
-  color: var(--ink-soft);
-  margin-bottom: 6px;
+  color: var(--mute);
+  margin-bottom: 4px;
 }}
 .evo-deltas {{
-  font-size: 14px;
-  font-weight: 700;
-  color: #d5ccff;
-  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-blue);
+  margin-bottom: 4px;
 }}
-.evo-card p {{
+.row-detail {{
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
-  color: var(--ink);
+  color: var(--body);
 }}
-.muted {{ opacity: 0.85; }}
+.muted {{ color: var(--mute); }}
 .footnote {{
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   font-size: 12px;
-  color: var(--ink-soft);
+  color: var(--mute);
 }}
+.footnote-block {{ margin: 0 4px 4px; padding: 0 4px; }}
 .empty {{
-  font-size: 15px;
-  color: var(--ink-soft);
-  padding: 8px 0;
+  font-size: 14px;
+  color: var(--mute);
+  padding: 6px 0;
 }}
 .flags {{
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }}
 .flag {{
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 999px;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
   font-size: 13px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hairline);
+  background: var(--surface-elevated);
 }}
 .flag.on {{
-  background: rgba(95, 211, 141, 0.12);
-  border-color: rgba(95, 211, 141, 0.35);
+  background: var(--accent-green-soft);
+  border-color: transparent;
 }}
 .flag.off {{
-  background: rgba(255,255,255,0.04);
-  opacity: 0.85;
+  background: var(--surface-card);
+  opacity: 0.9;
 }}
-.flag-name {{ color: var(--ink-soft); }}
-.flag-state {{ font-weight: 800; }}
+.flag-name {{ color: var(--mute); }}
+.flag-state {{ font-weight: 500; color: var(--ink); }}
+.flag.off .flag-state {{ color: var(--ash); }}
 .panel-flags {{ margin-bottom: 0; }}
-.badge-muted {{
-  background: rgba(160, 170, 200, 0.14);
-  color: #c5cbe0;
-  border: 1px solid rgba(160, 170, 200, 0.35);
-}}
-.badge-layer {{
-  background: rgba(124, 108, 240, 0.2);
-  color: #d5ccff;
-  border: 1px solid rgba(124, 108, 240, 0.4);
-}}
-.badge-mode {{
-  background: rgba(61, 214, 197, 0.16);
-  color: #aaf5ec;
-  border: 1px solid rgba(61, 214, 197, 0.35);
-}}
-.badge-row {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}}
-.hero-compact {{ margin-bottom: 16px; }}
-.title-trait {{ font-size: 30px; line-height: 1.2; }}
-.bar-row-wide {{ grid-template-columns: 48px 1fr 52px; }}
-.panel-accent {{
-  background: linear-gradient(135deg, rgba(124,108,240,0.12), rgba(255,255,255,0.03));
-  border-color: rgba(124, 108, 240, 0.28);
-}}
 .body-text {{
   margin: 0;
   font-size: 16px;
-  line-height: 1.65;
+  line-height: 1.6;
+  color: var(--body);
 }}
 .thought-body {{
   margin: 0;
   font-size: 18px;
-  line-height: 1.72;
-  font-weight: 600;
-  color: #e8e4ff;
+  line-height: 1.6;
+  font-weight: 500;
+  color: var(--ink);
 }}
 .tags {{
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }}
-.tag {{
+.keycap {{
   display: inline-flex;
-  padding: 6px 12px;
-  border-radius: 999px;
+  align-items: center;
+  padding: 1px 6px;
+  height: 20px;
+  border-radius: 4px;
   font-size: 13px;
-  font-weight: 600;
-  background: rgba(124, 108, 240, 0.18);
-  color: #d5ccff;
-  border: 1px solid rgba(124, 108, 240, 0.3);
+  font-weight: 500;
+  color: var(--body);
+  background: linear-gradient(180deg, var(--key-bg-start), var(--key-bg-end));
+  border: 1px solid var(--hairline);
 }}
-.tag-hit {{
-  background: rgba(61, 214, 197, 0.2);
-  color: #aaf5ec;
-  border-color: rgba(61, 214, 197, 0.45);
+.keycap-hit {{
+  color: var(--accent-green);
+  border-color: var(--hairline-strong);
 }}
 .impact-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
 .impact-chip {{
-  padding: 8px 12px;
-  border-radius: 12px;
-  font-size: 14px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid var(--line);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  color: var(--body);
 }}
-.impact-chip strong {{ color: #c4b8ff; margin-left: 4px; }}
-.list-body {{ margin: 0; padding-left: 20px; }}
-.list-body li {{ margin: 8px 0; font-size: 15px; line-height: 1.55; }}
-.edge-stack {{ display: grid; gap: 10px; }}
-.edge-row {{
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  align-items: start;
-}}
+.impact-chip strong {{ color: var(--accent-blue); margin-left: 4px; font-weight: 500; }}
+.list-body {{ margin: 0; padding-left: 18px; color: var(--body); }}
+.list-body li {{ margin: 6px 0; font-size: 14px; line-height: 1.55; }}
+.edge-stack {{ display: grid; gap: 6px; }}
 .edge-badge {{
   display: inline-flex;
-  padding: 5px 10px;
-  border-radius: 999px;
+  padding: 2px 8px;
+  border-radius: 4px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
 }}
-.edge-derived {{ background: rgba(124,108,240,0.14); color: #d5ccff; }}
-.edge-support {{ background: rgba(95,211,141,0.12); color: #b8f5d0; }}
-.edge-bad {{ background: rgba(232,93,108,0.16); color: #ffc4cb; }}
-.edge-warn {{ background: rgba(240,160,75,0.16); color: #ffe0b8; }}
-.edge-revised {{ background: rgba(124,108,240,0.16); color: #d5ccff; }}
-.edge-target {{ font-size: 14px; color: var(--ink-soft); word-break: break-all; }}
+.edge-derived {{ background: var(--accent-blue-soft); color: var(--accent-blue); }}
+.edge-support {{ background: var(--accent-green-soft); color: var(--accent-green); }}
+.edge-bad {{ background: var(--accent-red-soft); color: var(--accent-red); }}
+.edge-warn {{ background: var(--accent-yellow-soft); color: var(--accent-yellow); }}
+.edge-revised {{ background: var(--accent-blue-soft); color: var(--accent-blue); }}
+.edge-target {{ font-size: 14px; color: var(--mute); word-break: break-all; }}
 .query-block {{
   margin: 0;
-  padding: 16px 18px;
-  border-left: 4px solid var(--accent);
-  border-radius: 0 14px 14px 0;
-  background: rgba(255,255,255,0.05);
-  font-size: 17px;
-  line-height: 1.65;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent-blue);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-elevated);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--body);
 }}
-.hit-stack {{ display: grid; gap: 12px; }}
-.hit-card {{
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid var(--line);
-}}
+.hit-stack {{ display: grid; gap: 8px; }}
+.hit-card {{ padding: 10px 12px; }}
 .hit-head {{
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: baseline;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }}
-.hit-rank {{ font-size: 18px; font-weight: 800; color: var(--accent-2); }}
-.hit-name {{ font-size: 18px; font-weight: 700; }}
-.hit-id {{ font-size: 13px; }}
+.hit-rank {{ font-size: 14px; font-weight: 600; color: var(--accent-blue); }}
+.hit-name {{ font-size: 16px; font-weight: 500; color: var(--ink); }}
+.hit-id {{ font-size: 12px; }}
 .hit-badges {{
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }}
 .hit-metric {{
-  font-size: 13px;
-  color: var(--ink-soft);
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+  color: var(--mute);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--hairline);
 }}
-.hit-tags {{ margin-bottom: 8px; }}
-.empty-inline {{ font-size: 13px; color: var(--ink-soft); }}
-.hit-thought {{ margin: 0; font-size: 15px; line-height: 1.55; color: var(--ink-soft); }}
-.skip-stack {{ display: grid; gap: 8px; }}
+.hit-tags {{ margin-bottom: 6px; }}
+.empty-inline {{ font-size: 13px; color: var(--mute); }}
+.hit-thought {{ margin: 0; font-size: 14px; line-height: 1.55; color: var(--mute); }}
+.skip-stack {{ display: grid; gap: 6px; }}
 .skip-row {{
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.03);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
   font-size: 14px;
-  opacity: 0.88;
+  opacity: 0.85;
 }}
-.skip-name {{ color: var(--ink-soft); }}
-.skip-reason {{ color: var(--warn); font-weight: 600; text-align: right; }}
-.footnote-block {{ margin: 0 4px 8px; padding: 0 8px; }}
+.skip-name {{ color: var(--ash); }}
+.skip-reason {{ color: var(--accent-yellow); font-weight: 500; text-align: right; }}
 </style>
 </head>
 <body>{body}</body>
