@@ -89,7 +89,7 @@ def _trait_impact_score(trait) -> float:
         if not isinstance(impact, dict):
             return 0.0
         score = 0.0
-        for k in ("economic", "social", "diplomatic", "progressive"):
+        for k in ("sincerity", "engagement", "closeness", "directness"):
             try:
                 score += abs(float(impact.get(k, 0) or 0))
             except Exception:
@@ -229,10 +229,10 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         return {"success": True, "action": "continue"}
 
     spectrum_dict = {
-        "economic": spectrum.economic,
-        "social": spectrum.social,
-        "diplomatic": spectrum.diplomatic,
-        "progressive": spectrum.progressive,
+        "sincerity": spectrum.sincerity,
+        "engagement": spectrum.engagement,
+        "closeness": spectrum.closeness,
+        "directness": spectrum.directness,
     }
 
     custom_prompts = dict(plugin.config.threshold.custom_prompts or {})

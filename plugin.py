@@ -288,10 +288,10 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         return {
             "success": True,
             "spectrum": {
-                "economic": spectrum.economic,
-                "social": spectrum.social,
-                "diplomatic": spectrum.diplomatic,
-                "progressive": spectrum.progressive,
+                "sincerity": spectrum.sincerity,
+                "engagement": spectrum.engagement,
+                "closeness": spectrum.closeness,
+                "directness": spectrum.directness,
                 "initialized": spectrum.initialized,
                 "last_evolution": spectrum.last_evolution.isoformat() if spectrum.last_evolution else None,
                 "updated_at": spectrum.updated_at.isoformat() if spectrum.updated_at else None,
@@ -314,10 +314,10 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
                     "timestamp": r.timestamp.isoformat() if r.timestamp else None,
                     "group_id": r.group_id,
                     "deltas": {
-                        "economic": r.economic_delta,
-                        "social": r.social_delta,
-                        "diplomatic": r.diplomatic_delta,
-                        "progressive": r.progressive_delta,
+                        "sincerity": r.sincerity_delta,
+                        "engagement": r.engagement_delta,
+                        "closeness": r.closeness_delta,
+                        "directness": r.directness_delta,
                     },
                     "reason": r.reason,
                 }
@@ -416,23 +416,23 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         spectrum = get_or_create_spectrum("global")
         if economic is not None:
-            spectrum.economic = max(0, min(100, economic))
+            spectrum.sincerity = max(0, min(100, economic))
         if social is not None:
-            spectrum.social = max(0, min(100, social))
+            spectrum.engagement = max(0, min(100, social))
         if diplomatic is not None:
-            spectrum.diplomatic = max(0, min(100, diplomatic))
+            spectrum.closeness = max(0, min(100, diplomatic))
         if progressive is not None:
-            spectrum.progressive = max(0, min(100, progressive))
+            spectrum.directness = max(0, min(100, progressive))
         spectrum.updated_at = datetime.now()
         spectrum.save()
 
         return {
             "success": True,
             "spectrum": {
-                "economic": spectrum.economic,
-                "social": spectrum.social,
-                "diplomatic": spectrum.diplomatic,
-                "progressive": spectrum.progressive,
+                "sincerity": spectrum.sincerity,
+                "engagement": spectrum.engagement,
+                "closeness": spectrum.closeness,
+                "directness": spectrum.directness,
             },
         }
 

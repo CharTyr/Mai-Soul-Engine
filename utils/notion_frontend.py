@@ -43,10 +43,10 @@ class NotionPropertyMap:
 class NotionSpectrumPropertyMap:
     title: str = "Name"
     scope_id: str = "ScopeId"
-    economic: str = "Economic"
-    social: str = "Social"
-    diplomatic: str = "Diplomatic"
-    progressive: str = "Progressive"
+    economic: str = "Sincerity"
+    social: str = "Engagement"
+    diplomatic: str = "Closeness"
+    progressive: str = "Directness"
     value: str = "Value"
     initialized: str = "Initialized"
     last_evolution: str = "LastEvolution"
@@ -364,10 +364,10 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
     spectrum_property_map = NotionSpectrumPropertyMap(
         title=str(_get("spectrum_property_title", "Name") or "Name"),
         scope_id=str(_get("spectrum_property_scope_id", "ScopeId") or "ScopeId"),
-        economic=str(_get("spectrum_property_economic", "Economic") or "Economic"),
-        social=str(_get("spectrum_property_social", "Social") or "Social"),
-        diplomatic=str(_get("spectrum_property_diplomatic", "Diplomatic") or "Diplomatic"),
-        progressive=str(_get("spectrum_property_progressive", "Progressive") or "Progressive"),
+        economic=str(_get("spectrum_property_economic", "Sincerity") or "Sincerity"),
+        social=str(_get("spectrum_property_social", "Engagement") or "Engagement"),
+        diplomatic=str(_get("spectrum_property_diplomatic", "Closeness") or "Closeness"),
+        progressive=str(_get("spectrum_property_progressive", "Directness") or "Directness"),
         value=str(_get("spectrum_property_value", "Value") or "Value"),
         initialized=str(_get("spectrum_property_initialized", "Initialized") or "Initialized"),
         last_evolution=str(_get("spectrum_property_last_evolution", "LastEvolution") or "LastEvolution"),
@@ -566,10 +566,10 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
     # 你要求的结构：四行（Dimension 为 Title），一个 Value 字段；ScopeId 用于区分 scope（默认 global）。
     if mode == "dimension_rows":
         dims: list[tuple[str, int]] = [
-            ("Economic", int(getattr(spectrum, "economic", 50) or 50)),
-            ("Social", int(getattr(spectrum, "social", 50) or 50)),
-            ("Diplomatic", int(getattr(spectrum, "diplomatic", 50) or 50)),
-            ("Progressive", int(getattr(spectrum, "progressive", 50) or 50)),
+            ("Sincerity", int(getattr(spectrum, "sincerity", 50) or 50)),
+            ("Engagement", int(getattr(spectrum, "engagement", 50) or 50)),
+            ("Closeness", int(getattr(spectrum, "closeness", 50) or 50)),
+            ("Directness", int(getattr(spectrum, "directness", 50) or 50)),
         ]
 
         created = 0
@@ -700,13 +700,13 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
     if pm.scope_id:
         props_update[pm.scope_id] = _prop_rich_text(scope_id, 80)
     if pm.economic:
-        props_update[pm.economic] = _prop_number(int(getattr(spectrum, "economic", 50) or 50))
+        props_update[pm.economic] = _prop_number(int(getattr(spectrum, "sincerity", 50) or 50))
     if pm.social:
-        props_update[pm.social] = _prop_number(int(getattr(spectrum, "social", 50) or 50))
+        props_update[pm.social] = _prop_number(int(getattr(spectrum, "engagement", 50) or 50))
     if pm.diplomatic:
-        props_update[pm.diplomatic] = _prop_number(int(getattr(spectrum, "diplomatic", 50) or 50))
+        props_update[pm.diplomatic] = _prop_number(int(getattr(spectrum, "closeness", 50) or 50))
     if pm.progressive:
-        props_update[pm.progressive] = _prop_number(int(getattr(spectrum, "progressive", 50) or 50))
+        props_update[pm.progressive] = _prop_number(int(getattr(spectrum, "directness", 50) or 50))
     if pm.initialized:
         props_update[pm.initialized] = _prop_checkbox(bool(getattr(spectrum, "initialized", False)))
     if pm.last_evolution:

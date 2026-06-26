@@ -56,17 +56,24 @@ def close_db() -> None:
 
 @dataclass
 class IdeologySpectrum:
-    """意识形态光谱 — 四维数值 (0-100)。"""
+    """意识形态光谱 — 群聊社交四维 (0-100)。
+
+    v2.1.0 起四维从政治光谱换为群聊社交轴：
+    - sincerity（真诚度）：真诚直率 ↔ 重视场面与分寸
+    - engagement（投入度）：克制怕消耗 ↔ 热情投入
+    - closeness（亲密度）：保持距离 ↔ 容易亲近
+    - directness（直率度）：含蓄绕弯 ↔ 有话直说
+    """
 
     scope_id: str = "global"
-    economic: int = 50
-    social: int = 50
-    diplomatic: int = 50
-    progressive: int = 50
-    last_economic_dir: int = 0
-    last_social_dir: int = 0
-    last_diplomatic_dir: int = 0
-    last_progressive_dir: int = 0
+    sincerity: int = 50
+    engagement: int = 50
+    closeness: int = 50
+    directness: int = 50
+    last_sincerity_dir: int = 0
+    last_engagement_dir: int = 0
+    last_closeness_dir: int = 0
+    last_directness_dir: int = 0
     initialized: bool = False
     last_evolution: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -95,10 +102,10 @@ class EvolutionHistory:
     id: int = 0
     timestamp: datetime = field(default_factory=datetime.now)
     group_id: str = ""
-    economic_delta: int = 0
-    social_delta: int = 0
-    diplomatic_delta: int = 0
-    progressive_delta: int = 0
+    sincerity_delta: int = 0
+    engagement_delta: int = 0
+    closeness_delta: int = 0
+    directness_delta: int = 0
     reason: str = ""
 
 
@@ -154,10 +161,10 @@ class ContextSlice:
 
     scope_type: str = "group"
     scope_key: str = ""
-    economic_offset: int = 0
-    social_offset: int = 0
-    diplomatic_offset: int = 0
-    progressive_offset: int = 0
+    sincerity_offset: int = 0
+    engagement_offset: int = 0
+    closeness_offset: int = 0
+    directness_offset: int = 0
     sample_count: int = 0
     updated_at: datetime = field(default_factory=datetime.now)
 
@@ -191,14 +198,14 @@ _CREATE_SQL = [
     """
     CREATE TABLE IF NOT EXISTS soul_ideology_spectrum (
         scope_id TEXT PRIMARY KEY DEFAULT 'global',
-        economic INTEGER DEFAULT 50,
-        social INTEGER DEFAULT 50,
-        diplomatic INTEGER DEFAULT 50,
-        progressive INTEGER DEFAULT 50,
-        last_economic_dir INTEGER DEFAULT 0,
-        last_social_dir INTEGER DEFAULT 0,
-        last_diplomatic_dir INTEGER DEFAULT 0,
-        last_progressive_dir INTEGER DEFAULT 0,
+        sincerity INTEGER DEFAULT 50,
+        engagement INTEGER DEFAULT 50,
+        closeness INTEGER DEFAULT 50,
+        directness INTEGER DEFAULT 50,
+        last_sincerity_dir INTEGER DEFAULT 0,
+        last_engagement_dir INTEGER DEFAULT 0,
+        last_closeness_dir INTEGER DEFAULT 0,
+        last_directness_dir INTEGER DEFAULT 0,
         initialized INTEGER DEFAULT 0,
         last_evolution TEXT DEFAULT '',
         updated_at TEXT DEFAULT ''
@@ -215,10 +222,10 @@ _CREATE_SQL = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT DEFAULT '',
         group_id TEXT,
-        economic_delta INTEGER DEFAULT 0,
-        social_delta INTEGER DEFAULT 0,
-        diplomatic_delta INTEGER DEFAULT 0,
-        progressive_delta INTEGER DEFAULT 0,
+        sincerity_delta INTEGER DEFAULT 0,
+        engagement_delta INTEGER DEFAULT 0,
+        closeness_delta INTEGER DEFAULT 0,
+        directness_delta INTEGER DEFAULT 0,
         reason TEXT DEFAULT ''
     )
     """,
@@ -258,10 +265,10 @@ _CREATE_SQL = [
     CREATE TABLE IF NOT EXISTS soul_context_slices (
         scope_type TEXT NOT NULL DEFAULT 'group',
         scope_key TEXT NOT NULL,
-        economic_offset INTEGER DEFAULT 0,
-        social_offset INTEGER DEFAULT 0,
-        diplomatic_offset INTEGER DEFAULT 0,
-        progressive_offset INTEGER DEFAULT 0,
+        sincerity_offset INTEGER DEFAULT 0,
+        engagement_offset INTEGER DEFAULT 0,
+        closeness_offset INTEGER DEFAULT 0,
+        directness_offset INTEGER DEFAULT 0,
         sample_count INTEGER DEFAULT 0,
         updated_at TEXT DEFAULT '',
         PRIMARY KEY (scope_type, scope_key)
@@ -311,8 +318,15 @@ def _add_column(table_name: str, column_name: str, ddl: str) -> None:
     conn.commit()
 
 
+def _rename_column(table_name: str, old_name: str, new_name: str) -> None:
+    """安全重命名列（SQLite >= 3.25）。"""
+    conn = _get_conn()
+    conn.execute(f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}")
+    conn.commit()
+
+
 def _run_migrations() -> None:
-    """就地迁移：补齐旧版可能缺失的列。"""
+    """就地迁移：补齐旧版可能缺失的列 + v2.1.0 政治轴→社交轴重命名。"""
     if not _has_column("soul_thought_seeds", "stream_id"):
         _add_column("soul_thought_seeds", "stream_id", "TEXT DEFAULT ''")
     if not _has_column("soul_thought_seeds", "confidence"):
@@ -331,6 +345,54 @@ def _run_migrations() -> None:
         _add_column("soul_crystallized_traits", "ideology_layer", "TEXT DEFAULT 'conduct'")
     if not _has_column("soul_crystallized_traits", "lifecycle_state"):
         _add_column("soul_crystallized_traits", "lifecycle_state", "TEXT DEFAULT 'active'")
+
+    # v2.1.0：政治光谱轴 → 群聊社交轴（就地重命名列）
+    _rename_spectrum_axes()
+    _rename_history_axes()
+    _rename_slice_axes()
+
+
+def _rename_spectrum_axes() -> None:
+    """soul_ideology_spectrum: economic→sincerity 等。"""
+    renames = [
+        ("economic", "sincerity"),
+        ("social", "engagement"),
+        ("diplomatic", "closeness"),
+        ("progressive", "directness"),
+        ("last_economic_dir", "last_sincerity_dir"),
+        ("last_social_dir", "last_engagement_dir"),
+        ("last_diplomatic_dir", "last_closeness_dir"),
+        ("last_progressive_dir", "last_directness_dir"),
+    ]
+    for old, new in renames:
+        if _has_column("soul_ideology_spectrum", old) and not _has_column("soul_ideology_spectrum", new):
+            _rename_column("soul_ideology_spectrum", old, new)
+
+
+def _rename_history_axes() -> None:
+    """soul_evolution_history: *_delta 列重命名。"""
+    renames = [
+        ("economic_delta", "sincerity_delta"),
+        ("social_delta", "engagement_delta"),
+        ("diplomatic_delta", "closeness_delta"),
+        ("progressive_delta", "directness_delta"),
+    ]
+    for old, new in renames:
+        if _has_column("soul_evolution_history", old) and not _has_column("soul_evolution_history", new):
+            _rename_column("soul_evolution_history", old, new)
+
+
+def _rename_slice_axes() -> None:
+    """soul_context_slices: *_offset 列重命名。"""
+    renames = [
+        ("economic_offset", "sincerity_offset"),
+        ("social_offset", "engagement_offset"),
+        ("diplomatic_offset", "closeness_offset"),
+        ("progressive_offset", "directness_offset"),
+    ]
+    for old, new in renames:
+        if _has_column("soul_context_slices", old) and not _has_column("soul_context_slices", new):
+            _rename_column("soul_context_slices", old, new)
 
 
 # ─── 时间转换工具 ───────────────────────────────────────────────────
@@ -366,8 +428,8 @@ def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:
     now = datetime.now()
     conn.execute(
         """INSERT INTO soul_ideology_spectrum
-           (scope_id, economic, social, diplomatic, progressive,
-            last_economic_dir, last_social_dir, last_diplomatic_dir, last_progressive_dir,
+           (scope_id, sincerity, engagement, closeness, directness,
+            last_sincerity_dir, last_engagement_dir, last_closeness_dir, last_directness_dir,
             initialized, last_evolution, updated_at)
            VALUES (?, 50, 50, 50, 50, 0, 0, 0, 0, 0, ?, ?)""",
         (scope_id, _dt_to_str(now), _dt_to_str(now)),
@@ -381,13 +443,13 @@ def save_spectrum(s: IdeologySpectrum) -> None:
     conn = _get_conn()
     conn.execute(
         """UPDATE soul_ideology_spectrum SET
-           economic = ?, social = ?, diplomatic = ?, progressive = ?,
-           last_economic_dir = ?, last_social_dir = ?, last_diplomatic_dir = ?, last_progressive_dir = ?,
+           sincerity = ?, engagement = ?, closeness = ?, directness = ?,
+           last_sincerity_dir = ?, last_engagement_dir = ?, last_closeness_dir = ?, last_directness_dir = ?,
            initialized = ?, last_evolution = ?, updated_at = ?
            WHERE scope_id = ?""",
         (
-            s.economic, s.social, s.diplomatic, s.progressive,
-            s.last_economic_dir, s.last_social_dir, s.last_diplomatic_dir, s.last_progressive_dir,
+            s.sincerity, s.engagement, s.closeness, s.directness,
+            s.last_sincerity_dir, s.last_engagement_dir, s.last_closeness_dir, s.last_directness_dir,
             int(s.initialized), _dt_to_str(s.last_evolution), _dt_to_str(s.updated_at),
             s.scope_id,
         ),
@@ -399,14 +461,14 @@ def _row_to_spectrum(row: sqlite3.Row) -> IdeologySpectrum:
     """sqlite3.Row → IdeologySpectrum。"""
     return IdeologySpectrum(
         scope_id=row["scope_id"],
-        economic=row["economic"],
-        social=row["social"],
-        diplomatic=row["diplomatic"],
-        progressive=row["progressive"],
-        last_economic_dir=row["last_economic_dir"],
-        last_social_dir=row["last_social_dir"],
-        last_diplomatic_dir=row["last_diplomatic_dir"],
-        last_progressive_dir=row["last_progressive_dir"],
+        sincerity=row["sincerity"],
+        engagement=row["engagement"],
+        closeness=row["closeness"],
+        directness=row["directness"],
+        last_sincerity_dir=row["last_sincerity_dir"],
+        last_engagement_dir=row["last_engagement_dir"],
+        last_closeness_dir=row["last_closeness_dir"],
+        last_directness_dir=row["last_directness_dir"],
         initialized=bool(row["initialized"]),
         last_evolution=_str_to_dt(row["last_evolution"]),
         updated_at=_str_to_dt(row["updated_at"]),
@@ -449,21 +511,21 @@ def save_group_evolution_record(r: GroupEvolutionRecord) -> None:
 def create_evolution_history(
     timestamp: datetime,
     group_id: str,
-    economic_delta: int,
-    social_delta: int,
-    diplomatic_delta: int,
-    progressive_delta: int,
+    sincerity_delta: int,
+    engagement_delta: int,
+    closeness_delta: int,
+    directness_delta: int,
     reason: str,
 ) -> None:
     """创建演化历史记录。"""
     conn = _get_conn()
     conn.execute(
         """INSERT INTO soul_evolution_history
-           (timestamp, group_id, economic_delta, social_delta, diplomatic_delta, progressive_delta, reason)
+           (timestamp, group_id, sincerity_delta, engagement_delta, closeness_delta, directness_delta, reason)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             _dt_to_str(timestamp), group_id,
-            economic_delta, social_delta, diplomatic_delta, progressive_delta,
+            sincerity_delta, engagement_delta, closeness_delta, directness_delta,
             reason,
         ),
     )
@@ -481,10 +543,10 @@ def get_evolution_history(limit: int = 50) -> list[EvolutionHistory]:
             id=row["id"],
             timestamp=_str_to_dt(row["timestamp"]),
             group_id=row["group_id"],
-            economic_delta=row["economic_delta"],
-            social_delta=row["social_delta"],
-            diplomatic_delta=row["diplomatic_delta"],
-            progressive_delta=row["progressive_delta"],
+            sincerity_delta=row["sincerity_delta"],
+            engagement_delta=row["engagement_delta"],
+            closeness_delta=row["closeness_delta"],
+            directness_delta=row["directness_delta"],
             reason=row["reason"],
         )
         for row in rows
@@ -728,33 +790,33 @@ def _row_to_trait(row: sqlite3.Row) -> CrystallizedTrait:
 def upsert_context_slice(
     scope_type: str,
     scope_key: str,
-    economic_offset: int,
-    social_offset: int,
-    diplomatic_offset: int,
-    progressive_offset: int,
+    sincerity_offset: int,
+    engagement_offset: int,
+    closeness_offset: int,
+    directness_offset: int,
     sample_count: int,
 ) -> None:
     conn = _get_conn()
     now = _dt_to_str(datetime.now())
     conn.execute(
         """INSERT INTO soul_context_slices
-           (scope_type, scope_key, economic_offset, social_offset, diplomatic_offset,
-            progressive_offset, sample_count, updated_at)
+           (scope_type, scope_key, sincerity_offset, engagement_offset, closeness_offset,
+            directness_offset, sample_count, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(scope_type, scope_key) DO UPDATE SET
-           economic_offset = economic_offset + excluded.economic_offset,
-           social_offset = social_offset + excluded.social_offset,
-           diplomatic_offset = diplomatic_offset + excluded.diplomatic_offset,
-           progressive_offset = progressive_offset + excluded.progressive_offset,
+           sincerity_offset = sincerity_offset + excluded.sincerity_offset,
+           engagement_offset = engagement_offset + excluded.engagement_offset,
+           closeness_offset = closeness_offset + excluded.closeness_offset,
+           directness_offset = directness_offset + excluded.directness_offset,
            sample_count = sample_count + excluded.sample_count,
            updated_at = excluded.updated_at""",
         (
             scope_type,
             scope_key,
-            economic_offset,
-            social_offset,
-            diplomatic_offset,
-            progressive_offset,
+            sincerity_offset,
+            engagement_offset,
+            closeness_offset,
+            directness_offset,
             sample_count,
             now,
         ),
@@ -773,10 +835,10 @@ def get_context_slice(scope_type: str, scope_key: str) -> ContextSlice | None:
     return ContextSlice(
         scope_type=row["scope_type"],
         scope_key=row["scope_key"],
-        economic_offset=int(row["economic_offset"]),
-        social_offset=int(row["social_offset"]),
-        diplomatic_offset=int(row["diplomatic_offset"]),
-        progressive_offset=int(row["progressive_offset"]),
+        sincerity_offset=int(row["sincerity_offset"]),
+        engagement_offset=int(row["engagement_offset"]),
+        closeness_offset=int(row["closeness_offset"]),
+        directness_offset=int(row["directness_offset"]),
         sample_count=int(row["sample_count"]),
         updated_at=_str_to_dt(row["updated_at"]),
     )

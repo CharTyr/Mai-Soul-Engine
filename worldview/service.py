@@ -88,10 +88,10 @@ class WorldviewService:
         im.upsert_context_slice(
             scope_type="group",
             scope_key=stream_id,
-            economic_offset=local["economic"],
-            social_offset=local["social"],
-            diplomatic_offset=local["diplomatic"],
-            progressive_offset=local["progressive"],
+            sincerity_offset=local["sincerity"],
+            engagement_offset=local["engagement"],
+            closeness_offset=local["closeness"],
+            directness_offset=local["directness"],
             sample_count=message_count,
         )
 
@@ -102,10 +102,10 @@ class WorldviewService:
         if not row:
             return None
         return {
-            "economic": row.economic_offset,
-            "social": row.social_offset,
-            "diplomatic": row.diplomatic_offset,
-            "progressive": row.progressive_offset,
+            "sincerity": row.sincerity_offset,
+            "engagement": row.engagement_offset,
+            "closeness": row.closeness_offset,
+            "directness": row.directness_offset,
         }
 
     def decay_mood_if_needed(self) -> im.MoodState:
@@ -189,8 +189,8 @@ class WorldviewService:
                 rel = e.relation_type
                 if rel == "derived_from" and e.source_ref:
                     hints.append(f"观点 {tid[:8]}… 源自内省/种子 {e.source_ref[:12]}")
-                elif rel == "supports" and e.target_trait_id:
-                    hints.append(f"观点 {tid[:8]}… 支撑 {e.target_trait_id[:8]}…")
+                elif rel == "supports" and e.to_trait_id:
+                    hints.append(f"观点 {tid[:8]}… 支撑 {e.to_trait_id[:8]}…")
         if not hints:
             return ""
         return "【思想关联】" + "；".join(hints[:limit])
@@ -203,8 +203,8 @@ class WorldviewService:
         if offsets and any(offsets.values()):
             blocks.append(
                 "本群局部偏移（相对全局）: "
-                f"经济{offsets['economic']:+d} 社会{offsets['social']:+d} "
-                f"外交{offsets['diplomatic']:+d} 变革{offsets['progressive']:+d}"
+                f"真诚{offsets['sincerity']:+d} 投入{offsets['engagement']:+d} "
+                f"亲近{offsets['closeness']:+d} 直率{offsets['directness']:+d}"
             )
         mood = self.decay_mood_if_needed()
         if self.cfg.mood_enabled and (mood.valence or mood.arousal or mood.energy):
@@ -232,10 +232,10 @@ class WorldviewService:
             "trait_counts_by_layer": im.count_traits_by_layer(),
             "group_slice": (
                 {
-                    "economic_offset": slice_row.economic_offset,
-                    "social_offset": slice_row.social_offset,
-                    "diplomatic_offset": slice_row.diplomatic_offset,
-                    "progressive_offset": slice_row.progressive_offset,
+                    "sincerity_offset": slice_row.sincerity_offset,
+                    "engagement_offset": slice_row.engagement_offset,
+                    "closeness_offset": slice_row.closeness_offset,
+                    "directness_offset": slice_row.directness_offset,
                     "sample_count": slice_row.sample_count,
                     "updated_at": slice_row.updated_at.isoformat() if slice_row.updated_at else None,
                 }

@@ -15,10 +15,10 @@ LIFECYCLE_STATES: tuple[str, ...] = (
 )
 
 SPECTRUM_DIM_TO_LAYER: dict[str, str] = {
-    "economic": "values",
-    "social": "worldview",
-    "diplomatic": "worldview",
-    "progressive": "conduct",
+    "sincerity": "values",
+    "engagement": "worldview",
+    "closeness": "conduct",
+    "directness": "conduct",
 }
 
 LAYER_LABEL_ZH: dict[str, str] = {

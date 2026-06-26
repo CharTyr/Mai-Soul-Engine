@@ -25,10 +25,10 @@ async def handle_reset(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
         return True, msg, True
 
     spectrum = get_or_create_spectrum("global")
-    spectrum.economic = 50
-    spectrum.social = 50
-    spectrum.diplomatic = 50
-    spectrum.progressive = 50
+    spectrum.sincerity = 50
+    spectrum.engagement = 50
+    spectrum.closeness = 50
+    spectrum.directness = 50
     spectrum.initialized = False
     spectrum.updated_at = datetime.now()
     spectrum.save()

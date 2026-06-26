@@ -106,10 +106,10 @@ async def handle_answer(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[boo
         from ..models.ideology_model import get_or_create_spectrum
 
         spectrum = get_or_create_spectrum("global")
-        spectrum.economic = spectrum_values["economic"]
-        spectrum.social = spectrum_values["social"]
-        spectrum.diplomatic = spectrum_values["diplomatic"]
-        spectrum.progressive = spectrum_values["progressive"]
+        spectrum.sincerity = spectrum_values["sincerity"]
+        spectrum.engagement = spectrum_values["engagement"]
+        spectrum.closeness = spectrum_values["closeness"]
+        spectrum.directness = spectrum_values["directness"]
         spectrum.initialized = True
         spectrum.updated_at = datetime.now()
         spectrum.save()

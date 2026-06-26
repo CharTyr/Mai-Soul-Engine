@@ -18,10 +18,10 @@ async def handle_status(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[boo
         return True, msg, True
 
     spectrum_dict = {
-        "economic": spectrum.economic,
-        "social": spectrum.social,
-        "diplomatic": spectrum.diplomatic,
-        "progressive": spectrum.progressive,
+        "sincerity": spectrum.sincerity,
+        "engagement": spectrum.engagement,
+        "closeness": spectrum.closeness,
+        "directness": spectrum.directness,
     }
 
     display = format_spectrum_display(spectrum_dict)

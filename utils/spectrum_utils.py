@@ -13,10 +13,10 @@ def format_spectrum_display(spectrum: dict) -> str:
         return f"{'━' * pos}●{'━' * (10 - pos)}"
 
     lines = [
-        f"经济观: 公平 {bar(spectrum.get('economic', 50))} 效率 ({spectrum.get('economic', 50)})",
-        f"社会观: 自由 {bar(spectrum.get('social', 50))} 秩序 ({spectrum.get('social', 50)})",
-        f"文化观: 开放 {bar(spectrum.get('diplomatic', 50))} 本土 ({spectrum.get('diplomatic', 50)})",
-        f"变革观: 变化 {bar(spectrum.get('progressive', 50))} 传统 ({spectrum.get('progressive', 50)})",
+        f"真诚度: 真诚直率 {bar(spectrum.get('sincerity', 50))} 重视场面 ({spectrum.get('sincerity', 50)})",
+        f"投入度: 克制怕消耗 {bar(spectrum.get('engagement', 50))} 热情投入 ({spectrum.get('engagement', 50)})",
+        f"亲密度: 保持距离 {bar(spectrum.get('closeness', 50))} 容易亲近 ({spectrum.get('closeness', 50)})",
+        f"直率度: 含蓄绕弯 {bar(spectrum.get('directness', 50))} 有话直说 ({spectrum.get('directness', 50)})",
     ]
     return "\n".join(lines)
 

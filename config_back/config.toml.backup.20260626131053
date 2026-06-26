@@ -4,14 +4,16 @@
 # ─── 插件元数据（Runner 必填）────────────────────────────────────────
 [plugin]
 enabled = true
-config_version = "2.1.0"
+config_version = "2.0.0"
 
 # ─── 管理员配置 ─────────────────────────────────────────────────────
+
 [admin]
-# 管理员用户ID（必填，格式：平台:ID，如 qq:12345678）
-admin_user_id = ""
+# 管理员用户ID（必填）：用你的 QQ 私聊麦麦执行 /soul_setup，格式 平台:QQ号，如 qq:12345678
+admin_user_id = "qq:768295235"
 
 # ─── 演化设置 ───────────────────────────────────────────────────────
+
 [evolution]
 # 启用自动演化
 evolution_enabled = true
@@ -29,48 +31,33 @@ max_messages_per_analysis = 200
 max_chars_per_message = 200
 
 # ─── 监控范围（演化仅针对监控群）────────────────────────────────────
+
 [monitor]
-# 监控的群ID列表(空=不分析任何群)，格式：平台:群号:group（或直接填stream_id）
-monitored_groups = []
+# 监控的群，格式 qq:群号:group；请改成你的真实群号（勿提交到 Git）
+monitored_groups = [
+    "qq:902106123:group",
+    "qq:1046979517:group",
+]
 # 排除的群ID列表
 excluded_groups = []
-# 可选：仅统计这些群内成员的发言(空=该群全员)，与私聊无关
+# 监控的用户ID列表(空=全部)
 monitored_users = []
-# 可选：群内排除的发言人(如机器人)
+# 排除的用户ID列表
 excluded_users = []
 
 # ─── 档位阈值 ───────────────────────────────────────────────────────
+
 [threshold]
 # 启用极端档位(98-100触发)
 enable_extreme = false
 # 自定义提示词模板(覆盖默认)
 custom_prompts = {}
 
-# ─── P1 三观生长（dev 分支新增）─────────────────────────────────────
-[worldview]
-# 启用 P1 三观生长（关闭后行为与 main/v2.0 一致）
-p1_enabled = true
-# 价值观层单次演化上限（最慢，映射经济维）
-values_max_delta = 2
-# 世界观层单次演化上限（映射社会/外交维）
-worldview_max_delta = 4
-# 处事观层单次演化上限（较快，映射变革维）
-conduct_max_delta = 6
-# 群聊局部偏移累积比例（0-1）
-local_influence_ratio = 0.35
-# 短期情绪辅助（仅影响语气，不写三观）
-mood_enabled = true
-# 情绪自动归零时间（小时）
-mood_decay_hours = 8.0
-# 在注入中加入情绪语气提示
-mood_inject = true
-# 在注入中加入思想关联摘要
-graph_inject = true
-
 # ─── 注入设置 ───────────────────────────────────────────────────────
+
 [injection]
-# 群聊注入范围：global=所有群，monitored_only=仅 monitored_groups
-scope = "global"
+# 群聊注入范围：global=所有群，monitored_only=仅 monitored_groups（与演化范围一致更干净）
+scope = "monitored_only"
 # 是否允许私聊注入
 inject_private = true
 # 每次注入最多携带的 trait 数量
@@ -81,6 +68,7 @@ fallback_recent_impact = true
 trait_cooldown_seconds = 180
 
 # ─── 思维阁设置 ─────────────────────────────────────────────────────
+
 [thought_cabinet]
 # 启用思维阁系统（默认关闭）
 enabled = false
@@ -98,6 +86,7 @@ auto_dedup_threshold = 0.78
 # ─── API 设置（可选）────────────────────────────────────────────────
 # Soul 数据 @API 组件，供 WebUI 或其他插件查询光谱/traits/种子。
 # 关闭不影响核心功能（演化、注入、思维阁）。
+
 [api]
 # 启用 Soul @API 组件
 enabled = true
@@ -109,6 +98,7 @@ public_mode = false
 # ─── Notion 前端展示（可选）────────────────────────────────────────
 # 把 traits 与光谱同步到 Notion 数据库，用于公共展示。
 # 关闭不影响核心功能。
+
 [notion]
 # 启用 Notion 数据库同步
 enabled = false
@@ -152,10 +142,10 @@ property_updated_at = "UpdatedAt"
 # 光谱数据库字段名映射
 spectrum_property_title = "Name"
 spectrum_property_scope_id = "ScopeId"
-spectrum_property_economic = "Sincerity"
-spectrum_property_social = "Engagement"
-spectrum_property_diplomatic = "Closeness"
-spectrum_property_progressive = "Directness"
+spectrum_property_economic = "Economic"
+spectrum_property_social = "Social"
+spectrum_property_diplomatic = "Diplomatic"
+spectrum_property_progressive = "Progressive"
 spectrum_property_value = "Value"
 spectrum_property_initialized = "Initialized"
 spectrum_property_last_evolution = "LastEvolution"

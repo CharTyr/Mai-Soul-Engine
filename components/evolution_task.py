@@ -219,10 +219,10 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         spectrum = get_or_create_spectrum("global")
 
         before = {
-            "economic": spectrum.economic,
-            "social": spectrum.social,
-            "diplomatic": spectrum.diplomatic,
-            "progressive": spectrum.progressive,
+            "sincerity": spectrum.sincerity,
+            "engagement": spectrum.engagement,
+            "closeness": spectrum.closeness,
+            "directness": spectrum.directness,
         }
 
         ema_alpha = float(plugin.config.evolution.ema_alpha or 0.3)
@@ -233,55 +233,55 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         wv = WorldviewService(config_from_plugin(plugin))
         raw_deltas = wv.apply_layer_caps_to_deltas(
             {
-                "economic": int(deltas.get("economic", 0) or 0),
-                "social": int(deltas.get("social", 0) or 0),
-                "diplomatic": int(deltas.get("diplomatic", 0) or 0),
-                "progressive": int(deltas.get("progressive", 0) or 0),
+                "sincerity": int(deltas.get("sincerity", 0) or 0),
+                "engagement": int(deltas.get("engagement", 0) or 0),
+                "closeness": int(deltas.get("closeness", 0) or 0),
+                "directness": int(deltas.get("directness", 0) or 0),
             },
             evolution_rate,
         )
 
         resisted_deltas = {}
         new_dirs = {}
-        for dim in ["economic", "social", "diplomatic", "progressive"]:
+        for dim in ["sincerity", "engagement", "closeness", "directness"]:
             last_dir = int(getattr(spectrum, f"last_{dim}_dir", 0))
             adj_delta, new_dir = apply_resistance(raw_deltas[dim], last_dir, resistance)
             resisted_deltas[dim] = adj_delta
             new_dirs[dim] = new_dir
 
         smoothed_deltas = {
-            "economic": smooth_delta(spectrum.economic, resisted_deltas["economic"], ema_alpha),
-            "social": smooth_delta(spectrum.social, resisted_deltas["social"], ema_alpha),
-            "diplomatic": smooth_delta(spectrum.diplomatic, resisted_deltas["diplomatic"], ema_alpha),
-            "progressive": smooth_delta(spectrum.progressive, resisted_deltas["progressive"], ema_alpha),
+            "sincerity": smooth_delta(spectrum.sincerity, resisted_deltas["sincerity"], ema_alpha),
+            "engagement": smooth_delta(spectrum.engagement, resisted_deltas["engagement"], ema_alpha),
+            "closeness": smooth_delta(spectrum.closeness, resisted_deltas["closeness"], ema_alpha),
+            "directness": smooth_delta(spectrum.directness, resisted_deltas["directness"], ema_alpha),
         }
 
-        spectrum.economic = update_spectrum_value(spectrum.economic, smoothed_deltas["economic"])
-        spectrum.social = update_spectrum_value(spectrum.social, smoothed_deltas["social"])
-        spectrum.diplomatic = update_spectrum_value(spectrum.diplomatic, smoothed_deltas["diplomatic"])
-        spectrum.progressive = update_spectrum_value(spectrum.progressive, smoothed_deltas["progressive"])
-        spectrum.last_economic_dir = new_dirs["economic"]
-        spectrum.last_social_dir = new_dirs["social"]
-        spectrum.last_diplomatic_dir = new_dirs["diplomatic"]
-        spectrum.last_progressive_dir = new_dirs["progressive"]
+        spectrum.sincerity = update_spectrum_value(spectrum.sincerity, smoothed_deltas["sincerity"])
+        spectrum.engagement = update_spectrum_value(spectrum.engagement, smoothed_deltas["engagement"])
+        spectrum.closeness = update_spectrum_value(spectrum.closeness, smoothed_deltas["closeness"])
+        spectrum.directness = update_spectrum_value(spectrum.directness, smoothed_deltas["directness"])
+        spectrum.last_sincerity_dir = new_dirs["sincerity"]
+        spectrum.last_engagement_dir = new_dirs["engagement"]
+        spectrum.last_closeness_dir = new_dirs["closeness"]
+        spectrum.last_directness_dir = new_dirs["directness"]
         spectrum.last_evolution = now
         spectrum.updated_at = now
         spectrum.save()
 
         after = {
-            "economic": spectrum.economic,
-            "social": spectrum.social,
-            "diplomatic": spectrum.diplomatic,
-            "progressive": spectrum.progressive,
+            "sincerity": spectrum.sincerity,
+            "engagement": spectrum.engagement,
+            "closeness": spectrum.closeness,
+            "directness": spectrum.directness,
         }
 
         create_evolution_history(
             timestamp=now,
             group_id=stream_id,
-            economic_delta=smoothed_deltas["economic"],
-            social_delta=smoothed_deltas["social"],
-            diplomatic_delta=smoothed_deltas["diplomatic"],
-            progressive_delta=smoothed_deltas["progressive"],
+            sincerity_delta=smoothed_deltas["sincerity"],
+            engagement_delta=smoothed_deltas["engagement"],
+            closeness_delta=smoothed_deltas["closeness"],
+            directness_delta=smoothed_deltas["directness"],
             reason=f"分析了{len(messages)}条消息",
         )
 
@@ -301,12 +301,12 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         record.save()
 
         logger.info(
-            "群%s演化完成: e=%s, s=%s, d=%s, p=%s",
+            "群%s演化完成: 真诚=%s, 投入=%s, 亲近=%s, 直率=%s",
             stream_id,
-            smoothed_deltas["economic"],
-            smoothed_deltas["social"],
-            smoothed_deltas["diplomatic"],
-            smoothed_deltas["progressive"],
+            smoothed_deltas["sincerity"],
+            smoothed_deltas["engagement"],
+            smoothed_deltas["closeness"],
+            smoothed_deltas["directness"],
         )
 
     except Exception as e:
