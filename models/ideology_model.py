@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -629,6 +629,55 @@ def count_pending_thought_seeds() -> int:
     return int(row["cnt"]) if row else 0
 
 
+def update_seed_status(seed_id: str, status: str) -> bool:
+    """更新种子状态（approved/rejected/expired），不删除记录以保留审计链。"""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "UPDATE soul_thought_seeds SET status = ? WHERE seed_id = ?",
+        (status, seed_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def expire_old_pending_seeds(ttl_hours: float) -> int:
+    """将超过 TTL 的 pending 种子标记为 expired，返回过期数量。"""
+    if ttl_hours <= 0:
+        return 0
+    cutoff = _dt_to_str(datetime.now() - timedelta(hours=ttl_hours))
+    conn = _get_conn()
+    cursor = conn.execute(
+        "UPDATE soul_thought_seeds SET status = 'expired' WHERE status = 'pending' AND created_at < ?",
+        (cutoff,),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def count_reviewed_seeds() -> int:
+    """统计已审核种子数量（approved/rejected/expired）。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE status != 'pending'"
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def delete_oldest_reviewed_seeds(keep_count: int) -> int:
+    """删除最旧的已审核种子（approved/rejected/expired），保留最近 keep_count 条。"""
+    if keep_count <= 0:
+        return 0
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT seed_id FROM soul_thought_seeds WHERE status != 'pending' ORDER BY created_at DESC"
+    ).fetchall()
+    to_delete = [row["seed_id"] for row in rows[keep_count:]]
+    for seed_id in to_delete:
+        conn.execute("DELETE FROM soul_thought_seeds WHERE seed_id = ?", (seed_id,))
+    conn.commit()
+    return len(to_delete)
+
+
 def _row_to_seed(row: sqlite3.Row) -> ThoughtSeed:
     """sqlite3.Row → ThoughtSeed。"""
     return ThoughtSeed(
@@ -927,3 +976,31 @@ def count_traits_by_layer() -> dict[str, int]:
         layer = row["ideology_layer"] or "conduct"
         out[layer] = int(row["cnt"])
     return out
+
+
+def expire_old_traits(ttl_days: int) -> int:
+    """将超过 TTL 且未被强化的 active trait 标记为 expired 并禁用注入。
+
+    只处理 lifecycle_state='active' 的 trait（strengthened 的不受影响——
+    被强化说明有重复证据支撑，不应轻易过期）。
+
+    Args:
+        ttl_days: 过期阈值天数。
+
+    Returns:
+        过期的 trait 数量。
+    """
+    if ttl_days <= 0:
+        return 0
+    cutoff = _dt_to_str(datetime.now() - timedelta(days=ttl_days))
+    conn = _get_conn()
+    cursor = conn.execute(
+        """UPDATE soul_crystallized_traits
+           SET lifecycle_state = 'expired', enabled = 0
+           WHERE deleted = 0 AND enabled = 1
+             AND lifecycle_state = 'active'
+             AND created_at < ?""",
+        (cutoff,),
+    )
+    conn.commit()
+    return cursor.rowcount

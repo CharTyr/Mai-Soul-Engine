@@ -78,6 +78,8 @@ class ThoughtSeedManager:
         self.max_seeds = config.get("max_seeds", 20)
         self.min_intensity = config.get("min_trigger_intensity", 0.7)
         self.admin_user_id = config.get("admin_user_id", "")
+        self.seed_ttl_hours = float(config.get("seed_ttl_hours", 168.0) or 168.0)
+        self.reviewed_keep_count = int(config.get("reviewed_keep_count", 200) or 200)
 
     async def create_seed(
         self,
@@ -101,7 +103,10 @@ class ThoughtSeedManager:
             logger.debug(f"种子强度不足，跳过创建")
             return None
 
+        # 过期超龄 pending 种子 + 清理过多的已审核种子
+        self.expire_old_seeds()
         await self._cleanup_excess_seeds()
+        await self._cleanup_old_reviewed_seeds()
 
         seed_id = f"seed_{uuid.uuid4().hex[:8]}"
 
@@ -165,6 +170,36 @@ class ThoughtSeedManager:
         seed.delete_instance()
         logger.info(f"种子已删除: {seed_id}")
         return True
+
+    def mark_seed_status(self, seed_id: str, status: str) -> bool:
+        """更新种子状态（approved/rejected/expired），不删除记录以保留审计链。"""
+        from ..models.ideology_model import update_seed_status
+
+        ok = update_seed_status(seed_id, status)
+        if ok:
+            logger.info(f"种子状态更新: {seed_id} → {status}")
+        else:
+            logger.warning(f"种子状态更新失败: {seed_id} 不存在")
+        return ok
+
+    def expire_old_seeds(self) -> int:
+        """将超过 TTL 的 pending 种子标记为 expired。"""
+        from ..models.ideology_model import expire_old_pending_seeds
+
+        count = expire_old_pending_seeds(self.seed_ttl_hours)
+        if count:
+            logger.info(f"过期 {count} 个超龄 pending 种子 (TTL={self.seed_ttl_hours}h)")
+        return count
+
+    async def _cleanup_old_reviewed_seeds(self) -> None:
+        """清理过多的已审核种子（approved/rejected/expired），保留最近 reviewed_keep_count 条。"""
+        from ..models.ideology_model import count_reviewed_seeds, delete_oldest_reviewed_seeds
+
+        total = count_reviewed_seeds()
+        if total > self.reviewed_keep_count:
+            deleted = delete_oldest_reviewed_seeds(self.reviewed_keep_count)
+            if deleted:
+                logger.info(f"清理 {deleted} 个旧已审核种子 (保留 {self.reviewed_keep_count})")
 
     async def get_pending_seeds(self, stream_id: str | None = None) -> List[dict]:
         """获取所有待审核种子"""

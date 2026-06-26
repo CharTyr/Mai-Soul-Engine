@@ -94,6 +94,12 @@ admin_notification_enabled = true
 auto_dedup_enabled = true
 # 自动去重阈值(0-1)
 auto_dedup_threshold = 0.78
+# 种子过期时间（小时），超过此时间的 pending 种子自动标记 expired，0=永不过期
+seed_ttl_hours = 168.0
+# 已审核种子保留条数（approved/rejected/expired），超出删最旧的
+reviewed_keep_count = 200
+# trait 过期天数，长期未被强化的 active trait 超过后自动 expired 并停止注入，0=永不过期
+trait_ttl_days = 90
 
 # ─── API 设置（可选）────────────────────────────────────────────────
 # Soul 数据 @API 组件，供 WebUI 或其他插件查询光谱/traits/种子。

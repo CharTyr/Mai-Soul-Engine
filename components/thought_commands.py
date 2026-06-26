@@ -37,6 +37,8 @@ async def handle_seeds_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
         "max_seeds": plugin.config.thought_cabinet.max_seeds,
         "min_trigger_intensity": plugin.config.thought_cabinet.min_trigger_intensity,
         "admin_user_id": admin_user_id,
+        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
+        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
     }
     manager = ThoughtSeedManager(config)
     seeds = await manager.get_pending_seeds()
@@ -85,6 +87,8 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
         "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
         "admin_user_id": admin_user_id,
+        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
+        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
     }
     manager = ThoughtSeedManager(config)
     seed = await manager.get_seed_by_id(seed_id)
@@ -107,7 +111,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     result = await engine.internalize_seed(seed, dedup=dedup_cfg)
 
     if result["success"]:
-        await manager.delete_seed(seed_id)
+        manager.mark_seed_status(seed_id, "approved")
         impact = result["spectrum_impact"]
         impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
         trait_id = result.get("trait_id", "")
@@ -173,6 +177,8 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
         "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
         "admin_user_id": admin_user_id,
+        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
+        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
     }
     manager = ThoughtSeedManager(config)
     seed = await manager.get_seed_by_id(seed_id)
@@ -187,9 +193,9 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    await manager.delete_seed(seed_id)
+    manager.mark_seed_status(seed_id, "rejected")
     logger.info(f"管理员拒绝思维种子: {seed_id}")
-    msg = f"✅ 种子 {seed_id} 已拒绝并删除"
+    msg = f"✅ 种子 {seed_id} 已拒绝"
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True
 

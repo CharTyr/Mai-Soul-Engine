@@ -59,6 +59,15 @@ async def run_evolution_loop(plugin) -> None:
                 logger.debug("光谱未初始化，跳过本轮")
                 continue
 
+            # P0-4：过期长期未强化的 active trait
+            trait_ttl_days = int(getattr(plugin.config.thought_cabinet, "trait_ttl_days", 90) or 90)
+            if trait_ttl_days > 0:
+                from ..models.ideology_model import expire_old_traits
+
+                expired = expire_old_traits(trait_ttl_days)
+                if expired:
+                    logger.info("过期 %s 个超龄 active trait (TTL=%s天)", expired, trait_ttl_days)
+
             evolution_rate = int(plugin.config.evolution.evolution_rate or 5)
             monitored_groups = list(plugin.config.monitor.monitored_groups or [])
             excluded_groups = list(plugin.config.monitor.excluded_groups or [])
@@ -329,6 +338,8 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines:
         "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
         "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
         "admin_user_id": str(plugin.config.admin.admin_user_id or ""),
+        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
+        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
     }
     manager = ThoughtSeedManager(config)
 

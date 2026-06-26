@@ -287,6 +287,24 @@ class ThoughtCabinetConfig(PluginConfigBase):
         description="去重阈值",
         json_schema_extra=_ui("自动去重相似度阈值", "0–1，越高越保守、越少自动合并。", step=0.02),
     )
+    seed_ttl_hours: float = Field(
+        default=168.0,
+        ge=0.0,
+        description="种子过期时间",
+        json_schema_extra=_ui("种子过期时间（小时）", "超过此时间的 pending 种子自动标记 expired，0=永不过期。", step=24.0),
+    )
+    reviewed_keep_count: int = Field(
+        default=200,
+        ge=0,
+        description="已审核种子保留数",
+        json_schema_extra=_ui("已审核种子保留数", "approved/rejected/expired 种子的最大保留条数，超出删最旧的。"),
+    )
+    trait_ttl_days: int = Field(
+        default=90,
+        ge=0,
+        description="trait 过期天数",
+        json_schema_extra=_ui("trait 过期天数", "长期未被强化的 active trait 超过此天数后自动 expired 并停止注入，0=永不过期。", step=10),
+    )
 
 
 class ApiConfig(PluginConfigBase):
