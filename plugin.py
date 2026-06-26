@@ -217,6 +217,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_seeds_list(self, stream_id, **kwargs)
 
+    @Command("soul_seed", description="查看单个思维种子详情（管理员）", pattern=r"^/soul_seed\s+(\w+)\s*$")
+    async def cmd_soul_seed(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """查看单个种子详情。"""
+        from .components.thought_commands import handle_seed_detail
+
+        return await handle_seed_detail(self, stream_id, **kwargs)
+
     @Command("soul_approve", description="批准思维种子内化（管理员）", pattern=r"^/soul_approve\s+(\w+)\s*$")
     async def cmd_soul_approve(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """批准种子内化。"""
@@ -231,6 +238,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_seed_reject(self, stream_id, **kwargs)
 
+    @Command("soul_reject_all", description="批量拒绝所有待审核思维种子（管理员）", pattern=r"^/soul_reject_all\s*$")
+    async def cmd_soul_reject_all(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """批量拒绝所有待审核种子。"""
+        from .components.thought_commands import handle_seed_reject_all
+
+        return await handle_seed_reject_all(self, stream_id, **kwargs)
+
     # ===== Command：trait 管理 =====
 
     @Command("soul_traits", description="查看已固化的 traits（管理员，可按群过滤）", pattern=r"^/soul_traits(?:\s+(\S+))?\s*$")
@@ -239,6 +253,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.thought_commands import handle_traits_list
 
         return await handle_traits_list(self, stream_id, **kwargs)
+
+    @Command("soul_trait", description="查看单个 trait 详情（管理员）", pattern=r"^/soul_trait\s+(\w+)\s*$")
+    async def cmd_soul_trait(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """查看单个 trait 详情。"""
+        from .components.thought_commands import handle_trait_detail
+
+        return await handle_trait_detail(self, stream_id, **kwargs)
 
     @Command("soul_trait_set_tags", description="设置 trait 的 tags（管理员）", pattern=r"^/soul_trait_set_tags\s+(\w+)\s+(.+?)\s*$")
     async def cmd_soul_trait_set_tags(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:

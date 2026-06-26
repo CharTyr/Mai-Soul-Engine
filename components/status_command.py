@@ -33,5 +33,14 @@ async def handle_status(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[boo
     msg = f"当前灵魂光谱：\n\n{display}\n\n上次更新: {last_update}"
     if extras:
         msg = f"{msg}\n\n{extras}"
+
+    # 思维阁启用时显示待审种子数
+    if plugin.config.thought_cabinet.enabled:
+        from ..models.ideology_model import count_pending_thought_seeds
+
+        pending = count_pending_thought_seeds()
+        if pending > 0:
+            msg = f"{msg}\n\n待审思维种子: {pending} 个（用 /soul_seeds 查看）"
+
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True

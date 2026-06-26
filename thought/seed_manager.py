@@ -133,11 +133,16 @@ class ThoughtSeedManager:
         context_lines = _match_evidence_to_context(normalized_evidence, context_messages or [])
         context_json = json.dumps(context_lines, ensure_ascii=False)
 
+        # 校验种子类型：不在已知集合时记日志（不阻断，LLM 可能产出合理的新类型）
+        seed_type = seed_data["type"]
+        if seed_type not in THOUGHT_TYPES:
+            logger.debug(f"种子类型 '{seed_type}' 不在已知类型集合 {list(THOUGHT_TYPES.keys())}")
+
         # 存入数据库
         create_thought_seed(
             seed_id=seed_id,
             stream_id=stream_id or "",
-            seed_type=seed_data["type"],
+            seed_type=seed_type,
             event=seed_data["event"],
             intensity=int(seed_data["intensity"] * 100),  # 转换为0-100整数
             confidence=confidence_int,
