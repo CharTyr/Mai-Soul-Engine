@@ -97,7 +97,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
 
     Args:
         plugin: 插件实例。
-        group_config_id: 群组配置 ID（如 "qq:12345:group"）。
+        group_config_id: 群组配置 ID（如 "qq:12345678:group"）。
         evolution_rate: 单次演化最大变化值。
     """
     try:

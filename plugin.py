@@ -31,7 +31,7 @@ class AdminConfig(PluginConfigBase):
     __ui_icon__ = "shield"
     __ui_order__ = 0
 
-    admin_user_id: str = Field(default="", description="管理员用户ID（必填，格式：平台:ID，如 qq:768295235）")
+    admin_user_id: str = Field(default="", description="管理员用户ID（必填，格式：平台:ID，如 qq:12345678）")
     enabled: bool = Field(default=True, description="启用插件")
 
 

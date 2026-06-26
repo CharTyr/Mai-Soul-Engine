@@ -32,7 +32,7 @@ async def handle_setup(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
 
     admin_user_id = plugin.config.admin.admin_user_id
     if not admin_user_id:
-        msg = "请先在配置文件中设置 admin_user_id（格式：平台:ID，如qq:768295235）"
+        msg = "请先在配置文件中设置 admin_user_id（格式：平台:ID，如 qq:12345678）"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 

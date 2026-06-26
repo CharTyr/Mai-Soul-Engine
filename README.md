@@ -21,10 +21,10 @@
 
 ```toml
 [admin]
-admin_user_id = "qq:123456"  # 平台:ID
+admin_user_id = "qq:12345678"  # 平台:ID
 
 [monitor]
-monitored_groups = ["qq:123456:group"]  # 监控的群
+monitored_groups = ["qq:12345678:group"]  # 监控的群
 ```
 
 4. 启动 MaiBot
