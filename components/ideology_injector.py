@@ -245,7 +245,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     # ── 5. 查询活跃 traits ────────────────────────────────────────
     traits = query_active_traits_for_injection(stream_id=stream_id, limit=80)
 
-    # ── 6. Tag 匹配选择 ────────────────────────────────────────────
+    # ── 6. Tag 匹配选择 + 无 tag trait 补位 ─────────────────────────
     text = _extract_user_text(messages)
     text_norm = str(text).casefold()
 
@@ -253,9 +253,14 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     _prune_recent_injection(now_ts)
 
     scored: list[tuple[float, Any]] = []
+    tagless: list[tuple[float, Any]] = []
     for t in traits:
         tags = parse_tags_json(getattr(t, "tags_json", "[]") or "[]")
         if not tags:
+            # 无 tag 的 trait 按影响分单独收集，稍后补位
+            impact = _trait_impact_score(t)
+            if impact > 0.0:
+                tagless.append((impact, t))
             continue
         hit = 0
         for tag in tags:
@@ -265,9 +270,14 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             scored.append((float(hit), t))
 
     scored.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
+    tagless.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
+
     selected: list[Any] = []
     cooldown_skipped: list[str] = []
+    tag_hit_count = 0
+    tagless_fill_count = 0
     if max_traits > 0:
+        # 先选 tag 命中的
         for _score, t in scored:
             if len(selected) >= max_traits:
                 break
@@ -275,8 +285,24 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
                 cooldown_skipped.append(t.trait_id)
                 continue
             selected.append(t)
+            tag_hit_count += 1
+        # 再用无 tag 的按影响补位
+        for _score, t in tagless:
+            if len(selected) >= max_traits:
+                break
+            if _in_cooldown(stream_id, t.trait_id, now_ts, cooldown_seconds):
+                continue
+            selected.append(t)
+            tagless_fill_count += 1
 
-    selection_mode = "tag_hit" if selected else "spectrum_only"
+    if tag_hit_count > 0 and tagless_fill_count > 0:
+        selection_mode = "tag_hit+tagless"
+    elif tag_hit_count > 0:
+        selection_mode = "tag_hit"
+    elif tagless_fill_count > 0:
+        selection_mode = "tagless_fill"
+    else:
+        selection_mode = "spectrum_only"
 
     # ── 7. Fallback 最近影响最大的 traits ──────────────────────────
     if not selected and fallback_recent_impact and max_traits > 0:
@@ -311,11 +337,13 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
                 if tag and tag.casefold() in text_norm:
                     score += 1.0
                     hit_tags.append(tag)
+        # 有 tag 命中时用 hit 数，否则用影响分
+        picked_score = score if hit_tags else _trait_impact_score(t)
         picked.append(
             {
                 "thought_id": t.trait_id,
                 "name": t.name,
-                "score": score if selection_mode == "tag_hit" else _trait_impact_score(t),
+                "score": picked_score,
                 "mode": selection_mode,
                 "hit_tags": hit_tags,
             }
@@ -360,6 +388,10 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         policy = "spectrum_only"
     elif selection_mode == "tag_hit":
         policy = "tags+spectrum"
+    elif selection_mode == "tag_hit+tagless":
+        policy = "tags+tagless+spectrum"
+    elif selection_mode == "tagless_fill":
+        policy = "tagless+spectrum"
     elif selection_mode == "fallback_recent_impact":
         policy = "fallback+spectrum"
     else:
