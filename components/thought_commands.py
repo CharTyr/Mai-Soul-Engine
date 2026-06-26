@@ -73,8 +73,7 @@ async def handle_seed_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         return True, msg, True
 
     seed_id = match.group(1)
-    config = {"admin_user_id": admin_user_id}
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seed = await manager.get_seed_by_id(seed_id)
 
     if not seed:
@@ -733,8 +732,7 @@ async def handle_seed_reject_all(plugin: Any, stream_id: str, **kwargs: Any) -> 
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    config = {"admin_user_id": admin_user_id}
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seeds = await manager.get_pending_seeds()
 
     if not seeds:

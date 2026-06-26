@@ -69,6 +69,16 @@
 - **@API 访问控制加固**：`api_health` 补上缺失的 `api.enabled` 守卫（7 个 API 现全部一致）；唯一写接口 `api_set_spectrum` 接入 `log_api_set_spectrum` 审计（记录社交轴 before/after）；文档化安全模型（无网络暴露面，`public=False` + `api.enabled` 双层控制，插件层不自行实现网络认证）。
 - **插件内测试**：新建 `tests/` 目录（28 项），覆盖种子状态原子守卫、`set_trait_lifecycle_state`、全局标记归一+迁移、批量边查询、`_trait_quality_score` 6 态降权、`_cleanup_excess_seeds` 标 expired、矛盾 trait 注入排除。从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行。
 
+### 矛盾检测代码审查修复（开发侧）
+
+经 oracle 代码审查后修复 3 个正确性问题：
+- **非原子写入顺序（P0）**：`_upsert_crystallized_trait` 的 contradicted/weakened/revised 分支调换顺序——先建新 trait，成功后再标记旧 trait，避免"旧 trait 已禁用但新 trait 创建失败"的不可逆语义丢失。
+- **图谱边对注入不可见（P0）**：`build_graph_hint` 原只展示 `derived_from`/`supports`，新增的 `contradicted_by`/`weakened_by`/`revised_by` 边被静默丢弃；现补上三种关系的中文标签展示（矛盾于/弱化于/修正自）。
+- **strengthened 豁免无代码层兜底（P0）**：`_classify_trait_relation` 原仅靠 prompt 文字约束 LLM 不矛盾 strengthened trait；现加代码层校验，即使 LLM 不遵守也强制降级 none。
+- **矛盾检测候选集遗漏全局 trait（P1）**：`_classify_trait_relation` 候选查询从 `query_crystallized_traits`（精确匹配 stream_id）改为 `query_active_traits_for_injection`（含 `GLOBAL_STREAM` 匹配），使群级新观点能与全局观点比对矛盾。
+- **`from_plugin_config` 迁移补全（P1）**：`handle_seed_detail`/`handle_seed_reject_all` 两处遗留的手拼 config dict 改为工厂方法。
+- **测试补强**：新增 `test_classify_trait_relation.py`（mock LLM，3 项），锁住 strengthened 代码层兜底、候选过滤、关系透传。`LIFECYCLE_STATES` docstring 更新为"6 态全部有写入路径"。
+
 ## [2.0.0] — 2026-06-26
 
 ### 用户可感知

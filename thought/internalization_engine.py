@@ -285,9 +285,11 @@ class InternalizationEngine:
                     logger.info(f"已合并到已有 trait: {target_trait_id} (seed={seed_info.get('id', '')})")
                     return {"trait_id": target_trait_id, "merged": True, "merged_into": target_trait_id, "dedup_similarity": similarity}
 
-            # ── contradicted / weakened / revised：标记旧 trait（先检查阈值防误报） ──
+            # ── contradicted / weakened / revised ──
+            # 顺序：先建新 trait（成功后）再标记旧 trait，避免非原子写入下
+            # "旧 trait 已禁用但新 trait 未创建" 的不可逆语义丢失（P0：失败时旧 trait 不受影响）
             if relation in ("contradicted", "weakened", "revised"):
-                # 置信度阈值：contradicted >= 0.70，weakened/revised >= 0.60
+                # 置信度阈值防误报：contradicted >= 0.70，weakened/revised >= 0.60
                 threshold_map = {"contradicted": 0.70, "weakened": 0.60, "revised": 0.60}
                 min_sim = threshold_map[relation]
                 if similarity < min_sim:
@@ -296,6 +298,35 @@ class InternalizationEngine:
                     )
                     relation = "none"
                 else:
+                    from ..worldview.constants import normalize_ideology_layer
+                    from ..worldview.service import WorldviewService, config_from_plugin
+
+                    tags = parse_tags_json(dumps_tags_json(seed_info.get("tags")))
+                    layer = normalize_ideology_layer(
+                        str(result.get("ideology_layer", "") or ""),
+                        default=WorldviewService.infer_layer_from_tags(tags),
+                    )
+
+                    # 1) 先创建新 trait（active）
+                    create_crystallized_trait(
+                        trait_id=trait_id,
+                        stream_id=seed_info.get("stream_id", "") or "",
+                        seed_id=seed_info.get("id", "") or "",
+                        name=seed_info.get("type", "trait"),
+                        question=seed_info.get("question", "") or "",
+                        thought=result.get("thought", "") or "",
+                        tags_json=dumps_tags_json(seed_info.get("tags")),
+                        confidence=int(confidence),
+                        evidence_json=dumps_evidence_json([evidence_entry]),
+                        spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
+                        created_at=now,
+                        enabled=True,
+                        deleted=False,
+                        ideology_layer=layer,
+                        lifecycle_state="active",
+                    )
+
+                    # 2) 新 trait 创建成功后，再标记旧 trait（contradicted 同时禁用）
                     if relation == "contradicted":
                         set_trait_lifecycle_state(target_trait_id, "contradicted", enabled=False)
                     elif relation == "weakened":
@@ -304,46 +335,17 @@ class InternalizationEngine:
                         set_trait_lifecycle_state(target_trait_id, "revised")
                     logger.info(f"旧 trait {target_trait_id} 被标记为 {relation} (seed={seed_info.get('id', '')})")
 
-            # ── contradicted / weakened / revised：创建新 trait（active）+ 写边 ──
-            if relation in ("contradicted", "weakened", "revised"):
-                from ..worldview.constants import normalize_ideology_layer
-                from ..worldview.service import WorldviewService, config_from_plugin
-
-                tags = parse_tags_json(dumps_tags_json(seed_info.get("tags")))
-                layer = normalize_ideology_layer(
-                    str(result.get("ideology_layer", "") or ""),
-                    default=WorldviewService.infer_layer_from_tags(tags),
-                )
-
-                create_crystallized_trait(
-                    trait_id=trait_id,
-                    stream_id=seed_info.get("stream_id", "") or "",
-                    seed_id=seed_info.get("id", "") or "",
-                    name=seed_info.get("type", "trait"),
-                    question=seed_info.get("question", "") or "",
-                    thought=result.get("thought", "") or "",
-                    tags_json=dumps_tags_json(seed_info.get("tags")),
-                    confidence=int(confidence),
-                    evidence_json=dumps_evidence_json([evidence_entry]),
-                    spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
-                    created_at=now,
-                    enabled=True,
-                    deleted=False,
-                    ideology_layer=layer,
-                    lifecycle_state="active",
-                )
-
-                # 写思想图谱边：旧 trait → 新 trait
-                edge_types = {"contradicted": "contradicted_by", "weakened": "weakened_by", "revised": "revised_by"}
-                edge_type = edge_types[relation]
-                create_thought_edge(
-                    from_trait_id=target_trait_id,
-                    to_trait_id=trait_id,
-                    relation_type=edge_type,
-                    source_ref=seed_info.get("id", "") or "",
-                )
-                logger.info(f"已创建边 {edge_type}: {target_trait_id} → {trait_id} (seed={seed_info.get('id', '')})")
-                return {"trait_id": trait_id, "merged": False, "relation": relation, "related_to": target_trait_id}
+                    # 3) 写思想图谱边：旧 trait → 新 trait
+                    edge_types = {"contradicted": "contradicted_by", "weakened": "weakened_by", "revised": "revised_by"}
+                    edge_type = edge_types[relation]
+                    create_thought_edge(
+                        from_trait_id=target_trait_id,
+                        to_trait_id=trait_id,
+                        relation_type=edge_type,
+                        source_ref=seed_info.get("id", "") or "",
+                    )
+                    logger.info(f"已创建边 {edge_type}: {target_trait_id} → {trait_id} (seed={seed_info.get('id', '')})")
+                    return {"trait_id": trait_id, "merged": False, "relation": relation, "related_to": target_trait_id}
 
         # none 或未匹配：创建新 trait（现有路径）
         from ..worldview.constants import normalize_ideology_layer
@@ -387,15 +389,15 @@ class InternalizationEngine:
         import json
         import difflib
 
-        from ..models.ideology_model import query_crystallized_traits
+        from ..models.ideology_model import query_active_traits_for_injection
         from ..utils.trait_tags import parse_tags_json
 
         if not new_thought.strip():
             return None
 
-        candidates = query_crystallized_traits(
-            deleted=False,
-            enabled=True,
+        # 候选集包含本群 trait + 全局 trait（query_active_traits_for_injection 已按
+        # stream_id OR GLOBAL_STREAM 匹配且过滤 enabled），确保新 trait 能与全局观点比对矛盾
+        candidates = query_active_traits_for_injection(
             stream_id=stream_id,
             limit=40,
         )
@@ -411,6 +413,8 @@ class InternalizationEngine:
             return float(overlap * 2) + float(ratio)
 
         ranked = sorted(candidates, key=candidate_score, reverse=True)[:12]
+        # id→trait 映射，用于返回前的代码层校验（strengthened 豁免）
+        ranked_by_id = {t.trait_id: t for t in ranked}
 
         items = []
         for t in ranked:
@@ -477,6 +481,14 @@ class InternalizationEngine:
         elif relation in ("contradicted", "weakened", "revised"):
             if not target_trait_id or target_trait_id not in valid_ids:
                 return None
+            # 代码层兜底：strengthened trait 仅可判 duplicate，即使 LLM 不遵守 prompt 约束
+            # 也强制降级为 none，避免被多次证据强化的牢固观点被单条新种子推翻
+            target = ranked_by_id.get(target_trait_id)
+            if target is not None and target.lifecycle_state == "strengthened":
+                logger.warning(
+                    f"LLM 尝试将 strengthened trait {target_trait_id} 判为 {relation}，已强制降级为 none"
+                )
+                return {"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": reason}
         else:
             # none 或其他未预期值 → 不返回 relation（由 caller 建新 trait）
             return {"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": ""}

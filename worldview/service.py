@@ -201,6 +201,8 @@ class WorldviewService:
         # 批量查询所有目标 trait 的图谱边，替代原先逐 trait N+1
         edges_by_tid = im.list_thought_edges_for_traits(target_ids)
         hints: list[str] = []
+        # 矛盾/弱化/修正边的中文标签，让 LLM 在注入中看到观点间的张力
+        rel_labels = {"contradicted_by": "矛盾于", "weakened_by": "弱化于", "revised_by": "修正自"}
         for tid in target_ids:
             for e in edges_by_tid.get(tid, []):
                 rel = e.relation_type
@@ -208,6 +210,8 @@ class WorldviewService:
                     hints.append(f"观点 {tid[:8]}… 源自内省/种子 {e.source_ref[:12]}")
                 elif rel == "supports" and e.to_trait_id:
                     hints.append(f"观点 {tid[:8]}… 支撑 {e.to_trait_id[:8]}…")
+                elif rel in rel_labels and e.to_trait_id:
+                    hints.append(f"观点 {tid[:8]}… {rel_labels[rel]} {e.to_trait_id[:8]}…")
         if not hints:
             return ""
         return "【思想关联】" + "；".join(hints[:limit])
