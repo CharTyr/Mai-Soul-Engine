@@ -39,19 +39,17 @@ class WorldviewConfigView:
 
 
 def config_from_plugin(plugin: Any) -> WorldviewConfigView:
-    wv = getattr(plugin.config, "worldview", None)
-    if wv is None:
-        return WorldviewConfigView()
+    wv = plugin.config.worldview
     return WorldviewConfigView(
-        p1_enabled=bool(getattr(wv, "p1_enabled", True)),
-        values_max_delta=int(getattr(wv, "values_max_delta", 2) or 2),
-        worldview_max_delta=int(getattr(wv, "worldview_max_delta", 4) or 4),
-        conduct_max_delta=int(getattr(wv, "conduct_max_delta", 6) or 6),
-        local_influence_ratio=float(getattr(wv, "local_influence_ratio", 0.35) or 0.35),
-        mood_enabled=bool(getattr(wv, "mood_enabled", True)),
-        mood_decay_hours=float(getattr(wv, "mood_decay_hours", 8.0) or 8.0),
-        mood_inject=bool(getattr(wv, "mood_inject", True)),
-        graph_inject=bool(getattr(wv, "graph_inject", True)),
+        p1_enabled=wv.p1_enabled,
+        values_max_delta=wv.values_max_delta,
+        worldview_max_delta=wv.worldview_max_delta,
+        conduct_max_delta=wv.conduct_max_delta,
+        local_influence_ratio=wv.local_influence_ratio,
+        mood_enabled=wv.mood_enabled,
+        mood_decay_hours=wv.mood_decay_hours,
+        mood_inject=wv.mood_inject,
+        graph_inject=wv.graph_inject,
     )
 
 
@@ -160,21 +158,24 @@ class WorldviewService:
         stream_id: str,
         limit_per_layer: int = 2,
         exclude_trait_ids: set[str] | None = None,
+        traits: list[Any] | None = None,
     ) -> str:
         """按三观层汇总可注入的固化观点（P1-f）。
 
         Args:
             exclude_trait_ids: 已在详细 trait 注入块中出现的 trait_id，层摘要中跳过避免重复。
+            traits: 可选，预查询的 traits 列表；为 None 时内部查询。
         """
         if not self.cfg.p1_enabled:
             return ""
         exclude = exclude_trait_ids or set()
-        traits = im.query_active_traits_for_injection(stream_id=stream_id, limit=80)
+        if traits is None:
+            traits = im.query_active_traits_for_injection(stream_id=stream_id, limit=80)
         by_layer: dict[str, list[str]] = {layer: [] for layer in IDEOLOGY_LAYERS}
         for t in traits:
             if t.trait_id in exclude:
                 continue
-            layer = normalize_ideology_layer(getattr(t, "ideology_layer", "conduct"))
+            layer = normalize_ideology_layer(t.ideology_layer)
             if len(by_layer[layer]) >= limit_per_layer:
                 continue
             thought = (t.thought or "").replace("\n", " ").strip()[:100]

@@ -1,3 +1,6 @@
+import re
+
+
 def update_spectrum_value(current: int, delta: int) -> int:
     new_value = current + delta
     if new_value > 100:
@@ -150,9 +153,6 @@ def apply_resistance(delta: int, last_dir: int, resistance: float = 0.5) -> tupl
 
 
 # 隐私脱敏
-import re
-
-
 def sanitize_text(text: str, max_chars: int = 500) -> str:
     """过滤敏感信息"""
     s = (text or "").replace("\n", " ").replace("\r", " ").strip()

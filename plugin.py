@@ -22,6 +22,7 @@ from maibot_sdk import API, Command, HookHandler, MaiBotPlugin
 from maibot_sdk.types import HookMode, HookOrder, ErrorPolicy
 
 from .plugin_ui_schema import CONFIG_VERSION, MaiSoulEngineConfig
+from .worldview.service import WorldviewConfigView, WorldviewService, config_from_plugin
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,9 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         self._notion_sync_task: asyncio.Task | None = None
         # 问卷会话状态：{session_key: {current, answers, started_at}}
         self._questionnaire_sessions: dict[str, dict[str, Any]] = {}
+        # P1 缓存：避免每条消息重建 WorldviewConfigView 和 WorldviewService
+        self._wv_config_view: WorldviewConfigView | None = None
+        self._wv_service: WorldviewService | None = None
 
     # ===== 生命周期 =====
 
@@ -102,6 +106,10 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             self._notion_sync_task = asyncio.create_task(self._notion_sync_loop())
             logger.info("[Mai-Soul-Engine] Notion 同步任务已启动")
 
+        # 初始化 P1 缓存
+        self._wv_config_view = config_from_plugin(self)
+        self._wv_service = WorldviewService(self._wv_config_view)
+
     async def on_unload(self) -> None:
         """插件卸载：取消周期任务、关闭数据库。"""
         from .models.ideology_model import close_db
@@ -130,6 +138,9 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         if scope == "self":
             # 配置已自动注入到 self.config，这里只需处理需要即时响应的变更
             logger.info("[Mai-Soul-Engine] 配置已更新 (version=%s)", version)
+            # 刷新 P1 缓存
+            self._wv_config_view = config_from_plugin(self)
+            self._wv_service = WorldviewService(self._wv_config_view)
             # 演化任务启停
             if self.config.evolution.evolution_enabled and self._evolution_task is None:
                 self._evolution_task = asyncio.create_task(self._evolution_loop())

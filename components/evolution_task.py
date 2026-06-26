@@ -46,7 +46,7 @@ async def run_evolution_loop(plugin) -> None:
 
     while True:
         try:
-            interval_hours = float(plugin.config.evolution.evolution_interval_hours or 1.0)
+            interval_hours = plugin.config.evolution.evolution_interval_hours
             logger.debug("演化循环等待 %s 小时", interval_hours)
             await asyncio.sleep(interval_hours * 3600)
 
@@ -60,7 +60,7 @@ async def run_evolution_loop(plugin) -> None:
                 continue
 
             # P0-4：过期长期未强化的 active trait
-            trait_ttl_days = int(getattr(plugin.config.thought_cabinet, "trait_ttl_days", 90) or 90)
+            trait_ttl_days = plugin.config.thought_cabinet.trait_ttl_days
             if trait_ttl_days > 0:
                 from ..models.ideology_model import expire_old_traits
 
@@ -68,7 +68,7 @@ async def run_evolution_loop(plugin) -> None:
                 if expired:
                     logger.info("过期 %s 个超龄 active trait (TTL=%s天)", expired, trait_ttl_days)
 
-            evolution_rate = int(plugin.config.evolution.evolution_rate or 5)
+            evolution_rate = plugin.config.evolution.evolution_rate
             monitored_groups = list(plugin.config.monitor.monitored_groups or [])
             excluded_groups = list(plugin.config.monitor.excluded_groups or [])
             logger.debug("演化参数: rate=%s, groups=%s", evolution_rate, monitored_groups)
@@ -96,6 +96,7 @@ async def run_evolution_loop(plugin) -> None:
         except asyncio.CancelledError:
             logger.info("灵魂光谱演化任务已停止")
             break
+        # 顶层兜底：确保演化循环不因意外异常退出，已 log+exc_info
         except Exception as e:
             logger.error("灵魂光谱演化任务出错: %s", e, exc_info=True)
             await asyncio.sleep(60)
@@ -123,7 +124,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 start_time=str(last_time.timestamp()),
                 end_time=str(now.timestamp()),
             )
-        except Exception:
+        except (RuntimeError, ValueError, OSError):
             logger.exception("获取群%s消息失败", stream_id)
             return
 
@@ -138,8 +139,8 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             logger.debug("群%s消息不足5条，跳过分析", stream_id)
             return
 
-        max_messages = int(plugin.config.evolution.max_messages_per_analysis or 200)
-        max_chars = int(plugin.config.evolution.max_chars_per_message or 200)
+        max_messages = plugin.config.evolution.max_messages_per_analysis
+        max_chars = plugin.config.evolution.max_chars_per_message
 
         monitor_config = {
             "monitored_users": list(plugin.config.monitor.monitored_users or []),
@@ -195,7 +196,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.debug("发送LLM请求，prompt长度: %s", len(prompt))
         try:
             llm_result = await plugin.ctx.llm.generate(prompt)
-        except Exception:
+        except (RuntimeError, ValueError, OSError):
             logger.exception("LLM 请求失败")
             return
 
@@ -234,8 +235,8 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             "directness": spectrum.directness,
         }
 
-        ema_alpha = float(plugin.config.evolution.ema_alpha or 0.3)
-        resistance = float(plugin.config.evolution.direction_resistance or 0.5)
+        ema_alpha = plugin.config.evolution.ema_alpha
+        resistance = plugin.config.evolution.direction_resistance
 
         from ..worldview.service import WorldviewService, config_from_plugin
 
@@ -318,6 +319,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             smoothed_deltas["directness"],
         )
 
+    # 顶层兜底：单个群分析失败不阻断其他群
     except Exception as e:
         logger.error("分析群%s时出错: %s", group_config_id, e, exc_info=True)
 
@@ -334,15 +336,7 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines:
     if not seeds:
         return
 
-    config = {
-        "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
-        "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
-        "admin_user_id": str(plugin.config.admin.admin_user_id or ""),
-        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
-        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
-        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
-    }
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
 
     for seed_data in seeds[:2]:
         seed_id = await manager.create_seed(seed_data, stream_id=stream_id, context_messages=msg_lines)
@@ -356,7 +350,7 @@ async def _notify_admin_seed(plugin, manager, seed_id: str) -> None:
     """向管理员私聊发送思维种子通知（含原始对话上下文）。"""
     from ..utils.spectrum_utils import parse_user_id
 
-    admin_config_id = str(plugin.config.admin.admin_user_id or "")
+    admin_config_id = plugin.config.admin.admin_user_id
     if not admin_config_id:
         return
 
@@ -375,7 +369,7 @@ async def _notify_admin_seed(plugin, manager, seed_id: str) -> None:
         admin_stream_id = await plugin.ctx.chat.get_stream_by_user_id(
             platform=platform, user_id=user_id
         )
-    except Exception:
+    except (RuntimeError, ValueError, OSError):
         logger.exception("获取管理员 stream_id 失败，无法发送种子通知")
         return
 
@@ -388,5 +382,5 @@ async def _notify_admin_seed(plugin, manager, seed_id: str) -> None:
             text=manager.format_seed_notification(seed_id, seed_data),
             stream_id=admin_stream_id,
         )
-    except Exception:
+    except (RuntimeError, ValueError, OSError):
         logger.exception("发送思维种子通知失败")

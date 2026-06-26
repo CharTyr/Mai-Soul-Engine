@@ -33,15 +33,7 @@ async def handle_seeds_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    config = {
-        "max_seeds": plugin.config.thought_cabinet.max_seeds,
-        "min_trigger_intensity": plugin.config.thought_cabinet.min_trigger_intensity,
-        "admin_user_id": admin_user_id,
-        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
-        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
-        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
-    }
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seeds = await manager.get_pending_seeds()
 
     msg = manager.format_seeds_list(seeds)
@@ -163,15 +155,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 
     seed_id = match.group(1)
 
-    config = {
-        "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
-        "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
-        "admin_user_id": admin_user_id,
-        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
-        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
-        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
-    }
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seed = await manager.get_seed_by_id(seed_id)
 
     if not seed:
@@ -204,7 +188,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
             try:
                 if similarity is not None:
                     sim_text = f" (similarity={float(similarity):.2f})"
-            except Exception:
+            except (TypeError, ValueError):
                 sim_text = ""
             trait_line = f"\ntrait_id: {trait_id}（已合并）{sim_text}"
         msg = (
@@ -254,15 +238,7 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
     seed_id = match.group(1)
 
-    config = {
-        "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
-        "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
-        "admin_user_id": admin_user_id,
-        "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
-        "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
-        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
-    }
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seed = await manager.get_seed_by_id(seed_id)
 
     if not seed:
@@ -333,17 +309,17 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
             from ..utils.trait_tags import parse_tags_json
 
             tags = parse_tags_json(t.tags_json)
-        except Exception:
+        except (ValueError, TypeError):
             tags = []
         try:
             from ..utils.trait_evidence import parse_evidence_json
 
             evidence_count = len(parse_evidence_json(t.evidence_json))
-        except Exception:
+        except (ValueError, TypeError):
             evidence_count = 0
         try:
             confidence = float(t.confidence or 0) / 100.0
-        except Exception:
+        except (TypeError, ValueError):
             confidence = 0.0
         if tags:
             lines.append(f"  tags: {', '.join(tags)}")
@@ -432,7 +408,7 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 
     try:
         impact = _json.loads(trait.spectrum_impact_json or "{}")
-    except Exception:
+    except (ValueError, TypeError):
         impact = {}
     impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0]) if isinstance(impact, dict) else ""
     if impact_str:

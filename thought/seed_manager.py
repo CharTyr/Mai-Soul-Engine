@@ -82,6 +82,28 @@ class ThoughtSeedManager:
         self.reviewed_keep_count = int(config.get("reviewed_keep_count", 200))
         self.seed_dedup_threshold = float(config.get("seed_dedup_threshold", 0.82))
 
+    @classmethod
+    def from_plugin_config(cls, plugin) -> "ThoughtSeedManager":
+        """从插件配置构造种子管理器，统一配置读取，避免多处重复构造。
+
+        Args:
+            plugin: MaiSoulEnginePlugin 实例，需包含 config.thought_cabinet。
+
+        Returns:
+            ThoughtSeedManager 实例。
+        """
+        cfg = plugin.config.thought_cabinet
+        return cls(
+            {
+                "max_seeds": cfg.max_seeds,
+                "min_trigger_intensity": cfg.min_trigger_intensity,
+                "admin_user_id": plugin.config.admin.admin_user_id,
+                "seed_ttl_hours": cfg.seed_ttl_hours,
+                "reviewed_keep_count": cfg.reviewed_keep_count,
+                "seed_dedup_threshold": cfg.seed_dedup_threshold,
+            }
+        )
+
     async def create_seed(
         self,
         seed_data: dict,
@@ -119,7 +141,7 @@ class ThoughtSeedManager:
         raw_confidence = seed_data.get("confidence", 0.0)
         try:
             confidence = float(raw_confidence)
-        except Exception:
+        except (TypeError, ValueError):
             confidence = 0.0
         confidence = max(0.0, min(1.0, confidence))
         confidence_int = int(round(confidence * 100))
@@ -157,17 +179,18 @@ class ThoughtSeedManager:
         return seed_id
 
     async def _cleanup_excess_seeds(self):
-        """清理超限的旧种子"""
-        from ..models.ideology_model import get_pending_thought_seeds
+        """清理超限的旧种子：将超出 max_seeds 的最旧 pending 种子标记为 expired，
+        保留审计记录而非物理删除。"""
+        from ..models.ideology_model import get_pending_thought_seeds, update_seed_status
 
         seeds = get_pending_thought_seeds()
         logger.debug(f"当前待审核种子数: {len(seeds)}, 最大限制: {self.max_seeds}")
 
         if len(seeds) >= self.max_seeds:
-            logger.info(f"种子数超限，清理 {len(seeds) - self.max_seeds + 1} 个旧种子")
+            logger.info(f"种子数超限，标记 {len(seeds) - self.max_seeds + 1} 个旧种子为 expired")
             for seed in seeds[self.max_seeds - 1 :]:
-                seed.delete_instance()
-                logger.debug(f"清理旧种子: {seed.seed_id}")
+                update_seed_status(seed.seed_id, "expired", expected_status="pending")
+                logger.debug(f"标记旧种子 expired: {seed.seed_id}")
 
     async def delete_seed(self, seed_id: str) -> bool:
         """删除种子（从数据库）"""
@@ -319,7 +342,7 @@ class ThoughtSeedManager:
         try:
             if confidence is not None:
                 confidence_line = f"\n置信度: {float(confidence):.2f}"
-        except Exception:
+        except (TypeError, ValueError):
             confidence_line = ""
         evidence = seed_data.get("evidence", []) or []
         evidence_block = ""
@@ -377,7 +400,7 @@ def _parse_context_json(raw: str) -> list[str]:
     """解析上下文 JSON 字符串为字符串列表。"""
     try:
         data = json.loads(raw or "[]")
-    except Exception:
+    except (ValueError, TypeError):
         return []
     if not isinstance(data, list):
         return []

@@ -108,7 +108,7 @@ class InternalizationEngine:
             internalization_confidence = 0.0
             try:
                 internalization_confidence = float(result.get("confidence", 0.0) or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 internalization_confidence = 0.0
             internalization_confidence = max(0.0, min(1.0, internalization_confidence))
 
@@ -172,6 +172,7 @@ class InternalizationEngine:
                 "dedup_similarity": stored.get("dedup_similarity", None),
             }
 
+        # 顶层兜底：捕获所有异常以返回结构化错误，不吞没（已 log+exc_info）
         except Exception as e:
             logger.error(f"内化失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
@@ -191,7 +192,7 @@ class InternalizationEngine:
             if "confidence" in result:
                 try:
                     result["confidence"] = float(result.get("confidence", 0.0) or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     result["confidence"] = 0.0
             return result
         except json.JSONDecodeError:
@@ -246,7 +247,7 @@ class InternalizationEngine:
         dedup_enabled = bool((dedup or {}).get("enabled", True))
         try:
             dedup_threshold = float((dedup or {}).get("threshold", 0.78))
-        except Exception:
+        except (TypeError, ValueError):
             dedup_threshold = 0.78
         dedup_threshold = max(0.0, min(1.0, dedup_threshold))
 
@@ -380,14 +381,14 @@ class InternalizationEngine:
             response = response.split("\n", 1)[1].rsplit("```", 1)[0]
         try:
             data = json.loads(response)
-        except Exception:
+        except (ValueError, TypeError):
             return None
         if not isinstance(data, dict):
             return None
         duplicate_of = str(data.get("duplicate_of", "") or "").strip()
         try:
             similarity = float(data.get("similarity", 0.0) or 0.0)
-        except Exception:
+        except (TypeError, ValueError):
             similarity = 0.0
         similarity = max(0.0, min(1.0, similarity))
         if not duplicate_of or similarity < threshold:

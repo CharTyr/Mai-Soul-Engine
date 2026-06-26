@@ -13,6 +13,18 @@ LIFECYCLE_STATES: tuple[str, ...] = (
     "expired",
     "contradicted",
 )
+"""trait 生命周期状态枚举。
+
+已有写入路径（实际使用）：
+- ``active``：新建 trait 的初始状态。
+- ``strengthened``：merge 时被重复证据强化（TTL 过期豁免）。
+- ``expired``：长期未强化、超 ``trait_ttl_days`` 自动过期（同时 enabled=0）。
+
+预留枚举（**尚无写入路径**，等待基于 LLM 的内省矛盾检测落地，详见 README/AGENTS）：
+- ``weakened`` / ``revised`` / ``contradicted``。
+注入侧 ``ideology_injector._trait_quality_score`` 已对 ``weakened`` / ``revised`` 预置降权分，
+故保留枚举而非删除；删除会使该降权分支变成死代码且阻断后续迭代。
+"""
 
 SPECTRUM_DIM_TO_LAYER: dict[str, str] = {
     "sincerity": "values",

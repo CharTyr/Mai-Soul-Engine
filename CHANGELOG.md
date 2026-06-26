@@ -48,6 +48,18 @@
 - 兼容：`[worldview].p1_enabled = false` 时分层/切片/情绪关闭，行为与 v2.0 一致（四维已是社交轴）。
 - 测试：宿主仓新增 `pytests/test_mai_soul_p1_model.py`（4 项），manifest 门禁改为跟随分支版本，legacy_import 测试同步新列名。
 
+### 重构与加固（开发侧）
+
+- **数据层拆分**：`models/ideology_model.py`（1006 行单体）按实体拆为 `_conn.py`/`spectrum.py`/`history.py`/`seeds.py`/`traits.py`/`p1.py` 六个子模块；`ideology_model.py` 保留为重导出 shim（`import *` + `__getattr__` 委托动态变量），40+ 处历史导入零破坏。
+- **`update_seed_status` 原子守卫**：新增 `expected_status="pending"` 参数，默认仅当当前状态为 `pending` 才更新，避免竞态下复活已过期/已审核种子；所有现有 2 参调用自动获得守卫。
+- **`_cleanup_excess_seeds` 改标 expired**：pending 超 `max_seeds` 时不再物理删除最旧种子，改为 `update_seed_status(.., "expired")`，保留被挤掉种子的审计记录。
+- **消除 `or` fallback 反模式**：全量清除配置字段侧 `int/float(... or 默认)`（会吞掉合法 `0`/`0.0`，如 `max_traits=0` 被改成 3、`trait_ttl_days=0` 被改成 90）；改为直接属性访问（pydantic 字段必然存在）。残留的 `dict.get(k,0) or 0`/`dbfield or 0` 是 None 守卫且默认值=0（0 被保留），非反模式。
+- **`ThoughtSeedManager.from_plugin_config` 工厂**：收敛 4 处重复的配置 dict 构造（evolution_task + thought_commands 三处）。
+- **注入热路径优化**（`before_request` 每条消息触发）：`WorldviewConfigView`/`WorldviewService` 缓存到 `plugin._wv_config_view`/`_wv_service`（`on_load` 构造、`on_config_update` 重建）；`build_layer_trait_summary` 复用已查 traits 避免二次 SQL；冷却筛选从 per-trait 改为一次批量过滤；`inject_ideology`（290 行）拆为 `_should_inject`/`_select_traits`/`_build_injection_block` 等子函数；`threading.Lock` → `asyncio.Lock`；注入日志采样（每 10 条）+ 5MB 轮转 + `asyncio.to_thread` 异步写。
+- **`getattr` → 直接属性访问**：`ideology_injector`/`worldview/service` 中对 dataclass/pydantic 字段的冗余 `getattr(.., default) or default` 全部改为直接访问。
+- **`except` 收窄**：`ideology_injector`/`evolution_task`/`thought_commands`/`internalization_engine`/`seed_manager` 中裸 `except Exception` 改为具体异常类型（顶层循环恢复保留并加注释）。
+- **杂项**：`spectrum_utils.py` 的 `import re` 上移到文件顶部；`worldview/constants.py` 的 `LIFECYCLE_STATES` 补文档说明预留枚举（`weakened`/`revised`/`contradicted` 尚无写入路径，injector 已预置降权分，保留而非删除）。
+
 ## [2.0.0] — 2026-06-26
 
 ### 用户可感知
