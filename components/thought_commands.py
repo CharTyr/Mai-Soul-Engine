@@ -81,7 +81,11 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 
     seed_id = match.group(1)
 
-    config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": admin_user_id}
+    config = {
+        "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
+        "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
+        "admin_user_id": admin_user_id,
+    }
     manager = ThoughtSeedManager(config)
     seed = await manager.get_seed_by_id(seed_id)
 
@@ -165,7 +169,11 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
     seed_id = match.group(1)
 
-    config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": admin_user_id}
+    config = {
+        "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
+        "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
+        "admin_user_id": admin_user_id,
+    }
     manager = ThoughtSeedManager(config)
     seed = await manager.get_seed_by_id(seed_id)
 
