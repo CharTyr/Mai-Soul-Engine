@@ -1,12 +1,15 @@
 # Mai-Soul-Engine 配置模板
 # 复制为 config.toml 后按需修改。config.toml 已加入 .gitignore。
 
+# ─── 插件元数据（Runner 必填）────────────────────────────────────────
+[plugin]
+enabled = true
+config_version = "2.0.0"
+
 # ─── 管理员配置 ─────────────────────────────────────────────────────
 [admin]
 # 管理员用户ID（必填，格式：平台:ID，如 qq:12345678）
 admin_user_id = ""
-# 启用插件
-enabled = true
 
 # ─── 演化设置 ───────────────────────────────────────────────────────
 [evolution]

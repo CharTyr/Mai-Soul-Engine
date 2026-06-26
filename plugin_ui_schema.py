@@ -10,6 +10,8 @@ from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
 
+CONFIG_VERSION = "2.0.0"
+
 
 def _ui(
     label: str,
@@ -40,12 +42,37 @@ def _ui(
     return extra
 
 
+class PluginSectionConfig(PluginConfigBase):
+    """Runner 要求的 [plugin] 节：版本号与功能总开关。"""
+
+    __ui_label__ = "插件"
+    __ui_icon__ = "package"
+    __ui_order__ = 0
+
+    enabled: bool = Field(
+        default=True,
+        description="启用 Soul 功能",
+        json_schema_extra=_ui(
+            "启用 Soul 功能",
+            "关闭后跳过注入等核心逻辑；与 WebUI 插件总开关配合使用。",
+        ),
+    )
+    config_version: str = Field(
+        default=CONFIG_VERSION,
+        description="配置版本",
+        json_schema_extra=_ui(
+            "配置版本",
+            "须与插件默认一致；升级插件后由 Runner 按版本合并配置，请勿随意修改。",
+        ),
+    )
+
+
 class AdminConfig(PluginConfigBase):
     """可执行 /soul_setup、重置与思维阁审核的账号。"""
 
     __ui_label__ = "管理员"
     __ui_icon__ = "shield"
-    __ui_order__ = 0
+    __ui_order__ = 1
 
     admin_user_id: str = Field(
         default="",
@@ -56,11 +83,6 @@ class AdminConfig(PluginConfigBase):
             placeholder="qq:12345678",
         ),
     )
-    enabled: bool = Field(
-        default=True,
-        description="启用插件",
-        json_schema_extra=_ui("启用插件", "关闭后 Runner 仍可能加载插件，但核心逻辑应视为停用；建议与 WebUI 插件开关一致。"),
-    )
 
 
 class EvolutionConfig(PluginConfigBase):
@@ -68,7 +90,7 @@ class EvolutionConfig(PluginConfigBase):
 
     __ui_label__ = "演化"
     __ui_icon__ = "trending-up"
-    __ui_order__ = 1
+    __ui_order__ = 2
 
     evolution_enabled: bool = Field(
         default=True,
@@ -121,7 +143,7 @@ class MonitorConfig(PluginConfigBase):
 
     __ui_label__ = "监控"
     __ui_icon__ = "eye"
-    __ui_order__ = 2
+    __ui_order__ = 3
 
     monitored_groups: list[str] = Field(
         default_factory=list,
@@ -154,7 +176,7 @@ class ThresholdConfig(PluginConfigBase):
 
     __ui_label__ = "阈值"
     __ui_icon__ = "gauge"
-    __ui_order__ = 3
+    __ui_order__ = 4
 
     enable_extreme: bool = Field(
         default=False,
@@ -177,7 +199,7 @@ class InjectionConfig(PluginConfigBase):
 
     __ui_label__ = "注入"
     __ui_icon__ = "syringe"
-    __ui_order__ = 4
+    __ui_order__ = 5
 
     scope: str = Field(
         default="global",
@@ -218,7 +240,7 @@ class ThoughtCabinetConfig(PluginConfigBase):
 
     __ui_label__ = "思维阁"
     __ui_icon__ = "brain"
-    __ui_order__ = 5
+    __ui_order__ = 6
 
     enabled: bool = Field(
         default=False,
@@ -262,7 +284,7 @@ class ApiConfig(PluginConfigBase):
 
     __ui_label__ = "API"
     __ui_icon__ = "key"
-    __ui_order__ = 6
+    __ui_order__ = 7
 
     enabled: bool = Field(
         default=True,
@@ -290,7 +312,7 @@ class NotionConfig(PluginConfigBase):
 
     __ui_label__ = "Notion"
     __ui_icon__ = "book-open"
-    __ui_order__ = 7
+    __ui_order__ = 8
 
     enabled: bool = Field(
         default=False,
@@ -390,6 +412,7 @@ class NotionConfig(PluginConfigBase):
 class MaiSoulEngineConfig(PluginConfigBase):
     """Mai-Soul-Engine 插件配置。"""
 
+    plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)

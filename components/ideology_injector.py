@@ -144,7 +144,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         Hook 返回值 dict，包含 modified_kwargs 以修改请求。
     """
     # ── 1. 配置检查 ────────────────────────────────────────────────
-    if not plugin.config.admin.enabled:
+    if not plugin.config.plugin.enabled:
         return {"success": True, "action": "continue"}
 
     messages: list[dict] = list(kwargs.get("messages") or [])

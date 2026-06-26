@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Iterable
@@ -19,7 +21,7 @@ from typing import Any, ClassVar, Iterable
 from maibot_sdk import API, Command, HookHandler, MaiBotPlugin
 from maibot_sdk.types import HookMode, HookOrder, ErrorPolicy
 
-from .plugin_ui_schema import MaiSoulEngineConfig
+from .plugin_ui_schema import CONFIG_VERSION, MaiSoulEngineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,28 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
     """Mai-Soul-Engine 插件 — 通过聊天塑造 MaiBot 三观。"""
 
     config_model = MaiSoulEngineConfig
+
+    def normalize_plugin_config(
+        self, config_data: Mapping[str, Any] | None
+    ) -> tuple[dict[str, Any], bool]:
+        """补齐 [plugin].config_version，兼容旧版无该节的 config.toml。"""
+        raw_config = deepcopy(dict(config_data)) if isinstance(config_data, Mapping) else {}
+        plugin_section = raw_config.get("plugin")
+        changed = False
+        if not isinstance(plugin_section, dict):
+            admin_section = raw_config.get("admin")
+            soul_enabled = True
+            if isinstance(admin_section, dict) and "enabled" in admin_section:
+                soul_enabled = bool(admin_section.pop("enabled"))
+                changed = True
+            raw_config["plugin"] = {"enabled": soul_enabled, "config_version": CONFIG_VERSION}
+            changed = True
+        else:
+            if not str(plugin_section.get("config_version", "") or "").strip():
+                plugin_section["config_version"] = CONFIG_VERSION
+                changed = True
+        base_normalized, base_changed = super().normalize_plugin_config(raw_config)
+        return base_normalized, changed or base_changed or base_normalized != raw_config
 
     def __init__(self) -> None:
         super().__init__()
