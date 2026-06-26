@@ -11,6 +11,27 @@
 - 注入回复时带「三观分层摘要」与「短期情绪语气」，回复风格更贴合长期人格。
 - 新增 API `soul.get_worldview`：返回分层统计、情绪状态、本群切片（脱敏）。
 
+### 思维阁强化（用户可感知）
+
+- 种子审核通知新增「原始对话上下文」：除 LLM 摘录的证据片段外，附带触发该种子的真实群聊片段（evidence 前后各 2 条），管理员审核时能看到真实对话而非二次总结。
+- 种子审核后不再删除：批准/拒绝改为标记状态，保留种子→trait 的可追溯审计链。
+- 自动卫生清理：超期未审的种子自动过期；长期未被强化的固化观点自动停用，避免陈旧观点持续影响人格。
+- 注入更聪明：高置信度、已强化的观点优先注入；无标签的观点也能按影响力被注入（此前几乎不可见）；分层摘要不再与详细观点重复。
+- 同话题种子去重：同一群聊反复讨论同一话题不再重复产生待审种子。
+
+### 思维阁强化（开发侧）
+
+- 种子上下文窗口：`soul_thought_seeds` 新增 `context_json` 列（就地迁移）；`seed_manager._match_evidence_to_context` 用 difflib 把 LLM evidence 模糊匹配回原始消息行，取 ±2 条窗口（每行截断 200 字，最多 10 行）。
+- 种子审计链（P0）：`update_seed_status` 替代删除；approve→`approved`、reject→`rejected`；`_cleanup_old_reviewed_seeds` 保留最近 `reviewed_keep_count`(默认200) 条已审种子。
+- 种子 TTL（P0）：`expire_old_pending_seeds` 将超过 `seed_ttl_hours`(默认168h) 的 pending 种子标记 `expired`，演化循环每轮自动执行。
+- trait 生命周期（P0）：`expire_old_traits` 将超过 `trait_ttl_days`(默认90) 且未被强化的 `active` trait 标记 `expired` 并 `enabled=0`；`strengthened` 不受影响。
+- 内化上下文（P1）：`INTERNALIZATION_PROMPT` 新增 evidence/context/intensity/confidence/potential_impact 字段，内化 LLM 基于真实片段形成观点，复用种子的预期光谱影响。
+- 注入选择（P1+P2）：无 tag trait 按影响分补位填满 `max_traits`（新增 `tag_hit+tagless`/`tagless_fill` 模式）；二级排序加质量分（confidence + 生命周期加权）；`build_layer_trait_summary` 支持 `exclude_trait_ids` 与详细注入块去重。
+- 种子去重（P2）：`_is_duplicate_pending_seed` 用本地 difflib 对同群 pending 种子按 type+event+reasoning 签名去重（阈值 `seed_dedup_threshold` 默认0.82，不调 LLM）。
+- 新增配置：`seed_ttl_hours` / `reviewed_keep_count` / `trait_ttl_days` / `seed_dedup_threshold`。
+- 种子类型字典 `THOUGHT_TYPES` 对齐社交轴；approve/reject 路径配置改为读取而非硬编码。
+- 修复 `__init__` 中 `or 默认值` 误把合法 `0.0` 替换为默认值的 bug。
+
 ### 开发侧
 
 - **光谱重构**：`IdeologySpectrum` 字段 economic/social/diplomatic/progressive → sincerity/engagement/closeness/directness；DB 列就地 `RENAME COLUMN` 迁移（幂等，SQLite ≥3.25）；演化历史与切片表同步重命名。
