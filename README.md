@@ -4,7 +4,7 @@
 
 > **分支说明**
 > - **`main`（v2.0.0，本分支）**：SDK 2.x 稳定版，聊天→演化→注入的完整闭环，生产可用。
-> - **`dev`（v2.1.0）**：在 v2.0 之上叠加 **P1 三观生长**（三观分层限速、轻量思想图谱、群聊局部切片、短期情绪辅助、分层注入摘要、`soul.get_worldview` API）。**向下兼容**：`[worldview].p1_enabled=false` 时行为与 v2.0 完全一致。详见 `dev` 分支 README 与 `MIGRATION_PLAN.md` §8。
+> - **`dev`（v2.1.0）**：在 v2.0 之上叠加 **三观生长**（三观分层限速、轻量思想图谱、群聊局部切片、短期情绪辅助、分层注入摘要、`soul.get_worldview` API）。**向下兼容**：`[worldview].p1_enabled=false` 时行为与 v2.0 完全一致。详见 `dev` 分支 README 与 `MIGRATION_PLAN.md` §8。
 > - **`archive/legacy-sdk1-v1`**：旧 SDK1 归档，不再维护。
 >
 > 想体验「让 Mai 的三观随聊天分层生长」请切到 `dev`；要稳定运行请留在 `main`。
