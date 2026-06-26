@@ -321,9 +321,25 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             }
         )
 
+    from ..worldview.service import WorldviewService, config_from_plugin
+
+    wv = WorldviewService(config_from_plugin(plugin))
+    p1_blocks: list[str] = []
+    layer_summary = wv.build_layer_trait_summary(stream_id)
+    if layer_summary:
+        p1_blocks.append(layer_summary)
+    mood_lines = wv.mood_prompt_lines()
+    if mood_lines:
+        p1_blocks.extend(mood_lines)
+    if selected:
+        graph_hint = wv.build_graph_hint(stream_id, [t.trait_id for t in selected])
+        if graph_hint:
+            p1_blocks.append(graph_hint)
+
     injection_block = (
         "\n\n"
         f"{ideology_prompt}\n"
+        + ("\n".join(p1_blocks) + "\n" if p1_blocks else "")
         + (
             (
                 "\n以下是你已固化的观点（人格的一部分，可用于影响回复风格）：\n"

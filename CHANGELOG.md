@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.1.0] — dev 分支（P1 三观生长）
+
+### 用户可感知
+
+- `/soul_status` 额外显示：本群相对全局的局部偏移、短期情绪、固化观点分层统计。
+- 光谱演化速度因三观分层而变化：价值观层最慢，处事观层较快，避免被短期聊天带歪。
+- 注入回复时带「三观分层摘要」与「短期情绪语气」，回复风格更贴合长期人格。
+- 新增 API `soul.get_worldview`：返回分层统计、情绪状态、本群切片（脱敏）。
+
+### 开发侧
+
+- 数据层：新增表 `soul_context_slices` / `soul_mood_state` / `soul_thought_edges`；`soul_crystallized_traits` 新增 `ideology_layer` / `lifecycle_state` 列（就地迁移，幂等）。
+- 新模块 `worldview/`：`constants.py`（层/lifecycle 枚举与归一化）、`service.py`（`WorldviewService`：分层限速、群切片、情绪衰减、分层注入摘要、思想图谱注册）。
+- 配置：`plugin_ui_schema.py` 新增 `[worldview]` 节；`config_version` 升至 `2.1.0`，`normalize_plugin_config` 自动补齐。
+- 演化：`evolution_task` 接入 `apply_layer_caps_to_deltas` / `record_local_slice` / `nudge_mood_from_deltas`。
+- 内化：`internalization_engine` 归层、写 lifecycle（合并升级为 `strengthened`）、注册 `derived_from` / `supports` 图谱边。
+- 注入：`ideology_injector` 叠加分层摘要、情绪语气、图谱来源提示。
+- API：`soul.get_traits` 返回 `ideology_layer` / `lifecycle_state`；新增 `soul.get_worldview`。
+- 兼容：`[worldview].p1_enabled = false` 时行为与 v2.0 完全一致。
+- 测试：宿主仓新增 `pytests/test_mai_soul_p1_model.py`（4 项），manifest 门禁改为跟随分支版本。
+
 ## [2.0.0] — 2026-06-26
 
 ### 用户可感知

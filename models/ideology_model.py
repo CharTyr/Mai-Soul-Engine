@@ -140,10 +140,49 @@ class CrystallizedTrait:
     created_at: datetime = field(default_factory=datetime.now)
     enabled: bool = True
     deleted: bool = False
+    ideology_layer: str = "conduct"
+    lifecycle_state: str = "active"
 
     def save(self) -> None:
         """持久化当前 trait。"""
         save_crystallized_trait(self)
+
+
+@dataclass
+class ContextSlice:
+    """群/会话上下文切片 — 仅记录 Mai 相对全局的局部偏移（P1-d）。"""
+
+    scope_type: str = "group"
+    scope_key: str = ""
+    economic_offset: int = 0
+    social_offset: int = 0
+    diplomatic_offset: int = 0
+    progressive_offset: int = 0
+    sample_count: int = 0
+    updated_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class MoodState:
+    """短期情绪辅助层（P1-e），不写入长期三观。"""
+
+    scope_id: str = "global"
+    valence: int = 0
+    arousal: int = 0
+    energy: int = 0
+    updated_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class ThoughtEdge:
+    """轻量思想图谱边（P1-b）。"""
+
+    id: int = 0
+    from_trait_id: str = ""
+    to_trait_id: str = ""
+    relation_type: str = ""
+    source_ref: str = ""
+    created_at: datetime = field(default_factory=datetime.now)
 
 
 # ─── 建表与迁移 ─────────────────────────────────────────────────────
@@ -215,6 +254,38 @@ _CREATE_SQL = [
         deleted INTEGER DEFAULT 0
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_context_slices (
+        scope_type TEXT NOT NULL DEFAULT 'group',
+        scope_key TEXT NOT NULL,
+        economic_offset INTEGER DEFAULT 0,
+        social_offset INTEGER DEFAULT 0,
+        diplomatic_offset INTEGER DEFAULT 0,
+        progressive_offset INTEGER DEFAULT 0,
+        sample_count INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT '',
+        PRIMARY KEY (scope_type, scope_key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_mood_state (
+        scope_id TEXT PRIMARY KEY DEFAULT 'global',
+        valence INTEGER DEFAULT 0,
+        arousal INTEGER DEFAULT 0,
+        energy INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_thought_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_trait_id TEXT NOT NULL,
+        to_trait_id TEXT DEFAULT '',
+        relation_type TEXT NOT NULL,
+        source_ref TEXT DEFAULT '',
+        created_at TEXT DEFAULT ''
+    )
+    """,
 ]
 
 
@@ -256,6 +327,10 @@ def _run_migrations() -> None:
         _add_column("soul_crystallized_traits", "confidence", "INTEGER DEFAULT 0")
     if not _has_column("soul_crystallized_traits", "evidence_json"):
         _add_column("soul_crystallized_traits", "evidence_json", "TEXT DEFAULT '[]'")
+    if not _has_column("soul_crystallized_traits", "ideology_layer"):
+        _add_column("soul_crystallized_traits", "ideology_layer", "TEXT DEFAULT 'conduct'")
+    if not _has_column("soul_crystallized_traits", "lifecycle_state"):
+        _add_column("soul_crystallized_traits", "lifecycle_state", "TEXT DEFAULT 'active'")
 
 
 # ─── 时间转换工具 ───────────────────────────────────────────────────
@@ -522,19 +597,24 @@ def create_crystallized_trait(
     created_at: datetime | None = None,
     enabled: bool = True,
     deleted: bool = False,
+    ideology_layer: str = "conduct",
+    lifecycle_state: str = "active",
 ) -> None:
     """创建固化 trait。"""
     conn = _get_conn()
     conn.execute(
         """INSERT INTO soul_crystallized_traits
            (trait_id, stream_id, seed_id, name, question, thought, tags_json,
-            confidence, evidence_json, spectrum_impact_json, created_at, enabled, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            confidence, evidence_json, spectrum_impact_json, created_at, enabled, deleted,
+            ideology_layer, lifecycle_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             trait_id, stream_id, seed_id, name, question, thought, tags_json,
             confidence, evidence_json, spectrum_impact_json,
             _dt_to_str(created_at or datetime.now()),
             int(enabled), int(deleted),
+            ideology_layer or "conduct",
+            lifecycle_state or "active",
         ),
     )
     conn.commit()
@@ -556,12 +636,15 @@ def save_crystallized_trait(t: CrystallizedTrait) -> None:
         """UPDATE soul_crystallized_traits SET
            stream_id = ?, seed_id = ?, name = ?, question = ?, thought = ?,
            tags_json = ?, confidence = ?, evidence_json = ?, spectrum_impact_json = ?,
-           created_at = ?, enabled = ?, deleted = ?
+           created_at = ?, enabled = ?, deleted = ?,
+           ideology_layer = ?, lifecycle_state = ?
            WHERE trait_id = ?""",
         (
             t.stream_id, t.seed_id, t.name, t.question, t.thought,
             t.tags_json, t.confidence, t.evidence_json, t.spectrum_impact_json,
             _dt_to_str(t.created_at), int(t.enabled), int(t.deleted),
+            t.ideology_layer or "conduct",
+            t.lifecycle_state or "active",
             t.trait_id,
         ),
     )
@@ -634,4 +717,146 @@ def _row_to_trait(row: sqlite3.Row) -> CrystallizedTrait:
         created_at=_str_to_dt(row["created_at"]),
         enabled=bool(row["enabled"]),
         deleted=bool(row["deleted"]),
+        ideology_layer=row["ideology_layer"] if "ideology_layer" in row.keys() else "conduct",
+        lifecycle_state=row["lifecycle_state"] if "lifecycle_state" in row.keys() else "active",
     )
+
+
+# ─── P1：切片 / 情绪 / 图谱 ───────────────────────────────────────────
+
+
+def upsert_context_slice(
+    scope_type: str,
+    scope_key: str,
+    economic_offset: int,
+    social_offset: int,
+    diplomatic_offset: int,
+    progressive_offset: int,
+    sample_count: int,
+) -> None:
+    conn = _get_conn()
+    now = _dt_to_str(datetime.now())
+    conn.execute(
+        """INSERT INTO soul_context_slices
+           (scope_type, scope_key, economic_offset, social_offset, diplomatic_offset,
+            progressive_offset, sample_count, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(scope_type, scope_key) DO UPDATE SET
+           economic_offset = economic_offset + excluded.economic_offset,
+           social_offset = social_offset + excluded.social_offset,
+           diplomatic_offset = diplomatic_offset + excluded.diplomatic_offset,
+           progressive_offset = progressive_offset + excluded.progressive_offset,
+           sample_count = sample_count + excluded.sample_count,
+           updated_at = excluded.updated_at""",
+        (
+            scope_type,
+            scope_key,
+            economic_offset,
+            social_offset,
+            diplomatic_offset,
+            progressive_offset,
+            sample_count,
+            now,
+        ),
+    )
+    conn.commit()
+
+
+def get_context_slice(scope_type: str, scope_key: str) -> ContextSlice | None:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM soul_context_slices WHERE scope_type = ? AND scope_key = ?",
+        (scope_type, scope_key),
+    ).fetchone()
+    if not row:
+        return None
+    return ContextSlice(
+        scope_type=row["scope_type"],
+        scope_key=row["scope_key"],
+        economic_offset=int(row["economic_offset"]),
+        social_offset=int(row["social_offset"]),
+        diplomatic_offset=int(row["diplomatic_offset"]),
+        progressive_offset=int(row["progressive_offset"]),
+        sample_count=int(row["sample_count"]),
+        updated_at=_str_to_dt(row["updated_at"]),
+    )
+
+
+def get_or_create_mood(scope_id: str = "global") -> MoodState:
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM soul_mood_state WHERE scope_id = ?", (scope_id,)).fetchone()
+    if row:
+        return MoodState(
+            scope_id=row["scope_id"],
+            valence=int(row["valence"]),
+            arousal=int(row["arousal"]),
+            energy=int(row["energy"]),
+            updated_at=_str_to_dt(row["updated_at"]),
+        )
+    now = datetime.now()
+    conn.execute(
+        "INSERT INTO soul_mood_state (scope_id, valence, arousal, energy, updated_at) VALUES (?, 0, 0, 0, ?)",
+        (scope_id, _dt_to_str(now)),
+    )
+    conn.commit()
+    return MoodState(scope_id=scope_id, updated_at=now)
+
+
+def save_mood(m: MoodState) -> None:
+    conn = _get_conn()
+    conn.execute(
+        """UPDATE soul_mood_state SET valence = ?, arousal = ?, energy = ?, updated_at = ?
+           WHERE scope_id = ?""",
+        (m.valence, m.arousal, m.energy, _dt_to_str(m.updated_at), m.scope_id),
+    )
+    conn.commit()
+
+
+def create_thought_edge(
+    from_trait_id: str,
+    to_trait_id: str,
+    relation_type: str,
+    source_ref: str = "",
+) -> None:
+    conn = _get_conn()
+    conn.execute(
+        """INSERT INTO soul_thought_edges
+           (from_trait_id, to_trait_id, relation_type, source_ref, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (from_trait_id, to_trait_id or "", relation_type, source_ref, _dt_to_str(datetime.now())),
+    )
+    conn.commit()
+
+
+def list_thought_edges_for_trait(trait_id: str, limit: int = 20) -> list[ThoughtEdge]:
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT * FROM soul_thought_edges
+           WHERE from_trait_id = ? OR to_trait_id = ?
+           ORDER BY id DESC LIMIT ?""",
+        (trait_id, trait_id, limit),
+    ).fetchall()
+    return [
+        ThoughtEdge(
+            id=row["id"],
+            from_trait_id=row["from_trait_id"],
+            to_trait_id=row["to_trait_id"],
+            relation_type=row["relation_type"],
+            source_ref=row["source_ref"],
+            created_at=_str_to_dt(row["created_at"]),
+        )
+        for row in rows
+    ]
+
+
+def count_traits_by_layer() -> dict[str, int]:
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT ideology_layer, COUNT(*) AS cnt FROM soul_crystallized_traits
+           WHERE deleted = 0 AND enabled = 1 GROUP BY ideology_layer"""
+    ).fetchall()
+    out: dict[str, int] = {"values": 0, "worldview": 0, "conduct": 0}
+    for row in rows:
+        layer = row["ideology_layer"] or "conduct"
+        out[layer] = int(row["cnt"])
+    return out

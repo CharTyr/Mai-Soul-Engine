@@ -228,12 +228,18 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         ema_alpha = float(plugin.config.evolution.ema_alpha or 0.3)
         resistance = float(plugin.config.evolution.direction_resistance or 0.5)
 
-        raw_deltas = {
-            "economic": max(-evolution_rate, min(evolution_rate, int(deltas.get("economic", 0)))),
-            "social": max(-evolution_rate, min(evolution_rate, int(deltas.get("social", 0)))),
-            "diplomatic": max(-evolution_rate, min(evolution_rate, int(deltas.get("diplomatic", 0)))),
-            "progressive": max(-evolution_rate, min(evolution_rate, int(deltas.get("progressive", 0)))),
-        }
+        from ..worldview.service import WorldviewService, config_from_plugin
+
+        wv = WorldviewService(config_from_plugin(plugin))
+        raw_deltas = wv.apply_layer_caps_to_deltas(
+            {
+                "economic": int(deltas.get("economic", 0) or 0),
+                "social": int(deltas.get("social", 0) or 0),
+                "diplomatic": int(deltas.get("diplomatic", 0) or 0),
+                "progressive": int(deltas.get("progressive", 0) or 0),
+            },
+            evolution_rate,
+        )
 
         resisted_deltas = {}
         new_dirs = {}
@@ -287,6 +293,9 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             reason=f"分析了{len(messages)}条消息",
             message_count=len(messages),
         )
+
+        wv.record_local_slice(stream_id, smoothed_deltas, len(messages))
+        wv.nudge_mood_from_deltas(smoothed_deltas)
 
         record.last_analyzed = now
         record.save()

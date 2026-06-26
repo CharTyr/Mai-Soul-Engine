@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "char-tyr.mai-soul-engine",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "name": "Mai-Soul-Engine",
   "description": "通过聊天塑造 MaiBot 三观的人格底座 — 意识形态光谱演化 + 思维阁内化 + 回复注入",
   "author": {

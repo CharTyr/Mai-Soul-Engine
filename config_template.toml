@@ -4,7 +4,7 @@
 # ─── 插件元数据（Runner 必填）────────────────────────────────────────
 [plugin]
 enabled = true
-config_version = "2.0.0"
+config_version = "2.1.0"
 
 # ─── 管理员配置 ─────────────────────────────────────────────────────
 [admin]
@@ -45,6 +45,27 @@ excluded_users = []
 enable_extreme = false
 # 自定义提示词模板(覆盖默认)
 custom_prompts = {}
+
+# ─── P1 三观生长（dev 分支新增）─────────────────────────────────────
+[worldview]
+# 启用 P1 三观生长（关闭后行为与 main/v2.0 一致）
+p1_enabled = true
+# 价值观层单次演化上限（最慢，映射经济维）
+values_max_delta = 2
+# 世界观层单次演化上限（映射社会/外交维）
+worldview_max_delta = 4
+# 处事观层单次演化上限（较快，映射变革维）
+conduct_max_delta = 6
+# 群聊局部偏移累积比例（0-1）
+local_influence_ratio = 0.35
+# 短期情绪辅助（仅影响语气，不写三观）
+mood_enabled = true
+# 情绪自动归零时间（小时）
+mood_decay_hours = 8.0
+# 在注入中加入情绪语气提示
+mood_inject = true
+# 在注入中加入思想关联摘要
+graph_inject = true
 
 # ─── 注入设置 ───────────────────────────────────────────────────────
 [injection]

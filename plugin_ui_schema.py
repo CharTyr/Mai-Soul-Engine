@@ -10,7 +10,7 @@ from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "2.0.0"
+CONFIG_VERSION = "2.1.0"
 
 
 def _ui(
@@ -419,12 +419,84 @@ class NotionConfig(PluginConfigBase):
     spectrum_property_updated_at: str = Field(default="UpdatedAt", json_schema_extra=_ui("光谱：UpdatedAt 字段名", "高级：属性名映射。", advanced=True))
 
 
+class WorldviewConfig(PluginConfigBase):
+    """P1 三观生长：分层限速、群切片、情绪辅助（dev 分支）。"""
+
+    __ui_label__ = "三观生长 (P1)"
+    __ui_icon__ = "layers"
+    __ui_order__ = 25
+
+    p1_enabled: bool = Field(
+        default=True,
+        description="启用 P1",
+        json_schema_extra=_ui(
+            "启用 P1 三观生长",
+            "关闭后行为与 main/v2.0 一致：不做分层限速、切片、情绪与分层注入摘要。",
+        ),
+    )
+    values_max_delta: int = Field(
+        default=2,
+        ge=0,
+        le=20,
+        description="价值观层单次上限",
+        json_schema_extra=_ui("价值观层单次演化上限", "经济维等映射到价值观层，变化最慢。"),
+    )
+    worldview_max_delta: int = Field(
+        default=4,
+        ge=0,
+        le=20,
+        description="世界观层单次上限",
+        json_schema_extra=_ui("世界观层单次演化上限", "社会/外交维映射到世界观层。"),
+    )
+    conduct_max_delta: int = Field(
+        default=6,
+        ge=0,
+        le=20,
+        description="处事观层单次上限",
+        json_schema_extra=_ui("处事观层单次演化上限", "变革维等映射到处事观层，变化较快。"),
+    )
+    local_influence_ratio: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="群局部偏移比例",
+        json_schema_extra=_ui(
+            "群聊局部偏移累积比例",
+            "演化 delta 的一部分记入本群切片，用于观察局部氛围，不替代全局光谱。",
+            step=0.05,
+        ),
+    )
+    mood_enabled: bool = Field(
+        default=True,
+        description="情绪辅助",
+        json_schema_extra=_ui("短期情绪辅助", "仅影响注入中的语气提示，不写入长期三观。"),
+    )
+    mood_decay_hours: float = Field(
+        default=8.0,
+        ge=0.5,
+        le=72.0,
+        description="情绪衰减",
+        json_schema_extra=_ui("情绪归零时间（小时）", "超过该时间未演化则短期情绪自动归零。", step=0.5),
+    )
+    mood_inject: bool = Field(
+        default=True,
+        description="注入情绪",
+        json_schema_extra=_ui("在注入中加入情绪语气", "关闭则情绪仅可在 /soul_status 查看。"),
+    )
+    graph_inject: bool = Field(
+        default=True,
+        description="注入图谱提示",
+        json_schema_extra=_ui("在注入中加入思想关联摘要", "展示 derived_from / supports 等轻量关系。"),
+    )
+
+
 class MaiSoulEngineConfig(PluginConfigBase):
     """Mai-Soul-Engine 插件配置。"""
 
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
+    worldview: WorldviewConfig = Field(default_factory=WorldviewConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
     threshold: ThresholdConfig = Field(default_factory=ThresholdConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)

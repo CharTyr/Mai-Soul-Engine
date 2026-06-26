@@ -27,6 +27,11 @@ async def handle_status(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[boo
     display = format_spectrum_display(spectrum_dict)
     last_update = spectrum.updated_at.strftime("%Y-%m-%d %H:%M:%S") if spectrum.updated_at else "未知"
 
+    from ..worldview.service import WorldviewService, config_from_plugin
+
+    extras = WorldviewService(config_from_plugin(plugin)).format_status_extras(stream_id)
     msg = f"当前灵魂光谱：\n\n{display}\n\n上次更新: {last_update}"
+    if extras:
+        msg = f"{msg}\n\n{extras}"
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True

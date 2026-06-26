@@ -352,11 +352,23 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
                     "confidence": t.confidence,
                     "evidence_count": len(parse_evidence_json(t.evidence_json)),
                     "enabled": t.enabled,
+                    "ideology_layer": getattr(t, "ideology_layer", "conduct"),
+                    "lifecycle_state": getattr(t, "lifecycle_state", "active"),
                     "created_at": t.created_at.isoformat() if t.created_at else None,
                 }
                 for t in traits
             ],
         }
+
+    @API("soul.get_worldview", description="获取 P1 三观分层/情绪/群切片摘要", version="1", public=False)
+    async def api_get_worldview(self, stream_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        """P1 三观生长状态（dev）。"""
+        if not self.config.api.enabled:
+            return {"success": False, "error": "Soul API 未启用（api.enabled=false）"}
+        from .worldview.service import WorldviewService, config_from_plugin
+
+        payload = WorldviewService(config_from_plugin(self)).api_worldview_payload(stream_id=stream_id or "")
+        return {"success": True, "worldview": payload}
 
     @API("soul.get_seeds", description="获取待审核的思维种子", version="1", public=False)
     async def api_get_seeds(self, stream_id: str = "", **kwargs: Any) -> dict[str, Any]:
