@@ -60,7 +60,7 @@ trait 之间的轻量边，`internalization_engine` 在 create 时写边。`Worl
 
 ### 生命周期状态
 
-trait 有 `lifecycle_state`：新建 → `strengthened`（merge 时强化）→ 稳定/淘汰。P1 自我校正**不**走 LLM 内省判断（推迟到后续迭代），而是用层上限 + 生命周期状态做限速。
+trait 有 `lifecycle_state`：新建 `active` → `strengthened`（merge 时强化）→ `expired`（长期未强化自动过期）。已实际使用的状态：`active` / `strengthened` / `expired`；`weakened` / `revised` / `contradicted` 仍是预留枚举（尚无写入路径）。基于 LLM 的内省矛盾检测推迟到后续迭代。
 
 ### 关键文件
 
@@ -75,6 +75,47 @@ trait 有 `lifecycle_state`：新建 → `strengthened`（merge 时强化）→ 
 | `components/status_command.py` | P1 扩展（切片偏移、情绪、层计数） |
 | `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.1.0"` |
 | `plugin.py` | `soul.get_worldview` API；`soul.get_traits` 返回 layer/lifecycle |
+
+## 思维阁（强化，dev）
+
+种子 → 内化 → trait 全链路在 v2.1.0 做了一轮强化。关键约定（**易踩坑**）：
+
+### 种子生命周期（不再删除）
+
+- 种子有 `status`：`pending` → `approved` / `rejected` / `expired`。
+- **审核后不删除记录**：`/soul_approve` → `update_seed_status(.., "approved")`，`/soul_reject` → `"rejected"`，保留种子→trait 审计链。**不要改回 `delete_seed`**。
+- `delete_seed`（物理删除）仅用于 `_cleanup_excess_seeds`（pending 超 `max_seeds` 时挤掉最旧）和 `_cleanup_old_reviewed_seeds`（已审核超 `reviewed_keep_count` 时删最旧）。
+- 种子超 `seed_ttl_hours`(默认168h) 自动标 `expired`；trait 超 `trait_ttl_days`(默认90) 且仍 `active` 自动 `expired`+`enabled=0`（`strengthened` 豁免）。两者在演化循环每轮触发。
+
+### 种子上下文窗口
+
+- `soul_thought_seeds.context_json`：存触发种子的**原始群聊片段**（非 LLM 二次总结）。
+- `seed_manager._match_evidence_to_context`：用 difflib 把 LLM 的 evidence 模糊匹配回 `msg_lines`，取 ±2 条窗口。**`_process_thought_seeds` 必须把 `msg_lines` 透传给 `create_seed`**，否则上下文为空。
+- 通知走 `_notify_admin_seed` → 从 DB 取种子（含 context）→ `format_seed_notification`，不要用原始 LLM `seed_data`（无 context）。
+
+### 内化 prompt
+
+- `INTERNALIZATION_PROMPT` 现包含 evidence/context/intensity/confidence/potential_impact。内化 LLM 基于真实片段形成观点，复用种子的 `potential_impact` 作参考。改 prompt 时保持这些占位符。
+
+### 注入选择（`ideology_injector`）
+
+- 选择顺序：tag 命中 → 无 tag 按影响分**补位**填满 `max_traits` → 仍空才 `fallback_recent_impact`。
+- 二级排序用 `_trait_quality_score`（confidence + 生命周期加权：strengthened +0.3 / weakened -0.3）。
+- `selection_mode`：`tag_hit` / `tag_hit+tagless` / `tagless_fill` / `fallback_recent_impact` / `spectrum_only`。
+- 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids)` 排除已在详细块的 trait，避免重复。
+
+### 种子去重
+
+- `_is_duplicate_pending_seed`：本地 difflib 对**同群 pending** 种子按 `type+event+reasoning` 签名去重（阈值 `seed_dedup_threshold` 默认0.82，**不调 LLM**）。trait 级去重仍在内化时由 `_find_dedup_target`（调 LLM）处理。
+
+### 配置项（`ThoughtCabinetConfig`）
+
+新增：`seed_ttl_hours` / `reviewed_keep_count` / `trait_ttl_days` / `seed_dedup_threshold`。
+**注意**：读取这些值用 `config.get(key, 默认)`，**不要用 `or 默认`**——`0`/`0.0` 是合法的"关闭"值，`or` 会把它误替换成默认值。
+
+### 命令
+
+只读详情：`/soul_seed <id>`（种子详情含上下文）、`/soul_trait <id>`（trait 详情含分层/生命周期/图谱边）。批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**——批准会触发大量 LLM 内化）。
 
 ## 迁移注意（重要）
 
@@ -97,7 +138,7 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 ## 目录职责
 
 - `components/` — 命令、演化循环、注入、Notion（可选）、状态命令
-- `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`internalization_engine.py` 含 P1 层推断/生命周期/图谱边
+- `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
 - `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本）
 - `models/` — `ideology_model.py`（schema + 迁移 + 列重命名）
