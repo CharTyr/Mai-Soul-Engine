@@ -122,6 +122,7 @@ class ThoughtSeed:
     evidence_json: str = "[]"
     reasoning: str = ""
     potential_impact_json: str = "{}"
+    context_json: str = "[]"
     created_at: datetime = field(default_factory=datetime.now)
     status: str = "pending"
 
@@ -333,6 +334,8 @@ def _run_migrations() -> None:
         _add_column("soul_thought_seeds", "confidence", "INTEGER DEFAULT 0")
     if not _has_column("soul_thought_seeds", "evidence_json"):
         _add_column("soul_thought_seeds", "evidence_json", "TEXT DEFAULT '[]'")
+    if not _has_column("soul_thought_seeds", "context_json"):
+        _add_column("soul_thought_seeds", "context_json", "TEXT DEFAULT '[]'")
     if not _has_column("soul_crystallized_traits", "question"):
         _add_column("soul_crystallized_traits", "question", "TEXT DEFAULT ''")
     if not _has_column("soul_crystallized_traits", "tags_json"):
@@ -566,6 +569,7 @@ def create_thought_seed(
     evidence_json: str,
     reasoning: str,
     potential_impact_json: str,
+    context_json: str = "[]",
     status: str = "pending",
 ) -> None:
     """创建思维种子。"""
@@ -573,11 +577,11 @@ def create_thought_seed(
     conn.execute(
         """INSERT INTO soul_thought_seeds
            (seed_id, stream_id, seed_type, event, intensity, confidence,
-            evidence_json, reasoning, potential_impact_json, created_at, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            evidence_json, reasoning, potential_impact_json, context_json, created_at, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             seed_id, stream_id, seed_type, event, intensity, confidence,
-            evidence_json, reasoning, potential_impact_json,
+            evidence_json, reasoning, potential_impact_json, context_json,
             _dt_to_str(datetime.now()), status,
         ),
     )
@@ -637,6 +641,7 @@ def _row_to_seed(row: sqlite3.Row) -> ThoughtSeed:
         evidence_json=row["evidence_json"],
         reasoning=row["reasoning"],
         potential_impact_json=row["potential_impact_json"],
+        context_json=row["context_json"] if "context_json" in row.keys() else "[]",
         created_at=_str_to_dt(row["created_at"]),
         status=row["status"],
     )

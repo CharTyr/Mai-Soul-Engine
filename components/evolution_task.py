@@ -209,7 +209,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             if thought_cabinet_enabled and "spectrum_deltas" in result:
                 deltas = result["spectrum_deltas"]
                 thought_seeds = result.get("thought_seeds", [])
-                await _process_thought_seeds(plugin, thought_seeds, stream_id)
+                await _process_thought_seeds(plugin, thought_seeds, stream_id, msg_lines)
             else:
                 deltas = result
         except (_json.JSONDecodeError, ValueError):
@@ -313,8 +313,12 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.error("分析群%s时出错: %s", group_config_id, e, exc_info=True)
 
 
-async def _process_thought_seeds(plugin, seeds: list, stream_id: str) -> None:
-    """处理 LLM 返回的思维种子。"""
+async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines: list[str]) -> None:
+    """处理 LLM 返回的思维种子。
+
+    Args:
+        msg_lines: 发送给 LLM 的原始消息行列表，用于提取上下文窗口。
+    """
     from ..thought.seed_manager import ThoughtSeedManager
 
     logger.debug("处理思维种子: 收到 %s 个", len(seeds))
@@ -329,15 +333,15 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str) -> None:
     manager = ThoughtSeedManager(config)
 
     for seed_data in seeds[:2]:
-        seed_id = await manager.create_seed(seed_data, stream_id=stream_id)
+        seed_id = await manager.create_seed(seed_data, stream_id=stream_id, context_messages=msg_lines)
         if seed_id:
             logger.info("群%s创建思维种子: %s", stream_id, seed_id)
             if plugin.config.thought_cabinet.admin_notification_enabled:
-                await _notify_admin_seed(plugin, manager, seed_id, seed_data)
+                await _notify_admin_seed(plugin, manager, seed_id)
 
 
-async def _notify_admin_seed(plugin, manager, seed_id: str, seed_data: dict) -> None:
-    """向管理员私聊发送思维种子通知。"""
+async def _notify_admin_seed(plugin, manager, seed_id: str) -> None:
+    """向管理员私聊发送思维种子通知（含原始对话上下文）。"""
     from ..utils.spectrum_utils import parse_user_id
 
     admin_config_id = str(plugin.config.admin.admin_user_id or "")
@@ -346,6 +350,12 @@ async def _notify_admin_seed(plugin, manager, seed_id: str, seed_data: dict) -> 
 
     platform, user_id = parse_user_id(admin_config_id)
     if not platform or not user_id:
+        return
+
+    # 从数据库取存储的种子数据（含上下文窗口）
+    seed_data = await manager.get_seed_by_id(seed_id)
+    if not seed_data:
+        logger.warning("无法找到种子 %s，跳过通知", seed_id)
         return
 
     # 通过新 SDK 的 chat API 获取管理员的 stream_id
