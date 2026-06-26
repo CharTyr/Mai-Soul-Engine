@@ -155,13 +155,25 @@ class WorldviewService:
             return []
         return ["【短期情绪辅助】" + "；".join(parts) + "（仅影响语气，不代表三观变化）"]
 
-    def build_layer_trait_summary(self, stream_id: str, limit_per_layer: int = 2) -> str:
-        """按三观层汇总可注入的固化观点（P1-f）。"""
+    def build_layer_trait_summary(
+        self,
+        stream_id: str,
+        limit_per_layer: int = 2,
+        exclude_trait_ids: set[str] | None = None,
+    ) -> str:
+        """按三观层汇总可注入的固化观点（P1-f）。
+
+        Args:
+            exclude_trait_ids: 已在详细 trait 注入块中出现的 trait_id，层摘要中跳过避免重复。
+        """
         if not self.cfg.p1_enabled:
             return ""
+        exclude = exclude_trait_ids or set()
         traits = im.query_active_traits_for_injection(stream_id=stream_id, limit=80)
         by_layer: dict[str, list[str]] = {layer: [] for layer in IDEOLOGY_LAYERS}
         for t in traits:
+            if t.trait_id in exclude:
+                continue
             layer = normalize_ideology_layer(getattr(t, "ideology_layer", "conduct"))
             if len(by_layer[layer]) >= limit_per_layer:
                 continue

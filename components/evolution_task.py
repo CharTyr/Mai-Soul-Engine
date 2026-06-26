@@ -340,6 +340,7 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines:
         "admin_user_id": str(plugin.config.admin.admin_user_id or ""),
         "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
         "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
+        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
     }
     manager = ThoughtSeedManager(config)
 

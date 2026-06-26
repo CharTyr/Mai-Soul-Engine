@@ -305,6 +305,13 @@ class ThoughtCabinetConfig(PluginConfigBase):
         description="trait 过期天数",
         json_schema_extra=_ui("trait 过期天数", "长期未被强化的 active trait 超过此天数后自动 expired 并停止注入，0=永不过期。", step=10),
     )
+    seed_dedup_threshold: float = Field(
+        default=0.82,
+        ge=0.0,
+        le=1.0,
+        description="种子去重阈值",
+        json_schema_extra=_ui("种子去重相似度阈值", "0–1，新种子与已有待审种子相似度超过此值则跳过，0=不去重。", step=0.02),
+    )
 
 
 class ApiConfig(PluginConfigBase):

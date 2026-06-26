@@ -99,6 +99,28 @@ def _trait_impact_score(trait) -> float:
         return 0.0
 
 
+def _trait_quality_score(trait) -> float:
+    """计算 trait 的质量权重，用于相同 tag 命中数时的二级排序。
+
+    综合 confidence（0-100→0-1）与生命周期状态：strengthened 加成，weakened 衰减。
+    """
+    try:
+        confidence = float(getattr(trait, "confidence", 0) or 0) / 100.0
+    except Exception:
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+
+    lifecycle = str(getattr(trait, "lifecycle_state", "active") or "active")
+    lifecycle_bonus = {
+        "strengthened": 0.3,
+        "active": 0.0,
+        "revised": -0.1,
+        "weakened": -0.3,
+    }.get(lifecycle, 0.0)
+
+    return confidence + lifecycle_bonus
+
+
 # ─── 注入日志 ───────────────────────────────────────────────────────
 
 _injection_log_lock = threading.Lock()
@@ -252,25 +274,27 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     now_ts = time.time()
     _prune_recent_injection(now_ts)
 
-    scored: list[tuple[float, Any]] = []
-    tagless: list[tuple[float, Any]] = []
+    scored: list[tuple[float, float, Any]] = []
+    tagless: list[tuple[float, float, Any]] = []
     for t in traits:
         tags = parse_tags_json(getattr(t, "tags_json", "[]") or "[]")
+        quality = _trait_quality_score(t)
         if not tags:
             # 无 tag 的 trait 按影响分单独收集，稍后补位
             impact = _trait_impact_score(t)
             if impact > 0.0:
-                tagless.append((impact, t))
+                tagless.append((impact, quality, t))
             continue
         hit = 0
         for tag in tags:
             if tag and tag.casefold() in text_norm:
                 hit += 1
         if hit > 0:
-            scored.append((float(hit), t))
+            scored.append((float(hit), quality, t))
 
-    scored.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
-    tagless.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
+    # 排序：tag 命中数/影响分为主，质量分（confidence+生命周期）为次，创建时间兜底
+    scored.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
+    tagless.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
 
     selected: list[Any] = []
     cooldown_skipped: list[str] = []
@@ -278,7 +302,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     tagless_fill_count = 0
     if max_traits > 0:
         # 先选 tag 命中的
-        for _score, t in scored:
+        for _score, _quality, t in scored:
             if len(selected) >= max_traits:
                 break
             if _in_cooldown(stream_id, t.trait_id, now_ts, cooldown_seconds):
@@ -287,7 +311,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             selected.append(t)
             tag_hit_count += 1
         # 再用无 tag 的按影响补位
-        for _score, t in tagless:
+        for _score, _quality, t in tagless:
             if len(selected) >= max_traits:
                 break
             if _in_cooldown(stream_id, t.trait_id, now_ts, cooldown_seconds):
@@ -353,7 +377,9 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
 
     wv = WorldviewService(config_from_plugin(plugin))
     p1_blocks: list[str] = []
-    layer_summary = wv.build_layer_trait_summary(stream_id)
+    # 层摘要排除已在详细 trait 注入块中的 trait，避免重复
+    selected_ids = {t.trait_id for t in selected}
+    layer_summary = wv.build_layer_trait_summary(stream_id, exclude_trait_ids=selected_ids)
     if layer_summary:
         p1_blocks.append(layer_summary)
     mood_lines = wv.mood_prompt_lines()

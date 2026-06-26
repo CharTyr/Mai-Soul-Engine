@@ -39,6 +39,7 @@ async def handle_seeds_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
         "admin_user_id": admin_user_id,
         "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
         "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
+        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
     }
     manager = ThoughtSeedManager(config)
     seeds = await manager.get_pending_seeds()
@@ -89,6 +90,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         "admin_user_id": admin_user_id,
         "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
         "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
+        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
     }
     manager = ThoughtSeedManager(config)
     seed = await manager.get_seed_by_id(seed_id)
@@ -179,6 +181,7 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         "admin_user_id": admin_user_id,
         "seed_ttl_hours": float(getattr(plugin.config.thought_cabinet, "seed_ttl_hours", 168.0) or 168.0),
         "reviewed_keep_count": int(getattr(plugin.config.thought_cabinet, "reviewed_keep_count", 200) or 200),
+        "seed_dedup_threshold": float(getattr(plugin.config.thought_cabinet, "seed_dedup_threshold", 0.82) or 0.82),
     }
     manager = ThoughtSeedManager(config)
     seed = await manager.get_seed_by_id(seed_id)

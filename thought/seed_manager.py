@@ -78,8 +78,9 @@ class ThoughtSeedManager:
         self.max_seeds = config.get("max_seeds", 20)
         self.min_intensity = config.get("min_trigger_intensity", 0.7)
         self.admin_user_id = config.get("admin_user_id", "")
-        self.seed_ttl_hours = float(config.get("seed_ttl_hours", 168.0) or 168.0)
-        self.reviewed_keep_count = int(config.get("reviewed_keep_count", 200) or 200)
+        self.seed_ttl_hours = float(config.get("seed_ttl_hours", 168.0))
+        self.reviewed_keep_count = int(config.get("reviewed_keep_count", 200))
+        self.seed_dedup_threshold = float(config.get("seed_dedup_threshold", 0.82))
 
     async def create_seed(
         self,
@@ -107,6 +108,11 @@ class ThoughtSeedManager:
         self.expire_old_seeds()
         await self._cleanup_excess_seeds()
         await self._cleanup_old_reviewed_seeds()
+
+        # 对已有 pending 种子语义去重，避免同话题跨周期反复入池
+        if self._is_duplicate_pending_seed(seed_data, stream_id):
+            logger.info(f"种子与已有 pending 种子语义重复，跳过创建 (类型: {seed_data.get('type', '')})")
+            return None
 
         seed_id = f"seed_{uuid.uuid4().hex[:8]}"
 
@@ -200,6 +206,45 @@ class ThoughtSeedManager:
             deleted = delete_oldest_reviewed_seeds(self.reviewed_keep_count)
             if deleted:
                 logger.info(f"清理 {deleted} 个旧已审核种子 (保留 {self.reviewed_keep_count})")
+
+    def _is_duplicate_pending_seed(self, seed_data: dict, stream_id: str) -> bool:
+        """判断新种子是否与同群已有 pending 种子语义重复（本地 difflib，不调 LLM）。
+
+        比较 type + event + reasoning 拼接文本的相似度，超过阈值视为重复。
+        """
+        if self.seed_dedup_threshold <= 0:
+            return False
+        from ..models.ideology_model import get_pending_thought_seeds
+
+        new_text = self._seed_signature(
+            seed_data.get("type", ""),
+            seed_data.get("event", ""),
+            seed_data.get("reasoning", ""),
+        )
+        if not new_text:
+            return False
+
+        # 只和同群（含全局）的 pending 种子比较
+        existing = get_pending_thought_seeds(stream_id=stream_id or None)
+        for seed in existing:
+            old_text = self._seed_signature(seed.seed_type, seed.event, seed.reasoning)
+            if not old_text:
+                continue
+            ratio = SequenceMatcher(None, new_text, old_text).ratio()
+            if ratio >= self.seed_dedup_threshold:
+                logger.debug(f"种子与 {seed.seed_id} 相似度 {ratio:.2f} >= {self.seed_dedup_threshold}")
+                return True
+        return False
+
+    @staticmethod
+    def _seed_signature(seed_type: str, event: str, reasoning: str) -> str:
+        """生成用于去重比较的种子签名文本。"""
+        parts = [str(seed_type or ""), str(event or ""), str(reasoning or "")]
+        s = " ".join(p.strip() for p in parts if p.strip())
+        s = s.replace("\n", " ").replace("\r", " ")
+        while "  " in s:
+            s = s.replace("  ", " ")
+        return s.casefold().strip()
 
     async def get_pending_seeds(self, stream_id: str | None = None) -> List[dict]:
         """获取所有待审核种子"""
