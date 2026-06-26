@@ -96,7 +96,60 @@
 - **P2**：三观时间线、周报、证据链、A/B 验证、群际偏移对比。
 - **明确不做（当前主线）**：Dream 联动、情绪主角化、复杂关系类型、内省随便群发等（见讨论稿 §7）。
 
-## 8. 相关文件
+---
+
+## 8. P1 分阶段实施（`dev` 分支）
+
+> **分支策略**：`main` = 稳定 2.x；**`dev` = P1 开发**（从当前 `main` 拉出，勿与旧 `origin/dev` SDK1 历史混用）。  
+> **运行实例**：在 `config.toml` 关功能即可，**不影响 Maibot 主程序**（独立 Runner；关注入后不影响其他聊天逻辑）。
+
+### 8.1 本地关闭 Soul 行为（推荐）
+
+在 `plugins/CharTyr_Mai-Soul-Engine/config.toml`：
+
+```toml
+[plugin]
+enabled = false          # 关闭光谱注入（ideology_injector 直接 return）
+
+[evolution]
+evolution_enabled = false  # 关闭群聊演化后台任务
+```
+
+可选一并关闭：`[thought_cabinet] enabled = false`、`[notion] enabled = false`、`[api] enabled = false`。
+
+重载插件或重启 Runner 后：主 Bot 照常；Soul Runner 仍可加载，但**不注入、不演化**（若 `plugin.enabled=false` 仅关注入，演化仍跑则需同时关 `evolution_enabled`）。
+
+若希望 Runner **完全不加载**本插件：在宿主插件管理/WebUI 禁用该插件（视 MaiBot 版本而定）；仅改 `plugin.enabled` 不会卸载插件进程。
+
+### 8.2 P1 阶段划分（建议顺序）
+
+| 阶段 | 内容 | 主要改动 | 验收 |
+|------|------|----------|------|
+| **P1-a** | 数据模型：三观层 + 思想状态 | `soul.db` schema 迁移；trait/思想增加 `layer`（价值观/世界观/处事观）、`lifecycle`（强化/弱化/修正/过期/矛盾） | 迁移幂等；旧 trait 默认映射到一层 |
+| **P1-b** | 轻量思想图谱 | 边表或 JSON：`supports` / `contradicts` / `derived_from` / `revises`；内化/演化写入关系 | 单条思想可查到来源边 |
+| **P1-c** | 内省刹车 + 变化速度 | 演化/内化 prompt + 规则：重复性、群局部 vs 全局、层别 delta 上限（价值观最慢） | 短期刷屏不大幅改价值观 |
+| **P1-d** | 群/用户切片（Mai 偏移） | `stream_id` / hashed uid 维度偏移向量，**不写用户画像**；注入时可叠加局部偏移 | 全局光谱稳定，单群偏移可观测 |
+| **P1-e** | 情绪辅助层 | 短期三维状态（开心/兴奋/疲惫等），**只调语气 prompt**，不写长期三观表 | 关 `plugin.enabled` 时情绪也不注入 |
+| **P1-f** | 注入与 API 暴露 | `ideology_injector` 分层摘要；`@API` 返回层别摘要（脱敏） | `/soul_status` 或 API 可见分层 |
+
+P2（时间线、周报、A/B）在 P1-f 合并回 `main` 后再开 **`dev-p2`** 或继续在 `dev` 分批。
+
+### 8.3 P1 开发约束
+
+- 不 `import src.*`；schema 变更走插件内 migration 脚本 + `config_version`  bump（如 `2.1.0`）。
+- 默认行为与 `main` 兼容：新字段有默认值，未开 P1 配置时表现与 2.0 一致。
+- 每阶段在宿主仓补/跑 `pytests/test_mai_soul_*`（若新增迁移逻辑）。
+
+### 8.4 P1 当前进度（dev）
+
+- [ ] P1-a 数据模型
+- [ ] P1-b 思想图谱
+- [ ] P1-c 内省刹车与速度
+- [ ] P1-d 群/用户切片
+- [ ] P1-e 情绪辅助层
+- [ ] P1-f 注入与 API
+
+## 9. 相关文件
 
 | 文件 | 用途 |
 |------|------|
