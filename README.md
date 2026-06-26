@@ -122,8 +122,11 @@ p1_enabled = true   # 关闭后行为与 main/v2.0 一致
 - `/soul_answer <1-5>` — 问卷答题
 - `/soul_reset` — 重置光谱
 - `/soul_seeds` — 查看待审核思维种子
+- `/soul_seed <seed_id>` — 查看单个种子完整详情（事件/证据/原始对话上下文）
 - `/soul_approve <seed_id>` / `/soul_reject <seed_id>` — 审核
+- `/soul_reject_all` — 批量拒绝所有待审核种子
 - `/soul_traits [stream_id]` — 查看 traits
+- `/soul_trait <trait_id>` — 查看单个 trait 详情（分层/生命周期/光谱影响/证据/图谱边）
 - `/soul_trait_set_tags` / `_merge` / `_disable` / `_enable` / `_delete` — trait 管理
 
 ## 可选功能
