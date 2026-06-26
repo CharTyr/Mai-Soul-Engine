@@ -4,7 +4,7 @@
 # ─── 插件元数据（Runner 必填）────────────────────────────────────────
 [plugin]
 enabled = true
-config_version = "2.1.0"
+config_version = "2.2.0"
 
 # ─── 管理员配置 ─────────────────────────────────────────────────────
 [admin]
@@ -168,3 +168,16 @@ spectrum_property_value = "Value"
 spectrum_property_initialized = "Initialized"
 spectrum_property_last_evolution = "LastEvolution"
 spectrum_property_updated_at = "UpdatedAt"
+
+# ─── 状态卡片渲染（可选）──────────────────────────────────────────
+# /soul_dashboard 等命令把 Soul 引擎状态渲染成图片卡片（Host 无头浏览器）。
+# 关闭或渲染失败时自动回退为纯文本。
+[render]
+# 启用卡片图片渲染
+card_enabled = true
+# 渲染视口宽度（像素）
+viewport_width = 1100
+# 图片清晰度倍率
+device_scale_factor = 2.0
+# 渲染超时（毫秒），超时回退纯文本
+render_timeout_ms = 60000

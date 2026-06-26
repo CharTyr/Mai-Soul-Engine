@@ -10,7 +10,7 @@ from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "2.1.0"
+CONFIG_VERSION = "2.2.0"
 
 
 def _ui(
@@ -444,6 +444,44 @@ class NotionConfig(PluginConfigBase):
     spectrum_property_updated_at: str = Field(default="UpdatedAt", json_schema_extra=_ui("光谱：UpdatedAt 字段名", "高级：属性名映射。", advanced=True))
 
 
+class RenderConfig(PluginConfigBase):
+    """状态卡片图片渲染（/soul_dashboard 等命令）。"""
+
+    __ui_label__ = "卡片渲染"
+    __ui_icon__ = "image"
+    __ui_order__ = 9
+
+    card_enabled: bool = Field(
+        default=True,
+        description="启用卡片渲染",
+        json_schema_extra=_ui(
+            "启用状态卡片图片",
+            "开启后 /soul_dashboard 等命令输出可视化图片；关闭或渲染失败时回退为纯文本。",
+        ),
+    )
+    viewport_width: int = Field(
+        default=1100,
+        ge=480,
+        le=2000,
+        description="视口宽度",
+        json_schema_extra=_ui("渲染视口宽度（像素）", "卡片图片的渲染宽度，过小会换行拥挤。", step=20),
+    )
+    device_scale_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=4.0,
+        description="缩放倍率",
+        json_schema_extra=_ui("图片清晰度倍率", "越大越清晰但图片更大，建议 2.0。", step=0.5),
+    )
+    render_timeout_ms: int = Field(
+        default=60000,
+        ge=5000,
+        le=120000,
+        description="渲染超时",
+        json_schema_extra=_ui("渲染超时（毫秒）", "Host 无头浏览器渲染的业务超时；超时回退纯文本。", step=1000, advanced=True),
+    )
+
+
 class WorldviewConfig(PluginConfigBase):
     """P1 三观生长：分层限速、群切片、情绪辅助（dev 分支）。"""
 
@@ -528,3 +566,4 @@ class MaiSoulEngineConfig(PluginConfigBase):
     thought_cabinet: ThoughtCabinetConfig = Field(default_factory=ThoughtCabinetConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     notion: NotionConfig = Field(default_factory=NotionConfig)
+    render: RenderConfig = Field(default_factory=RenderConfig)

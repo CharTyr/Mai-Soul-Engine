@@ -210,6 +210,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_status(self, stream_id, **kwargs)
 
+    @Command("soul_dashboard", description="查看 Soul 引擎全状态可视化卡片", pattern=r"^/soul_dashboard\s*$")
+    async def cmd_soul_dashboard(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """Soul 引擎全状态卡片。"""
+        from .components.dashboard_command import handle_dashboard
+
+        return await handle_dashboard(self, stream_id, **kwargs)
+
     # ===== Command：重置 =====
 
     @Command("soul_reset", description="重置意识形态光谱", pattern=r"^/soul_reset\s*$")

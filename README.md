@@ -115,6 +115,7 @@ p1_enabled = true   # 关闭后行为与 main/v2.0 一致
 ### 用户命令
 
 - `/soul_status` — 查看当前光谱（P1：附本群偏移、情绪、分层统计）
+- `/soul_dashboard` — Soul 引擎全状态可视化卡片（光谱四轴/三观分层/生命周期分布/情绪/切片/种子/演化/图谱/开关一览，渲染成图片；渲染不可用时降级纯文本）
 
 ### 管理员命令
 
@@ -131,7 +132,19 @@ p1_enabled = true   # 关闭后行为与 main/v2.0 一致
 
 ## 可选功能
 
-默认关闭，不影响核心闭环：
+默认关闭或可调，不影响核心闭环：
+
+### 状态卡片渲染（`[render]`，v2.2.0 新增）
+
+`/soul_dashboard` 默认把 Soul 引擎全状态渲染成图片卡片。渲染经宿主无头浏览器完成，关闭或不可用时自动降级纯文本。
+
+```toml
+[render]
+card_enabled = true          # 关闭后 /soul_dashboard 输出纯文本
+viewport_width = 1100        # 渲染视口宽度（像素）
+device_scale_factor = 2.0    # 图片清晰度倍率
+render_timeout_ms = 60000    # 渲染超时（毫秒），超时降级文本
+```
 
 ### P1 三观生长（`[worldview]`，dev 新增）
 

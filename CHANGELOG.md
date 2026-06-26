@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.2.0] — dev 分支（Soul 引擎状态可视化卡片）
+
+### 用户可感知
+
+- **`/soul_dashboard` 全状态可视化卡片**：一条命令把 Soul 引擎当前全部状态渲染成一张图片卡片发到聊天——社交光谱四轴（真诚/投入/亲近/直率）、三观分层 trait 计数（价值观/世界观/处事观）、六态生命周期分布（有效/已强化/已过期/矛盾/弱化/修正）、短期情绪、本群局部偏移、待审思维种子、思想图谱边数、最近演化记录、功能开关一览。管理员无需查 DB/调 API 即可总览 bot 人格状态。
+- 渲染关闭（`[render].card_enabled=false`）或宿主无头浏览器不可用时，自动降级为同内容的纯文本状态。
+
+### 开发侧
+
+- **数据聚合**：`components/dashboard_data.py` 的 `collect_dashboard_data(plugin, stream_id)` 聚合 Soul 引擎全部状态为固定结构 dict（数据契约）；图谱边用 `(from,to,relation)` 三元组去重计数；空库/未初始化也能聚合（各计数 0、`initialized=false`）。
+- **卡片渲染**：`components/dashboard_renderer.py` 的 `DashboardRenderer` 用内联 HTML/CSS（`#soul-dashboard` 根容器、CJK 字体栈、`allow_network=false`、无外部依赖）经 `ctx.render.html2png` 渲染成 PNG；`build_dashboard_text` 为纯文本降级版。深色靛紫/青绿调性，区分于 chat_summary 暖纸色。
+- **命令接线**：`components/dashboard_command.py` 串起 data→renderer→`ctx.send.image`；`card_enabled=false` 或渲染失败降级文本（失败时前缀"卡片渲染失败"）；`send.image` 异常捕获具体类型（`OSError`/`RuntimeError`）非裸 except。
+- **配置**：新增 `[render]` 段（`card_enabled`/`viewport_width`/`device_scale_factor`/`render_timeout_ms`）；`CONFIG_VERSION` 升至 `2.2.0`，`config_template.toml` 同步。
+- **技术决策**：SDK 无插件前端页面注册机制（WebUI 只能生成配置表单），故用 `ctx.render.html2png`（宿主无头浏览器）+ `ctx.send.image` 实现可视化，零宿主改动。参考同仓 `plugins/chat_summary/renderer.py` 的已验证范式。
+- **测试**：新增 `tests/test_dashboard_data.py`（3 项：空库/满状态/stream_id 空切片 None）+ `tests/test_dashboard_renderer.py`（4 项：文本降级满状态/未初始化/ctx=None 降级/HTML 根容器），共 38 项插件测试。
+
 ## [2.1.0] — dev 分支（P1 三观生长 + 光谱重构）
 
 ### 用户可感知
