@@ -174,6 +174,20 @@ graph_inject = true
 
 其他：`data/audit.jsonl`、`data/injections.jsonl`、`data/migration_state.json`。
 
+## 从旧版迁移（重要）
+
+### 从 v1.x（旧 SDK1）迁移到 dev（v2.1.0）
+
+旧版插件用**政治轴**（economic/social/diplomatic/progressive）存光谱，dev 用**群聊社交轴**（sincerity/engagement/closeness/directness）。`legacy_import` 从宿主 `MaiBot.db` 导入时，旧列名与新列名不匹配，**旧光谱数值会丢失**。这是有意为之——政治轴数值在社交轴下语义上无意义（economic=60 不代表 sincerity=60）。
+
+迁移后请用 `/soul_reset` → `/soul_setup` 重新做问卷初始化。思维种子和 traits 可正常导入（不涉及轴名）。
+
+### 从 v2.0（main）切换到 dev（v2.1.0）
+
+如果已有 v2.0 的 `soul.db`，切到 dev 后 DB 列会**就地重命名**（`ALTER TABLE RENAME COLUMN`，幂等，SQLite ≥3.25）：economic→sincerity、social→engagement 等。数值会保留但**语义已变**——原来的 economic=60 现在被读作 sincerity=60，含义完全不同。
+
+**强烈建议**切换后执行 `/soul_reset` → `/soul_setup` 重新初始化光谱，让数值在新社交轴下有正确含义。演化历史和切片表的旧列名也会同步重命名，旧 delta 记录的语义同样变了，但不会影响后续演化。
+
 ## 验证
 
 宿主仓根：
