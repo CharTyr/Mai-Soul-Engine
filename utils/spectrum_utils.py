@@ -96,14 +96,21 @@ def is_group_monitored(platform: str, chat_id: str, chat_type: str, config: dict
 
 
 def is_user_monitored(platform: str, user_id: str, config: dict) -> bool:
-    """用户白名单：仅 ``monitored_users`` 列表中的用户参与演化分析。
+    """判断某条群消息的发言者是否计入演化（仅作用于「监控群」内，与私聊无关）。
 
-    列表为空时不计入任何用户（与「监控群」一致，不做默认全员）。
-    ``excluded_users`` 已废弃，配置中保留也不生效。
+    - ``monitored_users`` 为空：该群内所有成员发言都计入。
+    - ``monitored_users`` 非空：仅列表内用户计入（少见，用于只学某几人）。
+    - ``excluded_users``：先排除（如机器人、自己的测试号）。
     """
     monitored = config.get("monitored_users", [])
+    excluded = config.get("excluded_users", [])
+
+    for exc in excluded:
+        if match_user(platform, user_id, exc):
+            return False
+
     if not monitored:
-        return False
+        return True
 
     for mon in monitored:
         if match_user(platform, user_id, mon):
