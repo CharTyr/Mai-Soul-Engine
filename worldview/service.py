@@ -195,10 +195,14 @@ class WorldviewService:
     def build_graph_hint(self, stream_id: str, trait_ids: list[str], limit: int = 3) -> str:
         if not self.cfg.p1_enabled or not self.cfg.graph_inject:
             return ""
+        target_ids = trait_ids[:limit]
+        if not target_ids:
+            return ""
+        # 批量查询所有目标 trait 的图谱边，替代原先逐 trait N+1
+        edges_by_tid = im.list_thought_edges_for_traits(target_ids)
         hints: list[str] = []
-        for tid in trait_ids[:limit]:
-            edges = im.list_thought_edges_for_trait(tid, limit=4)
-            for e in edges:
+        for tid in target_ids:
+            for e in edges_by_tid.get(tid, []):
                 rel = e.relation_type
                 if rel == "derived_from" and e.source_ref:
                     hints.append(f"观点 {tid[:8]}… 源自内省/种子 {e.source_ref[:12]}")

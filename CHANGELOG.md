@@ -60,6 +60,15 @@
 - **`except` 收窄**：`ideology_injector`/`evolution_task`/`thought_commands`/`internalization_engine`/`seed_manager` 中裸 `except Exception` 改为具体异常类型（顶层循环恢复保留并加注释）。
 - **杂项**：`spectrum_utils.py` 的 `import re` 上移到文件顶部；`worldview/constants.py` 的 `LIFECYCLE_STATES` 补文档说明预留枚举（`weakened`/`revised`/`contradicted` 尚无写入路径，injector 已预置降权分，保留而非删除）。
 
+### 内省矛盾检测与剩余加固（开发侧）
+
+- **trait 生命周期矛盾检测**：`_find_dedup_target` 重命名为 `_classify_trait_relation`，复用同一次 LLM 调用（零额外 token）扩展输出 5 种关系（none/duplicate/contradicted/weakened/revised）。`_upsert_crystallized_trait` 按 relation 分支处理：duplicate→merge 强化（现有）；contradicted→旧 trait 标 `contradicted`+`enabled=0`+写 `contradicted_by` 边+建新 active；weakened→旧 trait 标 `weakened`+写 `weakened_by` 边+建新；revised→旧 trait 标 `revised`+写 `revised_by` 边+建新。**防误报三重**：置信度阈值（contradicted≥0.70、weakened/revised≥0.60，低于降级 none）；`strengthened` trait 豁免（prompt 注明仅可判 duplicate）；可回滚（`/soul_trait_enable` 重新启用，`/soul_trait <id>` 展示关系边可追溯）。`_trait_quality_score` 补 `contradicted: -1.0` 降权。至此 `LIFECYCLE_STATES` 6 个状态全部有写入路径。
+- **全局 trait 标记显式化**：新增 `GLOBAL_STREAM = "global"` 常量（`worldview/constants.py`）。trait 表从用空串 `""` 表全局改为显式 `"global"`，消除"未设置/异常空值"与"有意的全局作用域"的歧义。`init_db` 迁移自动把存量 `""` trait 归一为 `"global"`（幂等）；`create_crystallized_trait`/`query_crystallized_traits` 传入空串自动归一；`query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配。
+- **图谱边批量查询**：`models/p1.py` 新增 `list_thought_edges_for_traits(trait_ids)`，一次 SQL 查所有边按 trait_id 分组；`worldview/service.py` 的 `build_graph_hint` 从 per-trait N+1 改为批量调用。保留单数版 `list_thought_edges_for_trait` 供 `/soul_trait <id>` 详情使用。
+- **`set_trait_lifecycle_state` setter**：`models/traits.py` 新增，用于矛盾检测标记旧 trait 状态（可选同时改 `enabled`），不改 DB schema。
+- **@API 访问控制加固**：`api_health` 补上缺失的 `api.enabled` 守卫（7 个 API 现全部一致）；唯一写接口 `api_set_spectrum` 接入 `log_api_set_spectrum` 审计（记录社交轴 before/after）；文档化安全模型（无网络暴露面，`public=False` + `api.enabled` 双层控制，插件层不自行实现网络认证）。
+- **插件内测试**：新建 `tests/` 目录（28 项），覆盖种子状态原子守卫、`set_trait_lifecycle_state`、全局标记归一+迁移、批量边查询、`_trait_quality_score` 6 态降权、`_cleanup_excess_seeds` 标 expired、矛盾 trait 注入排除。从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行。
+
 ## [2.0.0] — 2026-06-26
 
 ### 用户可感知

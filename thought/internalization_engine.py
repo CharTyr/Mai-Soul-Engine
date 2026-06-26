@@ -240,7 +240,7 @@ class InternalizationEngine:
     ) -> dict:
         import json
 
-        from ..models.ideology_model import create_crystallized_trait, get_crystallized_trait_by_id
+        from ..models.ideology_model import create_crystallized_trait, get_crystallized_trait_by_id, set_trait_lifecycle_state, create_thought_edge
         from ..utils.trait_tags import dumps_tags_json, parse_tags_json
         from ..utils.trait_evidence import append_evidence_json, dumps_evidence_json
 
@@ -251,10 +251,9 @@ class InternalizationEngine:
             dedup_threshold = 0.78
         dedup_threshold = max(0.0, min(1.0, dedup_threshold))
 
-        merged_into: str | None = None
-        dedup_similarity: float | None = None
+        relation_result: dict | None = None
         if dedup_enabled:
-            target = await self._find_dedup_target(
+            relation_result = await self._classify_trait_relation(
                 stream_id=seed_info.get("stream_id", "") or "",
                 new_name=seed_info.get("type", "trait"),
                 new_question=seed_info.get("question", "") or "",
@@ -262,26 +261,91 @@ class InternalizationEngine:
                 new_tags=parse_tags_json(dumps_tags_json(seed_info.get("tags"))),
                 threshold=dedup_threshold,
             )
-            if target:
-                merged_into = target.get("trait_id")
-                dedup_similarity = target.get("similarity")
 
-        if merged_into:
-            trait = get_crystallized_trait_by_id(merged_into)
-            if trait and (not trait.deleted) and trait.enabled:
-                existing_tags = parse_tags_json(trait.tags_json or "[]")
-                merged_tags = list(dict.fromkeys([*existing_tags, *(seed_info.get("tags") or [])]))
+        if relation_result and relation_result.get("relation") not in ("none", ""):
+            target_trait_id = relation_result.get("target_trait_id", "") or ""
+            similarity = relation_result.get("similarity", 0.0) or 0.0
+            relation = relation_result.get("relation", "none") or "none"
+            # reason = relation_result.get("reason", "")  # 暂不使用，保留供后续日志扩展
 
-                trait.tags_json = dumps_tags_json(merged_tags)
-                trait.evidence_json = append_evidence_json(trait.evidence_json or "[]", evidence_entry)
-                trait.confidence = max(int(trait.confidence or 0), int(confidence), int(round((dedup_similarity or 0.0) * 100)))
-                trait.spectrum_impact_json = json.dumps(impact or {}, ensure_ascii=False)
-                trait.lifecycle_state = "strengthened"
-                trait.created_at = now
-                trait.save()
-                logger.info(f"已合并到已有 trait: {merged_into} (seed={seed_info.get('id', '')})")
-                return {"trait_id": merged_into, "merged": True, "merged_into": merged_into, "dedup_similarity": dedup_similarity}
+            # ── duplicate：合并到旧 trait（现有逻辑） ──
+            if relation == "duplicate":
+                trait = get_crystallized_trait_by_id(target_trait_id)
+                if trait and (not trait.deleted) and trait.enabled:
+                    existing_tags = parse_tags_json(trait.tags_json or "[]")
+                    merged_tags = list(dict.fromkeys([*existing_tags, *(seed_info.get("tags") or [])]))
 
+                    trait.tags_json = dumps_tags_json(merged_tags)
+                    trait.evidence_json = append_evidence_json(trait.evidence_json or "[]", evidence_entry)
+                    trait.confidence = max(int(trait.confidence or 0), int(confidence), int(round((similarity or 0.0) * 100)))
+                    trait.spectrum_impact_json = json.dumps(impact or {}, ensure_ascii=False)
+                    trait.lifecycle_state = "strengthened"
+                    trait.created_at = now
+                    trait.save()
+                    logger.info(f"已合并到已有 trait: {target_trait_id} (seed={seed_info.get('id', '')})")
+                    return {"trait_id": target_trait_id, "merged": True, "merged_into": target_trait_id, "dedup_similarity": similarity}
+
+            # ── contradicted / weakened / revised：标记旧 trait（先检查阈值防误报） ──
+            if relation in ("contradicted", "weakened", "revised"):
+                # 置信度阈值：contradicted >= 0.70，weakened/revised >= 0.60
+                threshold_map = {"contradicted": 0.70, "weakened": 0.60, "revised": 0.60}
+                min_sim = threshold_map[relation]
+                if similarity < min_sim:
+                    logger.info(
+                        f"关系 {relation} 相似度 {similarity:.2f} 低于阈值 {min_sim}，降级为 none"
+                    )
+                    relation = "none"
+                else:
+                    if relation == "contradicted":
+                        set_trait_lifecycle_state(target_trait_id, "contradicted", enabled=False)
+                    elif relation == "weakened":
+                        set_trait_lifecycle_state(target_trait_id, "weakened")
+                    elif relation == "revised":
+                        set_trait_lifecycle_state(target_trait_id, "revised")
+                    logger.info(f"旧 trait {target_trait_id} 被标记为 {relation} (seed={seed_info.get('id', '')})")
+
+            # ── contradicted / weakened / revised：创建新 trait（active）+ 写边 ──
+            if relation in ("contradicted", "weakened", "revised"):
+                from ..worldview.constants import normalize_ideology_layer
+                from ..worldview.service import WorldviewService, config_from_plugin
+
+                tags = parse_tags_json(dumps_tags_json(seed_info.get("tags")))
+                layer = normalize_ideology_layer(
+                    str(result.get("ideology_layer", "") or ""),
+                    default=WorldviewService.infer_layer_from_tags(tags),
+                )
+
+                create_crystallized_trait(
+                    trait_id=trait_id,
+                    stream_id=seed_info.get("stream_id", "") or "",
+                    seed_id=seed_info.get("id", "") or "",
+                    name=seed_info.get("type", "trait"),
+                    question=seed_info.get("question", "") or "",
+                    thought=result.get("thought", "") or "",
+                    tags_json=dumps_tags_json(seed_info.get("tags")),
+                    confidence=int(confidence),
+                    evidence_json=dumps_evidence_json([evidence_entry]),
+                    spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
+                    created_at=now,
+                    enabled=True,
+                    deleted=False,
+                    ideology_layer=layer,
+                    lifecycle_state="active",
+                )
+
+                # 写思想图谱边：旧 trait → 新 trait
+                edge_types = {"contradicted": "contradicted_by", "weakened": "weakened_by", "revised": "revised_by"}
+                edge_type = edge_types[relation]
+                create_thought_edge(
+                    from_trait_id=target_trait_id,
+                    to_trait_id=trait_id,
+                    relation_type=edge_type,
+                    source_ref=seed_info.get("id", "") or "",
+                )
+                logger.info(f"已创建边 {edge_type}: {target_trait_id} → {trait_id} (seed={seed_info.get('id', '')})")
+                return {"trait_id": trait_id, "merged": False, "relation": relation, "related_to": target_trait_id}
+
+        # none 或未匹配：创建新 trait（现有路径）
         from ..worldview.constants import normalize_ideology_layer
         from ..worldview.service import WorldviewService, config_from_plugin
 
@@ -311,7 +375,7 @@ class InternalizationEngine:
         logger.info(f"已创建 trait 记录: {trait_id} (seed={seed_info.get('id', '')})")
         return {"trait_id": trait_id, "merged": False}
 
-    async def _find_dedup_target(
+    async def _classify_trait_relation(
         self,
         stream_id: str,
         new_name: str,
@@ -351,25 +415,36 @@ class InternalizationEngine:
         items = []
         for t in ranked:
             tags = parse_tags_json(t.tags_json or "[]")
+            thought_text = (t.thought or "")[:220]
+            # 标记 strengthened 候选：此类旧 trait 仅可判为 duplicate
+            if t.lifecycle_state == "strengthened":
+                thought_text += "（已被多次证据强化，仅可判为 duplicate）"
             items.append(
                 {
                     "trait_id": t.trait_id,
                     "name": t.name,
                     "tags": tags,
                     "question": (t.question or "")[:140],
-                    "thought": (t.thought or "")[:220],
+                    "thought": thought_text,
                 }
             )
 
         prompt = (
-            "你是一个“trait 去重合并”助手。判断新 trait 是否与已有 trait 在语义上高度重复/同义（只是表述不同）。\n"
-            "若重复，返回 duplicate_of=对应 trait_id；否则 duplicate_of 为空。\n"
-            "仅当 similarity >= 阈值 才建议合并。\n\n"
+            "判断新 trait 与已有 traits 的关系，选择最匹配的一项：\n\n"
+            "关系类型：\n"
+            "- duplicate: 语义高度重复/同义，仅表述不同 → relation=duplicate\n"
+            "- contradicted: 在同一话题上持相反立场（如旧 trait 认为「群聊应真诚直率」，\n"
+            "  新 trait 认为「场面话是社交必备」）→ relation=contradicted\n"
+            "  注意：仅当立场明确相反时才判为矛盾；部分质疑不算矛盾\n"
+            "- weakened: 新证据部分削弱了旧观点的置信度，但不完全推翻 → relation=weakened\n"
+            "- revised: 新知是旧知的更精细版本（增加条件、场景限定），语义相似但明显改进 → relation=revised\n"
+            "- 若旧 trait 的 lifecycle_state 为 'strengthened'（已被多次证据强化），\n"
+            "  不可判为 contradicted/weakened/revised，仅可判为 duplicate\n\n"
             f"阈值: {threshold}\n\n"
             f"新 trait:\n- name: {new_name}\n- tags: {new_tags}\n- question: {new_question[:180]}\n- thought: {new_thought[:320]}\n\n"
             f"已有 traits（候选）:\n{json.dumps(items, ensure_ascii=False)}\n\n"
-            "请只输出 JSON:\n"
-            '{"duplicate_of": "", "similarity": 0.0, "reason": ""}'
+            "输出 JSON:\n"
+            '{"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": ""}'
         )
 
         result = await self._plugin.ctx.llm.generate(prompt)
@@ -385,14 +460,30 @@ class InternalizationEngine:
             return None
         if not isinstance(data, dict):
             return None
-        duplicate_of = str(data.get("duplicate_of", "") or "").strip()
+        target_trait_id = str(data.get("target_trait_id", "") or "").strip()
         try:
             similarity = float(data.get("similarity", 0.0) or 0.0)
         except (TypeError, ValueError):
             similarity = 0.0
         similarity = max(0.0, min(1.0, similarity))
-        if not duplicate_of or similarity < threshold:
-            return None
-        if duplicate_of not in {x["trait_id"] for x in items}:
-            return None
-        return {"trait_id": duplicate_of, "similarity": similarity}
+        relation = str(data.get("relation", "none") or "none").strip().lower()
+        reason = str(data.get("reason", "") or "").strip()
+        valid_ids = {x["trait_id"] for x in items}
+
+        # duplicate 需要 similarity >= threshold 且 target_trait_id 在候选中
+        if relation == "duplicate":
+            if similarity < threshold or target_trait_id not in valid_ids:
+                return None
+        elif relation in ("contradicted", "weakened", "revised"):
+            if not target_trait_id or target_trait_id not in valid_ids:
+                return None
+        else:
+            # none 或其他未预期值 → 不返回 relation（由 caller 建新 trait）
+            return {"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": ""}
+
+        return {
+            "target_trait_id": target_trait_id,
+            "similarity": similarity,
+            "relation": relation,
+            "reason": reason,
+        }

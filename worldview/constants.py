@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+GLOBAL_STREAM: str = "global"
+"""全局作用域聊天流标记。
+
+trait / 光谱以此值表示"不绑定特定群、对所有聊天流生效"的全局作用域。
+历史上 trait 曾用空串 `""` 表全局，与"未设置/异常空值"无法区分（一个误写空
+stream_id 的群 trait 会泄漏到所有群的注入）。现统一用显式 `"global"`：
+- `""` = 未设置/异常，**不应**匹配任何注入；
+- `"global"` = 有意的全局作用域。
+注入查询 `query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配。
+"""
+
 IDEOLOGY_LAYERS: tuple[str, ...] = ("values", "worldview", "conduct")
 """价值观（最慢）→ 世界观（中）→ 处事观（较快）。"""
 

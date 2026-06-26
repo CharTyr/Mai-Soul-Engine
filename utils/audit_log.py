@@ -73,3 +73,20 @@ async def log_reset(admin_id: str):
     async with _audit_lock:
         with open(_audit_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+async def log_api_set_spectrum(before: dict, after: dict) -> None:
+    """记录通过 @API 手动修改光谱的操作。"""
+    if not _audit_file:
+        return
+
+    entry = {
+        "ts": datetime.now().isoformat(),
+        "type": "api_set_spectrum",
+        "before": before,
+        "after": after,
+    }
+
+    async with _audit_lock:
+        with open(_audit_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")

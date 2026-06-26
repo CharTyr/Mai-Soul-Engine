@@ -9,6 +9,7 @@ from typing import Any
 
 import sqlite3
 
+from ..worldview.constants import GLOBAL_STREAM
 from ._conn import _dt_to_str, _get_conn, _str_to_dt
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "query_active_traits_for_injection",
     "query_crystallized_traits",
     "save_crystallized_trait",
+    "set_trait_lifecycle_state",
 ]
 
 
@@ -69,6 +71,9 @@ def create_crystallized_trait(
     lifecycle_state: str = "active",
 ) -> None:
     """创建固化 trait。"""
+    # 空串 = 未设置 = 全局作用域，归一为显式 GLOBAL_STREAM，避免与"异常空值"混淆
+    if not stream_id:
+        stream_id = GLOBAL_STREAM
     conn = _get_conn()
     conn.execute(
         """INSERT INTO soul_crystallized_traits
@@ -135,6 +140,9 @@ def query_crystallized_traits(
         conditions.append("enabled = ?")
         params.append(int(enabled))
     if stream_id is not None:
+        # 空串 = 未设置 = 全局作用域，归一为显式 GLOBAL_STREAM
+        if not stream_id:
+            stream_id = GLOBAL_STREAM
         conditions.append("stream_id = ?")
         params.append(stream_id)
     where = " AND ".join(conditions)
@@ -155,16 +163,16 @@ def query_active_traits_for_injection(
         rows = conn.execute(
             """SELECT * FROM soul_crystallized_traits
                WHERE deleted = 0 AND enabled = 1
-               AND (stream_id = ? OR stream_id = '')
+               AND (stream_id = ? OR stream_id = ?)
                ORDER BY created_at DESC LIMIT ?""",
-            (stream_id, limit),
+            (stream_id, GLOBAL_STREAM, limit),
         ).fetchall()
     else:
         rows = conn.execute(
             """SELECT * FROM soul_crystallized_traits
-               WHERE deleted = 0 AND enabled = 1 AND stream_id = ''
+               WHERE deleted = 0 AND enabled = 1 AND stream_id = ?
                ORDER BY created_at DESC LIMIT ?""",
-            (limit,),
+            (GLOBAL_STREAM, limit),
         ).fetchall()
     return [_row_to_trait(row) for row in rows]
 
@@ -232,3 +240,31 @@ def expire_old_traits(ttl_days: int) -> int:
     )
     conn.commit()
     return cursor.rowcount
+
+
+def set_trait_lifecycle_state(
+    trait_id: str,
+    lifecycle_state: str,
+    *,
+    enabled: bool | None = None,
+) -> bool:
+    """设置 trait 的生命周期状态，可选同时改 enabled。
+
+    用于内省矛盾检测：contradicted 时传 enabled=False 禁用，
+    weakened/revised 时 enabled 不变（保留可见但降权）。
+
+    返回是否更新成功（rowcount > 0）。
+    """
+    conn = _get_conn()
+    if enabled is not None:
+        cursor = conn.execute(
+            "UPDATE soul_crystallized_traits SET lifecycle_state = ?, enabled = ? WHERE trait_id = ?",
+            (lifecycle_state, 1 if enabled else 0, trait_id),
+        )
+    else:
+        cursor = conn.execute(
+            "UPDATE soul_crystallized_traits SET lifecycle_state = ? WHERE trait_id = ?",
+            (lifecycle_state, trait_id),
+        )
+    conn.commit()
+    return cursor.rowcount > 0

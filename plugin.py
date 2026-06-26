@@ -308,6 +308,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         return await handle_trait_delete(self, stream_id, **kwargs)
 
     # ===== @API 组件：Soul 数据接口 =====
+    #
+    # 安全模型（以下 7 个 @API 组件）：
+    # - 均为 SDK 级 @API(public=False) 组件，无网络暴露面（无 HTTP server/路由），
+    #   仅 Runner 内可信组件（如 WebUI 或其他插件）可调用。
+    # - 双层访问控制：@API(public=False)（SDK 层）+ api.enabled 配置守卫（默认关闭）。
+    # - 唯一写接口 api_set_spectrum 同步记录审计日志（data/audit.jsonl）。
+    # - 不自行实现网络级认证（无网络面）。
 
     @API("soul.get_spectrum", description="获取当前意识形态光谱", version="1", public=False)
     async def api_get_spectrum(self, **kwargs: Any) -> dict[str, Any]:
@@ -445,8 +452,15 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         if not self.config.api.enabled:
             return {"success": False, "error": "Soul API 未启用（api.enabled=false）"}
         from .models.ideology_model import get_or_create_spectrum
+        from .utils.audit_log import log_api_set_spectrum
 
         spectrum = get_or_create_spectrum("global")
+        before = {
+            "sincerity": spectrum.sincerity,
+            "engagement": spectrum.engagement,
+            "closeness": spectrum.closeness,
+            "directness": spectrum.directness,
+        }
         if economic is not None:
             spectrum.sincerity = max(0, min(100, economic))
         if social is not None:
@@ -458,19 +472,24 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         spectrum.updated_at = datetime.now()
         spectrum.save()
 
+        after = {
+            "sincerity": spectrum.sincerity,
+            "engagement": spectrum.engagement,
+            "closeness": spectrum.closeness,
+            "directness": spectrum.directness,
+        }
+        await log_api_set_spectrum(before, after)
+
         return {
             "success": True,
-            "spectrum": {
-                "sincerity": spectrum.sincerity,
-                "engagement": spectrum.engagement,
-                "closeness": spectrum.closeness,
-                "directness": spectrum.directness,
-            },
+            "spectrum": after,
         }
 
     @API("soul.health", description="Soul 引擎健康检查", version="1", public=False)
     async def api_health(self, **kwargs: Any) -> dict[str, Any]:
         """健康检查。"""
+        if not self.config.api.enabled:
+            return {"success": False, "error": "Soul API 未启用（api.enabled=false）"}
         from .models.ideology_model import get_or_create_spectrum, count_pending_thought_seeds
 
         spectrum = get_or_create_spectrum("global")

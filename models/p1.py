@@ -18,6 +18,7 @@ __all__ = [
     "get_context_slice",
     "get_or_create_mood",
     "list_thought_edges_for_trait",
+    "list_thought_edges_for_traits",
     "save_mood",
     "upsert_context_slice",
 ]
@@ -191,3 +192,41 @@ def list_thought_edges_for_trait(trait_id: str, limit: int = 20) -> list[Thought
         )
         for row in rows
     ]
+
+
+def list_thought_edges_for_traits(trait_ids: list[str]) -> dict[str, list[ThoughtEdge]]:
+    """批量查询多个 trait 的思想图谱边，按 trait_id 分组返回。
+
+    Args:
+        trait_ids: 要查询的 trait ID 列表。
+
+    Returns:
+        dict: {trait_id: [edges where 该 trait 是 from 或 to 端]}。
+        trait_ids 为空时返回空 dict。
+    """
+    if not trait_ids:
+        return {}
+    conn = _get_conn()
+    placeholders = ",".join("?" * len(trait_ids))
+    trait_set = set(trait_ids)
+    rows = conn.execute(
+        f"""SELECT * FROM soul_thought_edges
+            WHERE from_trait_id IN ({placeholders}) OR to_trait_id IN ({placeholders})
+            ORDER BY id DESC""",
+        (*trait_ids, *trait_ids),
+    ).fetchall()
+    result: dict[str, list[ThoughtEdge]] = {tid: [] for tid in trait_ids}
+    for row in rows:
+        edge = ThoughtEdge(
+            id=row["id"],
+            from_trait_id=row["from_trait_id"],
+            to_trait_id=row["to_trait_id"],
+            relation_type=row["relation_type"],
+            source_ref=row["source_ref"],
+            created_at=_str_to_dt(row["created_at"]),
+        )
+        if edge.from_trait_id in trait_set:
+            result[edge.from_trait_id].append(edge)
+        if edge.to_trait_id in trait_set:
+            result[edge.to_trait_id].append(edge)
+    return result

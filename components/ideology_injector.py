@@ -117,6 +117,10 @@ def _trait_quality_score(trait) -> float:
         "active": 0.0,
         "revised": -0.1,
         "weakened": -0.3,
+        # contradicted trait 理论上已 enabled=0 不会进入注入池
+        # （query_active_traits_for_injection 过滤 enabled=1），
+        # 但显式声明 -1.0 是防御性兜底，防止未来变更遗漏导致矛盾观点被注入。
+        "contradicted": -1.0,
     }.get(lifecycle, 0.0)
 
     return confidence + lifecycle_bonus

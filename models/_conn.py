@@ -12,6 +12,8 @@ from typing import Any
 import logging
 import sqlite3
 
+from ..worldview.constants import GLOBAL_STREAM
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -218,6 +220,15 @@ def _run_migrations() -> None:
     _rename_spectrum_axes()
     _rename_history_axes()
     _rename_slice_axes()
+
+    # 历史上 trait 用空串表全局作用域，与"未设置"无法区分，统一迁移到显式 "global"
+    # 幂等：再次运行时无 '' 行就不影响
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE soul_crystallized_traits SET stream_id = ? WHERE stream_id = ''",
+        (GLOBAL_STREAM,),
+    )
+    conn.commit()
 
 
 def _rename_spectrum_axes() -> None:
