@@ -1,0 +1,13 @@
+# 配置文件（含个人信息）
+config.toml
+
+# 插件数据目录
+data/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/

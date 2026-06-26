@@ -1,0 +1,138 @@
+# Mai-Soul-Engine 配置模板
+# 复制为 config.toml 后按需修改。config.toml 已加入 .gitignore。
+
+# ─── 管理员配置 ─────────────────────────────────────────────────────
+[admin]
+# 管理员用户ID（必填，格式：平台:ID，如 qq:768295235）
+admin_user_id = ""
+# 启用插件
+enabled = true
+
+# ─── 演化设置 ───────────────────────────────────────────────────────
+[evolution]
+# 启用自动演化
+evolution_enabled = true
+# 演化周期(小时)
+evolution_interval_hours = 1.0
+# 每次演化最大变化值
+evolution_rate = 5
+# EMA平滑系数(0-1，越大变化越快)
+ema_alpha = 0.3
+# 反向变动阻力(0-1，越大阻力越强)
+direction_resistance = 0.5
+# 每次分析的最大消息数
+max_messages_per_analysis = 200
+# 每条消息的最大字符数
+max_chars_per_message = 200
+
+# ─── 监控范围（演化仅针对监控群）────────────────────────────────────
+[monitor]
+# 监控的群ID列表(空=不分析任何群)，格式：平台:群号:group（或直接填stream_id）
+monitored_groups = []
+# 排除的群ID列表
+excluded_groups = []
+# 监控的用户ID列表(空=全部)
+monitored_users = []
+# 排除的用户ID列表
+excluded_users = []
+
+# ─── 档位阈值 ───────────────────────────────────────────────────────
+[threshold]
+# 启用极端档位(98-100触发)
+enable_extreme = false
+# 自定义提示词模板(覆盖默认)
+custom_prompts = {}
+
+# ─── 注入设置 ───────────────────────────────────────────────────────
+[injection]
+# 群聊注入范围：global=所有群，monitored_only=仅 monitored_groups
+scope = "global"
+# 是否允许私聊注入
+inject_private = true
+# 每次注入最多携带的 trait 数量
+max_traits = 3
+# 无 tags 命中时是否 fallback 注入最近影响最大的 traits
+fallback_recent_impact = true
+# trait 冷却时间（秒）
+trait_cooldown_seconds = 180
+
+# ─── 思维阁设置 ─────────────────────────────────────────────────────
+[thought_cabinet]
+# 启用思维阁系统（默认关闭）
+enabled = false
+# 思维种子上限
+max_seeds = 20
+# 最小触发强度
+min_trigger_intensity = 0.7
+# 启用管理员审核通知
+admin_notification_enabled = true
+# 自动合并相似 trait
+auto_dedup_enabled = true
+# 自动去重阈值(0-1)
+auto_dedup_threshold = 0.78
+
+# ─── API 设置（可选）────────────────────────────────────────────────
+# Soul 数据 @API 组件，供 WebUI 或其他插件查询光谱/traits/种子。
+# 关闭不影响核心功能（演化、注入、思维阁）。
+[api]
+# 启用 Soul @API 组件
+enabled = true
+# 访问令牌（可选），也可用环境变量 SOUL_API_TOKEN 覆盖
+token = ""
+# 公共展示模式：脱敏敏感字段
+public_mode = false
+
+# ─── Notion 前端展示（可选）────────────────────────────────────────
+# 把 traits 与光谱同步到 Notion 数据库，用于公共展示。
+# 关闭不影响核心功能。
+[notion]
+# 启用 Notion 数据库同步
+enabled = false
+# Notion Integration Token（推荐用环境变量 MAIBOT_SOUL_NOTION_TOKEN）
+token = ""
+# Notion traits 数据库 ID
+database_id = ""
+# 是否同步光谱到 Notion
+sync_spectrum = true
+# Notion 光谱数据库 ID
+spectrum_database_id = ""
+# 光谱记录 scope_id
+spectrum_scope_id = "global"
+# 光谱同步模式：dimension_rows / single_row
+spectrum_mode = "dimension_rows"
+# 同步间隔（秒，最小 60）
+sync_interval_seconds = 600
+# 启动后首次同步延迟（秒）
+first_delay_seconds = 5
+# 单次最多同步的 trait 数量
+max_traits = 200
+# 新建 trait 时默认 Visibility 值
+visibility_default = "Public"
+# 永不覆盖用户可编辑字段
+never_overwrite_user_fields = true
+# 写入 Notion 的长文本最大长度
+max_rich_text_chars = 1800
+
+# traits 数据库字段名映射
+property_title = "Name"
+property_trait_id = "TraitId"
+property_tags = "Tags"
+property_question = "Question"
+property_thought = "Thought"
+property_confidence = "Confidence"
+property_impact_score = "ImpactScore"
+property_status = "Status"
+property_visibility = "Visibility"
+property_updated_at = "UpdatedAt"
+
+# 光谱数据库字段名映射
+spectrum_property_title = "Name"
+spectrum_property_scope_id = "ScopeId"
+spectrum_property_economic = "Economic"
+spectrum_property_social = "Social"
+spectrum_property_diplomatic = "Diplomatic"
+spectrum_property_progressive = "Progressive"
+spectrum_property_value = "Value"
+spectrum_property_initialized = "Initialized"
+spectrum_property_last_evolution = "LastEvolution"
+spectrum_property_updated_at = "UpdatedAt"
