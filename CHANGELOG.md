@@ -5,16 +5,18 @@
 ### 用户可感知
 
 - **`/soul_dashboard` 全状态可视化卡片**：一条命令把 Soul 引擎当前全部状态渲染成一张图片卡片发到聊天——社交光谱四轴（真诚/投入/亲近/直率）、三观分层 trait 计数（价值观/世界观/处事观）、六态生命周期分布（有效/已强化/已过期/矛盾/弱化/修正）、短期情绪、本群局部偏移、待审思维种子、思想图谱边数、最近演化记录、功能开关一览。管理员无需查 DB/调 API 即可总览 bot 人格状态。
-- 渲染关闭（`[render].card_enabled=false`）或宿主无头浏览器不可用时，自动降级为同内容的纯文本状态。
+- **`/soul_trait <id>` 详情卡片**：单个 trait 的完整信息可视化——分层/生命周期徽章、置信度、tags、问题、观点、光谱影响、证据、思想关联边（含矛盾/弱化/修正关系）。此前纯文本版只展示 `derived_from`/`supports` 两种边，**漏了 `contradicted_by`/`weakened_by`/`revised_by`**，现已修复，5 种边全展示。
+- **`/soul_inspect <文本>` 命中预览卡片**（管理员）：输入一段文本，模拟"如果 bot 现在要回复这句话，会命中哪些 trait、按什么优先级选中、哪些被跳过及原因"——干跑注入选择逻辑，**不实际注入**。诊断"bot 看到这句话会调用哪些人格"。
+- 渲染关闭（`[render].card_enabled=false`）或宿主无头浏览器不可用时，三个命令均自动降级为同内容的纯文本。
 
 ### 开发侧
 
 - **数据聚合**：`components/dashboard_data.py` 的 `collect_dashboard_data(plugin, stream_id)` 聚合 Soul 引擎全部状态为固定结构 dict（数据契约）；图谱边用 `(from,to,relation)` 三元组去重计数；空库/未初始化也能聚合（各计数 0、`initialized=false`）。
-- **卡片渲染**：`components/dashboard_renderer.py` 的 `DashboardRenderer` 用内联 HTML/CSS（`#soul-dashboard` 根容器、CJK 字体栈、`allow_network=false`、无外部依赖）经 `ctx.render.html2png` 渲染成 PNG；`build_dashboard_text` 为纯文本降级版。深色靛紫/青绿调性，区分于 chat_summary 暖纸色。
-- **命令接线**：`components/dashboard_command.py` 串起 data→renderer→`ctx.send.image`；`card_enabled=false` 或渲染失败降级文本（失败时前缀"卡片渲染失败"）；`send.image` 异常捕获具体类型（`OSError`/`RuntimeError`）非裸 except。
+- **卡片渲染**：`components/dashboard_renderer.py` 的 `DashboardRenderer` 用内联 HTML/CSS（`#soul-dashboard`/`#soul-trait`/`#soul-inspect` 三个根容器、CJK 字体栈、`allow_network=false`、无外部依赖）经 `ctx.render.html2png` 渲染成 PNG；三个卡片共用 `_wrap_html` CSS 底座（深色靛紫/青绿调性）；`build_dashboard_text`/`build_trait_text`/`build_inspect_text` 为纯文本降级版。
+- **命令接线**：`components/dashboard_command.py`（dashboard）+ `handle_trait_detail` 改造（trait，含边展示遗漏修复）+ `components/inspect_command.py`（inspect，干跑 `_select_traits`/`_in_cooldown`/`_trait_quality_score` 不实际注入）；统一 `card_enabled` 判断 + 渲染失败/超时降级文本 + `send.image` 异常捕获具体类型（`OSError`/`RuntimeError`）非裸 except。
 - **配置**：新增 `[render]` 段（`card_enabled`/`viewport_width`/`device_scale_factor`/`render_timeout_ms`）；`CONFIG_VERSION` 升至 `2.2.0`，`config_template.toml` 同步。
 - **技术决策**：SDK 无插件前端页面注册机制（WebUI 只能生成配置表单），故用 `ctx.render.html2png`（宿主无头浏览器）+ `ctx.send.image` 实现可视化，零宿主改动。参考同仓 `plugins/chat_summary/renderer.py` 的已验证范式。
-- **测试**：新增 `tests/test_dashboard_data.py`（3 项：空库/满状态/stream_id 空切片 None）+ `tests/test_dashboard_renderer.py`（4 项：文本降级满状态/未初始化/ctx=None 降级/HTML 根容器），共 38 项插件测试。
+- **测试**：新增 `tests/test_dashboard_data.py`（3 项）+ `tests/test_dashboard_renderer.py`（4 项）+ `tests/test_trait_card.py`（5 项，含 5 种边类型回归保护）+ `tests/test_inspect_card.py`（5 项），共 48 项插件测试。
 
 ## [2.1.0] — dev 分支（P1 三观生长 + 光谱重构）
 

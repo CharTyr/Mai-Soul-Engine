@@ -217,6 +217,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_dashboard(self, stream_id, **kwargs)
 
+    @Command("soul_inspect", description="预览文本会命中哪些 trait（管理员，不实际注入）", pattern=r"^/soul_inspect\s+(.+)\s*$")
+    async def cmd_soul_inspect(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """注入命中预览。"""
+        from .components.inspect_command import handle_inspect
+
+        return await handle_inspect(self, stream_id, **kwargs)
+
     # ===== Command：重置 =====
 
     @Command("soul_reset", description="重置意识形态光谱", pattern=r"^/soul_reset\s*$")

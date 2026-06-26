@@ -383,63 +383,97 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 
     import json as _json
 
+    # ── 组装 trait 详情数据契约（供卡片渲染 / 文本降级共用） ──
     layer_label = LAYER_LABEL_ZH.get(trait.ideology_layer, trait.ideology_layer)
     lifecycle_label = LIFECYCLE_LABEL_ZH.get(trait.lifecycle_state, trait.lifecycle_state)
-    status = "启用" if trait.enabled else "停用"
 
-    lines = [f"🧠 trait 详情 {trait_id}", ""]
-    lines.append(f"名称: {trait.name}")
-    lines.append(f"状态: {status}  分层: {layer_label}  生命周期: {lifecycle_label}")
-    lines.append(f"置信度: {float(trait.confidence or 0) / 100.0:.2f}")
-    if trait.stream_id:
-        lines.append(f"来源群: {trait.stream_id}")
-    lines.append(f"创建/更新于: {trait.created_at}")
-
-    tags = parse_tags_json(trait.tags_json or "[]")
-    if tags:
-        lines.append(f"tags: {', '.join(tags)}")
-
-    if trait.question:
-        lines.append("")
-        lines.append(f"问: {trait.question}")
-    lines.append("")
-    lines.append(f"观点: {trait.thought}")
-
+    # 光谱影响：仅保留非 0 项
     try:
-        impact = _json.loads(trait.spectrum_impact_json or "{}")
+        impact_raw = _json.loads(trait.spectrum_impact_json or "{}")
     except (ValueError, TypeError):
-        impact = {}
-    impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0]) if isinstance(impact, dict) else ""
-    if impact_str:
-        lines.append(f"光谱影响: {impact_str}")
+        impact_raw = {}
+    spectrum_impact = {k: int(v) for k, v in impact_raw.items() if isinstance(v, (int, float)) and v != 0} if isinstance(impact_raw, dict) else {}
 
-    evidence = parse_evidence_json(trait.evidence_json or "[]")
-    if evidence:
-        lines.append("")
-        lines.append(f"证据（{len(evidence)} 条）:")
-        for ev in evidence[:5]:
-            if isinstance(ev, dict):
-                ev_text = ev.get("event", "") or ev.get("reasoning", "") or str(ev)
-            else:
-                ev_text = str(ev)
-            ev_text = ev_text.replace("\n", " ").strip()
-            if len(ev_text) > 100:
-                ev_text = ev_text[:100] + "..."
-            lines.append(f"- {ev_text}")
+    # 证据：每条取 event/reasoning，去换行，截断 100 字
+    evidence_list: list[str] = []
+    for ev in parse_evidence_json(trait.evidence_json or "[]")[:5]:
+        if isinstance(ev, dict):
+            ev_text = ev.get("event", "") or ev.get("reasoning", "") or str(ev)
+        else:
+            ev_text = str(ev)
+        ev_text = ev_text.replace("\n", " ").strip()
+        if len(ev_text) > 100:
+            ev_text = ev_text[:100] + "..."
+        if ev_text:
+            evidence_list.append(ev_text)
 
-    edges = list_thought_edges_for_trait(trait_id, limit=6)
-    if edges:
-        lines.append("")
-        lines.append("思想关联:")
-        for e in edges:
-            if e.relation_type == "derived_from" and e.source_ref:
-                lines.append(f"- 源自种子 {e.source_ref}")
-            elif e.relation_type == "supports" and e.to_trait_id:
-                lines.append(f"- 支撑 {e.to_trait_id}")
+    # 思想关联边：映射全部 5 种关系类型（含矛盾/弱化/修正，此前文本版遗漏）
+    edge_label_map = {
+        "derived_from": "源自种子",
+        "supports": "支撑",
+        "contradicted_by": "矛盾于",
+        "weakened_by": "弱化于",
+        "revised_by": "修正自",
+    }
+    edges_list: list[dict] = []
+    for e in list_thought_edges_for_trait(trait_id, limit=6):
+        label = edge_label_map.get(e.relation_type)
+        if not label:
+            continue  # 未知关系类型跳过，不崩
+        if e.relation_type == "derived_from":
+            target = (e.source_ref or "")[:12]
+        else:
+            target = (e.to_trait_id or "")[:12]
+        edges_list.append({"relation_type": e.relation_type, "label": label, "target": target})
 
-    msg = "\n".join(lines)
-    await plugin.ctx.send.text(msg, stream_id)
-    return True, msg, True
+    data = {
+        "trait_id": trait.trait_id,
+        "name": trait.name,
+        "enabled": bool(trait.enabled),
+        "ideology_layer": trait.ideology_layer,
+        "layer_label": layer_label,
+        "lifecycle_state": trait.lifecycle_state,
+        "lifecycle_label": lifecycle_label,
+        "confidence": float(trait.confidence or 0) / 100.0,
+        "stream_id": trait.stream_id,
+        "created_at": trait.created_at.strftime("%Y-%m-%d %H:%M:%S") if trait.created_at else None,
+        "tags": parse_tags_json(trait.tags_json or "[]"),
+        "question": trait.question or "",
+        "thought": trait.thought or "",
+        "spectrum_impact": spectrum_impact,
+        "evidence": evidence_list,
+        "edges": edges_list,
+    }
+
+    # ── 出图：card_enabled 且渲染成功则发图，否则降级文本 ──
+    from .dashboard_renderer import DashboardRenderer, build_trait_text
+
+    if plugin.config.render.card_enabled:
+        renderer = DashboardRenderer(
+            plugin.ctx,
+            plugin.config.render.viewport_width,
+            plugin.config.render.device_scale_factor,
+            plugin.config.render.render_timeout_ms,
+        )
+        image_base64 = await renderer.render_trait(data)
+        if image_base64:
+            try:
+                await plugin.ctx.send.image(image_base64, stream_id)
+                return True, "已生成 trait 详情卡片", True
+            except (OSError, RuntimeError) as exc:
+                logger.exception("发送 trait 详情卡片图片失败: %s", exc)
+                fallback_text = f"卡片渲染失败，以下为文本状态：\n{build_trait_text(data)}"
+                await plugin.ctx.send.text(fallback_text, stream_id)
+                return True, "trait 详情(文本)", True
+        # 渲染返回空串——降级文本
+        fallback_text = f"卡片渲染失败，以下为文本状态：\n{build_trait_text(data)}"
+        await plugin.ctx.send.text(fallback_text, stream_id)
+        return True, "trait 详情(文本)", True
+
+    # 配置关闭卡片——纯文本
+    text_out = build_trait_text(data)
+    await plugin.ctx.send.text(text_out, stream_id)
+    return True, "trait 详情(文本)", True
 
 
 # ===== Trait 设置 Tags =====

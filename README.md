@@ -127,7 +127,8 @@ p1_enabled = true   # 关闭后行为与 main/v2.0 一致
 - `/soul_approve <seed_id>` / `/soul_reject <seed_id>` — 审核
 - `/soul_reject_all` — 批量拒绝所有待审核种子
 - `/soul_traits [stream_id]` — 查看 traits
-- `/soul_trait <trait_id>` — 查看单个 trait 详情（分层/生命周期/光谱影响/证据/图谱边）
+- `/soul_trait <trait_id>` — 查看 trait 详情卡片（分层/生命周期/置信度/光谱影响/证据/图谱边含矛盾关系；渲染不可用降级文本）
+- `/soul_inspect <文本>` — 注入命中预览卡片（模拟"这段文本会命中哪些 trait、优先级排序"，不实际注入；渲染不可用降级文本）
 - `/soul_trait_set_tags` / `_merge` / `_disable` / `_enable` / `_delete` — trait 管理
 
 ## 可选功能

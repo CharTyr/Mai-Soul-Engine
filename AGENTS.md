@@ -127,7 +127,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 
 ### 命令
 
-只读详情：`/soul_seed <id>`（种子详情含上下文）、`/soul_trait <id>`（trait 详情含分层/生命周期/图谱边，含 `contradicted_by`/`weakened_by`/`revised_by` 关系边）。批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**——批准会触发大量 LLM 内化）。误判为 contradicted 的 trait 可用 `/soul_trait_enable <id>` 重新启用。全状态总览：`/soul_dashboard`（可视化卡片图片，见下"状态卡片可视化"）。
+只读详情：`/soul_seed <id>`（种子详情含上下文）、`/soul_trait <id>`（trait 详情**卡片**：分层/生命周期/置信度/光谱影响/证据/图谱边，含全部 5 种关系边 `contradicted_by`/`weakened_by`/`revised_by`）、`/soul_inspect <文本>`（管理员，**注入命中预览卡片**：模拟"这段文本会命中哪些 trait、按什么优先级选中"，干跑 `_select_traits`/`_trait_quality_score`，不实际注入）。批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**——批准会触发大量 LLM 内化）。误判为 contradicted 的 trait 可用 `/soul_trait_enable <id>` 重新启用。全状态总览：`/soul_dashboard`（可视化卡片图片，见下"状态卡片可视化"）。
 
 ### 全局作用域标记（`GLOBAL_STREAM`）
 
@@ -137,13 +137,15 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 
 7 个 `@API` 均为 SDK 级组件（`public=False`），**无网络暴露面**（插件无 HTTP server/路由/监听）。双层访问控制：`public=False`（SDK 层，仅 Runner 内可信组件可调）+ `api.enabled` 配置守卫（默认关，7 个 API 入口全检查）。唯一写接口 `api_set_spectrum` 有审计日志（`data/audit.jsonl`，`type=api_set_spectrum`，记录社交轴 before/after）。**插件层不自行实现网络级认证**（无网络面，加 token 不适用且需改 SDK/宿主）。
 
-### 状态卡片可视化（`/soul_dashboard`，v2.2.0）
+### 状态卡片可视化（`/soul_dashboard` + `/soul_trait` + `/soul_inspect`，v2.2.0）
 
-`/soul_dashboard` 把 Soul 引擎**全部当前状态**聚合成一张可视化卡片图片发到聊天（非 Web 页面——SDK 无插件前端注册机制，WebUI 只能生成配置表单；此处用 `ctx.render.html2png` 把内联 HTML/CSS 经宿主无头浏览器渲染成 PNG，再 `ctx.send.image` 发图，零宿主改动）。
+三个命令把 Soul 引擎状态渲染成图片卡片发到聊天（非 Web 页面——SDK 无插件前端注册机制，WebUI 只能生成配置表单；此处用 `ctx.render.html2png` 把内联 HTML/CSS 经宿主无头浏览器渲染成 PNG，再 `ctx.send.image` 发图，零宿主改动）。三个卡片**共用 `dashboard_renderer.py` 的 `_wrap_html` CSS 底座**（深色靛紫/青绿调性），各自根容器 id：`#soul-dashboard`/`#soul-trait`/`#soul-inspect`。
 
-- **数据聚合**：`components/dashboard_data.py` 的 `collect_dashboard_data(plugin, stream_id)` 聚合光谱四轴/P1 三层 trait 计数/六态生命周期分布/情绪/本群切片/待审种子/最近演化/图谱边去重计数/功能开关，产出固定结构 dict（数据契约）。
-- **卡片渲染**：`components/dashboard_renderer.py` 的 `DashboardRenderer.render(data)` 把 dict 渲染成 HTML 卡片（`#soul-dashboard` 根容器、内联 CSS、CJK 字体栈、`allow_network=False`）→ `ctx.render.html2png` → base64。`build_dashboard_text(data)` 是纯文本降级版。
-- **命令接线**：`components/dashboard_command.py` 串起 data→renderer→send.image；`card_enabled=False` 或渲染失败时降级 `build_dashboard_text` 纯文本（失败时前缀"卡片渲染失败"）。
+- **`/soul_dashboard` 全状态总览**：`components/dashboard_data.py` 的 `collect_dashboard_data(plugin, stream_id)` 聚合光谱四轴/P1 三层 trait 计数/六态生命周期分布/情绪/本群切片/待审种子/最近演化/图谱边去重计数/功能开关。
+- **`/soul_trait <id>` 详情卡片**：`handle_trait_detail` 聚合单 trait 全信息（分层/生命周期/置信度/光谱影响/证据/图谱边）→ `render_trait` 出图。**边展示覆盖全部 5 种关系**（`derived_from`/`supports`/`contradicted_by`/`weakened_by`/`revised_by`，此前文本版只展示前 2 种，已修）。
+- **`/soul_inspect <文本>` 命中预览**：`components/inspect_command.py` 干跑 `_select_traits`/`_in_cooldown`/`_trait_quality_score`（**不实际注入**），展示"这段文本会命中哪些 trait、按什么优先级选中、哪些被跳过及原因"。管理员诊断"bot 看到这句话会调用哪些人格"。
+- **渲染**：`components/dashboard_renderer.py` 的 `DashboardRenderer.render/render_trait/render_inspect` → `ctx.render.html2png` → base64；`build_dashboard_text`/`build_trait_text`/`build_inspect_text` 是纯文本降级版。
+- **降级**：`card_enabled=False` 或渲染失败/超时 → 自动降级同内容纯文本（失败时前缀"卡片渲染失败"）；`send.image` 异常捕获具体类型（`OSError`/`RuntimeError`）非裸 except。
 - **配置**：`[render]` 段（`card_enabled`/`viewport_width`/`device_scale_factor`/`render_timeout_ms`），`CONFIG_VERSION=2.2.0`。
 - **约束**：html2png 走宿主无头浏览器有渲染开销，**只用于管理员主动触发的命令**，不进热路径；CSS 全内联不引外部资源；渲染失败必须降级文本而非崩。
 
@@ -173,7 +175,7 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本）
 - `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD，含 `update_seed_status` 原子守卫）、`traits.py`（trait CRUD）、`p1.py`（切片/情绪/图谱边）；`ideology_model.py` 保留为**重导出 shim**（`from ._conn/seeds/... import *` + `__getattr__` 委托动态变量），40+ 处 `from ..models.ideology_model import xxx` 零破坏。**新代码直接从子模块 import；改 shim 不影响调用方**
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `tests/` — 插件内测试（38 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard 数据聚合+渲染降级
+- `tests/` — 插件内测试（48 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard+trait+inspect 数据聚合与渲染降级
 
 ## 开发与验证
 

@@ -9,6 +9,24 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 _ROOT_ID = "soul-dashboard"
+_TRAIT_ROOT_ID = "soul-trait"
+_INSPECT_ROOT_ID = "soul-inspect"
+
+_EDGE_RELATION_CSS: dict[str, str] = {
+    "derived_from": "edge-derived",
+    "supports": "edge-support",
+    "contradicted_by": "edge-bad",
+    "weakened_by": "edge-warn",
+    "revised_by": "edge-revised",
+}
+
+_SELECTION_MODE_LABELS: dict[str, str] = {
+    "tag_hit": "标签命中",
+    "tag_hit+tagless": "标签命中 + 无标签补位",
+    "tagless_fill": "无标签补位",
+    "fallback_recent_impact": "近期影响回退",
+    "spectrum_only": "仅光谱注入",
+}
 
 _SPECTRUM_LABELS: dict[str, str] = {
     "sincerity": "真诚",
@@ -81,6 +99,26 @@ def _dash_or(value: Any, *, empty: str = "—") -> str:
     return str(value)
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _short_id(trait_id: str, *, max_len: int = 10) -> str:
+    tid = trait_id.strip()
+    if len(tid) <= max_len:
+        return tid
+    return tid[:max_len] + "…"
+
+
 class DashboardRenderer:
     """使用 Host render.html2png 生成 Soul 状态总览卡片。"""
 
@@ -100,19 +138,43 @@ class DashboardRenderer:
         """把 dashboard 数据渲染为 PNG base64；失败返回空串。"""
         try:
             html = self._build_html(data)
-            return await self._render_html(html)
+            return await self._render_html(html, root_id=_ROOT_ID)
         except Exception:
             self._log_exception("Soul dashboard 渲染失败")
             return ""
 
-    async def _render_html(self, html: str) -> str:
+    async def render_trait(self, data: dict) -> str:
+        """渲染单个 trait 详情卡片为 PNG base64；失败返回空串。"""
+        try:
+            html = self._build_trait_html(data)
+            return await self._render_html(html, root_id=_TRAIT_ROOT_ID, viewport_height=1800)
+        except Exception:
+            self._log_exception("Soul trait 详情渲染失败")
+            return ""
+
+    async def render_inspect(self, data: dict) -> str:
+        """渲染 inspect 命中预览卡片为 PNG base64；失败返回空串。"""
+        try:
+            html = self._build_inspect_html(data)
+            return await self._render_html(html, root_id=_INSPECT_ROOT_ID, viewport_height=1800)
+        except Exception:
+            self._log_exception("Soul inspect 预览渲染失败")
+            return ""
+
+    async def _render_html(
+        self,
+        html: str,
+        *,
+        root_id: str,
+        viewport_height: int = 1600,
+    ) -> str:
         if self._ctx is None:
             return ""
         try:
             result = await self._ctx.render.html2png(
                 html,
-                selector=f"#{_ROOT_ID}",
-                viewport={"width": self.viewport_width, "height": 1600},
+                selector=f"#{root_id}",
+                viewport={"width": self.viewport_width, "height": viewport_height},
                 device_scale_factor=self.device_scale_factor,
                 full_page=False,
                 omit_background=False,
@@ -357,6 +419,263 @@ class DashboardRenderer:
                 f'<span class="flag-state">{text}</span></span>'
             )
         return '<div class="flags">' + "".join(badges) + "</div>"
+
+    def _lifecycle_chip(self, lifecycle_state: str, lifecycle_label: str) -> str:
+        css = _LIFECYCLE_CSS.get(lifecycle_state, "lc-expired")
+        label = lifecycle_label.strip() if lifecycle_label.strip() else _LIFECYCLE_LABELS.get(lifecycle_state, lifecycle_state)
+        return f'<span class="chip {css}">{escape(label)}</span>'
+
+    def _build_trait_html(self, data: dict) -> str:
+        name = _dash_or(data.get("name"), empty="未命名 Trait")
+        trait_id = str(data.get("trait_id") or "")
+        short_id = escape(_short_id(trait_id))
+        enabled = bool(data.get("enabled"))
+        enable_badge = (
+            '<span class="badge badge-ok">启用</span>'
+            if enabled
+            else '<span class="badge badge-muted">停用</span>'
+        )
+        layer_label = _dash_or(data.get("layer_label"), empty=_LAYER_LABELS.get(str(data.get("ideology_layer") or ""), "—"))
+        lifecycle_state = str(data.get("lifecycle_state") or "active")
+        lifecycle_label = str(data.get("lifecycle_label") or "")
+        lc_chip = self._lifecycle_chip(lifecycle_state, lifecycle_label)
+
+        confidence = _clamp(int(round(_as_float(data.get("confidence")) * 100)), 0, 100)
+        stream_raw = str(data.get("stream_id") or "").strip()
+        stream_display = "全局" if stream_raw == "global" or not stream_raw else stream_raw
+
+        tags = _as_list(data.get("tags"))
+        tag_html = self._render_tag_cloud(tags)
+        question = _dash_or(data.get("question"), empty="暂无")
+        thought = _dash_or(data.get("thought"), empty="暂无")
+        impact_block = self._render_spectrum_impact(_as_dict(data.get("spectrum_impact")))
+        evidence_block = self._render_evidence_list(_as_list(data.get("evidence")))
+        edges_block = self._render_trait_edges(_as_list(data.get("edges")))
+        created = _dash_or(data.get("created_at"))
+
+        body = f"""
+        <article id="{_TRAIT_ROOT_ID}" class="dash">
+          <header class="hero hero-compact">
+            <div class="hero-main">
+              <div class="eyebrow">Trait Detail</div>
+              <h1 class="title-trait">{escape(name)}</h1>
+              <p class="meta">ID {short_id} · 来源 {escape(stream_display)} · 创建于 {escape(created)}</p>
+              <div class="badge-row">
+                {enable_badge}
+                <span class="badge badge-layer">{escape(layer_label)}</span>
+                {lc_chip}
+              </div>
+            </div>
+            <div class="hero-glyph" aria-hidden="true">◇</div>
+          </header>
+
+          <section class="panel">
+            <div class="label">置信度</div>
+            <div class="bar-row bar-row-wide">
+              <span class="bar-name">置信</span>
+              <div class="bar-track"><div class="bar-fill" style="width:{confidence}%"></div></div>
+              <span class="bar-val">{confidence}%</span>
+            </div>
+          </section>
+
+          <section class="grid two">
+            <div class="panel">
+              <div class="label">标签</div>
+              {tag_html}
+            </div>
+            <div class="panel">
+              <div class="label">光谱影响</div>
+              {impact_block}
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="label">关联问题</div>
+            <p class="body-text">{escape(question)}</p>
+          </section>
+
+          <section class="panel panel-accent">
+            <div class="label">观点</div>
+            <p class="thought-body">{escape(thought)}</p>
+          </section>
+
+          <section class="grid two">
+            <div class="panel">
+              <div class="label">证据</div>
+              {evidence_block}
+            </div>
+            <div class="panel">
+              <div class="label">思想关联</div>
+              {edges_block}
+            </div>
+          </section>
+        </article>
+        """
+        return self._wrap_html(body)
+
+    def _render_tag_cloud(self, tags: list[Any]) -> str:
+        normalized = [str(t).strip() for t in tags if str(t).strip()]
+        if not normalized:
+            return '<div class="empty">暂无</div>'
+        items = "".join(f'<span class="tag">{escape(t)}</span>' for t in normalized)
+        return f'<div class="tags">{items}</div>'
+
+    def _render_spectrum_impact(self, impact: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for key in ("sincerity", "engagement", "closeness", "directness"):
+            val = _as_int(impact.get(key))
+            if val == 0:
+                continue
+            parts.append(
+                f'<span class="impact-chip">{escape(_SPECTRUM_LABELS[key])} '
+                f'<strong>{escape(_fmt_delta(val))}</strong></span>'
+            )
+        if not parts:
+            return '<div class="empty">无光谱偏移</div>'
+        return '<div class="impact-row">' + "".join(parts) + "</div>"
+
+    def _render_evidence_list(self, evidence: list[Any]) -> str:
+        items = [str(e).strip() for e in evidence if str(e).strip()]
+        if not items:
+            return '<div class="empty">暂无</div>'
+        lis = "".join(f"<li>{escape(item)}</li>" for item in items)
+        return f'<ul class="list-body">{lis}</ul>'
+
+    def _render_trait_edges(self, edges: list[Any]) -> str:
+        if not edges:
+            return '<div class="empty">暂无关联边</div>'
+        rows: list[str] = []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            rel = str(edge.get("relation_type") or "")
+            css = _EDGE_RELATION_CSS.get(rel, "edge-derived")
+            label = _dash_or(edge.get("label"), empty=rel or "—")
+            target = _dash_or(edge.get("target"), empty="—")
+            rows.append(
+                f"""
+                <div class="edge-row">
+                  <span class="edge-badge {css}">{escape(label)}</span>
+                  <span class="edge-target">{escape(target)}</span>
+                </div>
+                """
+            )
+        if not rows:
+            return '<div class="empty">暂无关联边</div>'
+        return '<div class="edge-stack">' + "".join(rows) + "</div>"
+
+    def _build_inspect_html(self, data: dict) -> str:
+        query_text = _dash_or(data.get("query_text"), empty="（空）")
+        stream_id = str(data.get("stream_id") or "").strip()
+        perspective = "全局" if not stream_id else stream_id
+        mode_key = str(data.get("selection_mode") or "spectrum_only")
+        mode_label = _SELECTION_MODE_LABELS.get(mode_key, mode_key)
+        max_traits = _as_int(data.get("max_traits"))
+        total_active = _as_int(data.get("total_active"))
+        selected = _as_list(data.get("selected"))
+        skipped = _as_list(data.get("skipped"))
+
+        selected_block = self._render_inspect_selected(selected)
+        skipped_block = self._render_inspect_skipped(skipped)
+        footnote = (
+            f"从 {total_active} 个活跃 trait 中按规则选出最多 {max_traits} 个 · "
+            f"模式 {escape(mode_label)}"
+        )
+
+        body = f"""
+        <article id="{_INSPECT_ROOT_ID}" class="dash">
+          <header class="hero hero-compact">
+            <div class="hero-main">
+              <div class="eyebrow">Injection Inspect</div>
+              <h1>注入命中预览</h1>
+              <p class="meta">视角 {escape(perspective)}</p>
+              <span class="badge badge-mode">{escape(mode_label)}</span>
+            </div>
+            <div class="hero-glyph" aria-hidden="true">◎</div>
+          </header>
+
+          <section class="panel">
+            <div class="label">待测文本</div>
+            <blockquote class="query-block">{escape(query_text)}</blockquote>
+          </section>
+
+          <section class="panel">
+            <div class="label">命中列表（按优先级）</div>
+            {selected_block}
+          </section>
+
+          <section class="panel panel-dim">
+            <div class="label">跳过</div>
+            {skipped_block}
+          </section>
+
+          <p class="footnote footnote-block">{footnote}</p>
+        </article>
+        """
+        return self._wrap_html(body)
+
+    def _render_inspect_selected(self, items: list[Any]) -> str:
+        if not items:
+            return '<div class="empty">无命中（将走 fallback 或仅光谱注入）</div>'
+        cards: list[str] = []
+        for idx, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            name = _dash_or(item.get("name"), empty="—")
+            layer = _dash_or(item.get("layer_label"), empty="—")
+            lc = _dash_or(item.get("lifecycle_label"), empty="—")
+            conf = _as_float(item.get("confidence"))
+            quality = _as_float(item.get("quality_score"))
+            conf_pct = int(round(conf * 100))
+            thought = _dash_or(item.get("thought"), empty="—")
+            tags = _as_list(item.get("matched_tags"))
+            tag_part = self._render_matched_tags(tags)
+            cards.append(
+                f"""
+                <div class="hit-card">
+                  <div class="hit-head">
+                    <span class="hit-rank">#{idx}</span>
+                    <span class="hit-name">{escape(name)}</span>
+                    <span class="hit-id muted">{escape(_short_id(str(item.get("trait_id") or "")))}</span>
+                  </div>
+                  <div class="hit-badges">
+                    <span class="badge badge-layer">{escape(layer)}</span>
+                    <span class="chip lc-active">{escape(lc)}</span>
+                    <span class="hit-metric">置信 {conf_pct}%</span>
+                    <span class="hit-metric">质量 {quality:.2f}</span>
+                  </div>
+                  {tag_part}
+                  <p class="hit-thought">{escape(thought)}</p>
+                </div>
+                """
+            )
+        return '<div class="hit-stack">' + "".join(cards) + "</div>"
+
+    def _render_matched_tags(self, tags: list[Any]) -> str:
+        normalized = [str(t).strip() for t in tags if str(t).strip()]
+        if not normalized:
+            return '<div class="hit-tags empty-inline">未命中标签</div>'
+        items = "".join(f'<span class="tag tag-hit">{escape(t)}</span>' for t in normalized)
+        return f'<div class="hit-tags">{items}</div>'
+
+    def _render_inspect_skipped(self, items: list[Any]) -> str:
+        if not items:
+            return '<div class="empty">无跳过项</div>'
+        rows: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = _dash_or(item.get("name"), empty="—")
+            reason = _dash_or(item.get("reason"), empty="—")
+            rows.append(
+                f"""
+                <div class="skip-row">
+                  <span class="skip-name">{escape(name)}</span>
+                  <span class="skip-reason">{escape(reason)}</span>
+                </div>
+                """
+            )
+        return '<div class="skip-stack">' + "".join(rows) + "</div>"
 
     @staticmethod
     def _wrap_html(body: str) -> str:
@@ -656,6 +975,156 @@ h1 {{
 .flag-name {{ color: var(--ink-soft); }}
 .flag-state {{ font-weight: 800; }}
 .panel-flags {{ margin-bottom: 0; }}
+.badge-muted {{
+  background: rgba(160, 170, 200, 0.14);
+  color: #c5cbe0;
+  border: 1px solid rgba(160, 170, 200, 0.35);
+}}
+.badge-layer {{
+  background: rgba(124, 108, 240, 0.2);
+  color: #d5ccff;
+  border: 1px solid rgba(124, 108, 240, 0.4);
+}}
+.badge-mode {{
+  background: rgba(61, 214, 197, 0.16);
+  color: #aaf5ec;
+  border: 1px solid rgba(61, 214, 197, 0.35);
+}}
+.badge-row {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}}
+.hero-compact {{ margin-bottom: 16px; }}
+.title-trait {{ font-size: 30px; line-height: 1.2; }}
+.bar-row-wide {{ grid-template-columns: 48px 1fr 52px; }}
+.panel-accent {{
+  background: linear-gradient(135deg, rgba(124,108,240,0.12), rgba(255,255,255,0.03));
+  border-color: rgba(124, 108, 240, 0.28);
+}}
+.body-text {{
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.65;
+}}
+.thought-body {{
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.72;
+  font-weight: 600;
+  color: #e8e4ff;
+}}
+.tags {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}}
+.tag {{
+  display: inline-flex;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(124, 108, 240, 0.18);
+  color: #d5ccff;
+  border: 1px solid rgba(124, 108, 240, 0.3);
+}}
+.tag-hit {{
+  background: rgba(61, 214, 197, 0.2);
+  color: #aaf5ec;
+  border-color: rgba(61, 214, 197, 0.45);
+}}
+.impact-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.impact-chip {{
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--line);
+}}
+.impact-chip strong {{ color: #c4b8ff; margin-left: 4px; }}
+.list-body {{ margin: 0; padding-left: 20px; }}
+.list-body li {{ margin: 8px 0; font-size: 15px; line-height: 1.55; }}
+.edge-stack {{ display: grid; gap: 10px; }}
+.edge-row {{
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+}}
+.edge-badge {{
+  display: inline-flex;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}}
+.edge-derived {{ background: rgba(124,108,240,0.14); color: #d5ccff; }}
+.edge-support {{ background: rgba(95,211,141,0.12); color: #b8f5d0; }}
+.edge-bad {{ background: rgba(232,93,108,0.16); color: #ffc4cb; }}
+.edge-warn {{ background: rgba(240,160,75,0.16); color: #ffe0b8; }}
+.edge-revised {{ background: rgba(124,108,240,0.16); color: #d5ccff; }}
+.edge-target {{ font-size: 14px; color: var(--ink-soft); word-break: break-all; }}
+.query-block {{
+  margin: 0;
+  padding: 16px 18px;
+  border-left: 4px solid var(--accent);
+  border-radius: 0 14px 14px 0;
+  background: rgba(255,255,255,0.05);
+  font-size: 17px;
+  line-height: 1.65;
+}}
+.hit-stack {{ display: grid; gap: 12px; }}
+.hit-card {{
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--line);
+}}
+.hit-head {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}}
+.hit-rank {{ font-size: 18px; font-weight: 800; color: var(--accent-2); }}
+.hit-name {{ font-size: 18px; font-weight: 700; }}
+.hit-id {{ font-size: 13px; }}
+.hit-badges {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}}
+.hit-metric {{
+  font-size: 13px;
+  color: var(--ink-soft);
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+}}
+.hit-tags {{ margin-bottom: 8px; }}
+.empty-inline {{ font-size: 13px; color: var(--ink-soft); }}
+.hit-thought {{ margin: 0; font-size: 15px; line-height: 1.55; color: var(--ink-soft); }}
+.skip-stack {{ display: grid; gap: 8px; }}
+.skip-row {{
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  font-size: 14px;
+  opacity: 0.88;
+}}
+.skip-name {{ color: var(--ink-soft); }}
+.skip-reason {{ color: var(--warn); font-weight: 600; text-align: right; }}
+.footnote-block {{ margin: 0 4px 8px; padding: 0 8px; }}
 </style>
 </head>
 <body>{body}</body>
@@ -752,5 +1221,125 @@ def build_dashboard_text(data: dict) -> str:
         f"{_FEATURE_LABELS[k]}{'开' if flags.get(k) else '关'}" for k in _FEATURE_LABELS
     )
     lines.extend(["", "【功能开关】", f"  {flag_s}"])
+
+    return "\n".join(lines)
+
+
+def build_trait_text(data: dict) -> str:
+    """trait 详情纯文本降级版。"""
+    name = _dash_or(data.get("name"), empty="未命名")
+    trait_id = str(data.get("trait_id") or "")
+    enabled = "启用" if bool(data.get("enabled")) else "停用"
+    layer = _dash_or(data.get("layer_label"), empty="—")
+    lifecycle = _dash_or(data.get("lifecycle_label"), empty="—")
+    conf = int(round(_as_float(data.get("confidence")) * 100))
+    stream_raw = str(data.get("stream_id") or "").strip()
+    stream_display = "全局" if stream_raw == "global" or not stream_raw else stream_raw
+
+    lines: list[str] = [
+        f"◇ Trait · {name}",
+        f"ID {trait_id} · {enabled} · {layer} · {lifecycle}",
+        f"来源 {stream_display} · 置信 {conf}% · 创建 {_dash_or(data.get('created_at'))}",
+        "",
+    ]
+
+    tags = _as_list(data.get("tags"))
+    if tags:
+        tag_s = " ".join(str(t).strip() for t in tags if str(t).strip())
+        lines.extend(["【标签】", f"  {tag_s}", ""])
+    else:
+        lines.extend(["【标签】", "  暂无", ""])
+
+    lines.extend(["【问题】", f"  {_dash_or(data.get('question'), empty='暂无')}", ""])
+    lines.extend(["【观点】", f"  {_dash_or(data.get('thought'), empty='暂无')}", ""])
+
+    impact = _as_dict(data.get("spectrum_impact"))
+    impact_parts = [
+        f"{_SPECTRUM_LABELS[k]}{_fmt_delta(_as_int(impact.get(k)))}"
+        for k in ("sincerity", "engagement", "closeness", "directness")
+        if _as_int(impact.get(k)) != 0
+    ]
+    lines.append("【光谱影响】")
+    lines.append(f"  {' · '.join(impact_parts) if impact_parts else '无'}")
+    lines.append("")
+
+    evidence = _as_list(data.get("evidence"))
+    lines.append("【证据】")
+    if not evidence:
+        lines.append("  暂无")
+    else:
+        for ev in evidence:
+            text = str(ev).strip()
+            if text:
+                lines.append(f"  · {text}")
+
+    lines.append("")
+    lines.append("【思想关联】")
+    edges = _as_list(data.get("edges"))
+    if not edges:
+        lines.append("  暂无")
+    else:
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            label = _dash_or(edge.get("label"), empty="—")
+            target = _dash_or(edge.get("target"), empty="—")
+            lines.append(f"  · {label} → {target}")
+
+    return "\n".join(lines)
+
+
+def build_inspect_text(data: dict) -> str:
+    """inspect 命中纯文本降级版。"""
+    query_text = _dash_or(data.get("query_text"), empty="（空）")
+    stream_id = str(data.get("stream_id") or "").strip()
+    perspective = "全局" if not stream_id else stream_id
+    mode_key = str(data.get("selection_mode") or "spectrum_only")
+    mode_label = _SELECTION_MODE_LABELS.get(mode_key, mode_key)
+    max_traits = _as_int(data.get("max_traits"))
+    total_active = _as_int(data.get("total_active"))
+
+    lines: list[str] = [
+        "◎ 注入命中预览",
+        f"视角 {perspective} · 模式 {mode_label}",
+        f"上限 {max_traits} · 活跃总数 {total_active}",
+        "",
+        "【待测文本】",
+        f"  {query_text}",
+        "",
+        "【命中】",
+    ]
+
+    selected = _as_list(data.get("selected"))
+    if not selected:
+        lines.append("  无命中（将走 fallback 或仅光谱注入）")
+    else:
+        for idx, item in enumerate(selected, start=1):
+            if not isinstance(item, dict):
+                continue
+            name = _dash_or(item.get("name"), empty="—")
+            layer = _dash_or(item.get("layer_label"), empty="—")
+            lc = _dash_or(item.get("lifecycle_label"), empty="—")
+            conf = int(round(_as_float(item.get("confidence")) * 100))
+            quality = _as_float(item.get("quality_score"))
+            tags = _as_list(item.get("matched_tags"))
+            tag_s = " ".join(str(t).strip() for t in tags if str(t).strip()) if tags else "无标签"
+            thought = _dash_or(item.get("thought"), empty="—")
+            lines.append(
+                f"  #{idx} {name} [{layer}/{lc}] 置信{conf}% 质量{quality:.2f} 标签:{tag_s}"
+            )
+            lines.append(f"    {thought}")
+
+    lines.extend(["", "【跳过】"])
+    skipped = _as_list(data.get("skipped"))
+    if not skipped:
+        lines.append("  无")
+    else:
+        for item in skipped:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"  · {_dash_or(item.get('name'), empty='—')} — {_dash_or(item.get('reason'), empty='—')}"
+            )
 
     return "\n".join(lines)
