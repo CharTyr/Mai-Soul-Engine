@@ -162,12 +162,20 @@ class MonitorConfig(PluginConfigBase):
     monitored_users: list[str] = Field(
         default_factory=list,
         description="监控用户",
-        json_schema_extra=_ui("监控的用户", "格式 qq:用户号。留空表示群内所有用户消息都计入分析。"),
+        json_schema_extra=_ui(
+            "计入演化的用户（白名单）",
+            "格式 qq:用户号。仅列表中的用户消息参与光谱分析；留空表示本群不因用户消息演化（与监控群白名单一致）。",
+            placeholder="qq:12345678",
+        ),
     )
     excluded_users: list[str] = Field(
         default_factory=list,
-        description="排除用户",
-        json_schema_extra=_ui("排除的用户", "这些用户的消息不会参与演化分析。"),
+        description="排除用户（已废弃）",
+        json_schema_extra=_ui(
+            "排除的用户（已废弃）",
+            "已不再使用。请只在「计入演化的用户」白名单中填写需要参与分析的用户。",
+            advanced=True,
+        ),
     )
 
 
