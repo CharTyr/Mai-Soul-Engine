@@ -22,7 +22,7 @@ from ..utils.audit_log import log_evolution
 from ..utils.spectrum_utils import (
     apply_resistance,
     chat_config_to_stream_id,
-    is_user_monitored,
+    filter_messages_for_evolution,
     parse_chat_id,
     match_chat,
     sanitize_text,
@@ -31,6 +31,20 @@ from ..utils.spectrum_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_bot_filter_warned: set[str] = set()
+
+
+def _warn_no_bot_filter(stream_id: str) -> None:
+    """每个群只警告一次：bot 自身账号与 excluded_users 都未配置，自消息会污染演化池。"""
+    if stream_id in _bot_filter_warned:
+        return
+    _bot_filter_warned.add(stream_id)
+    logger.warning(
+        "群%s：[monitor].bot_self_id 与 excluded_users 均为空，bot 自身消息会混入演化分析池"
+        "导致人设自指。建议在配置中填入 bot 账号（格式 平台:ID，如 qq:12345678）。",
+        stream_id,
+    )
 
 
 async def run_evolution_loop(plugin) -> None:
@@ -145,21 +159,15 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         monitor_config = {
             "monitored_users": list(plugin.config.monitor.monitored_users or []),
             "excluded_users": list(plugin.config.monitor.excluded_users or []),
+            "bot_self_id": list(plugin.config.monitor.bot_self_id or []),
         }
 
-        filtered_messages = []
-        for m in messages:
-            user_info = m.get("user_info", {}) if isinstance(m, dict) else {}
-            msg_platform = str(user_info.get("platform", "") or "")
-            msg_user_id = str(user_info.get("user_id", "") or "")
+        # 过滤发言者：bot 自身消息短路排除（防自指泄漏），再过 monitored/excluded
+        messages = filter_messages_for_evolution(messages, monitor_config)
 
-            # 跳过不受监控的用户
-            if not is_user_monitored(msg_platform, msg_user_id, monitor_config):
-                continue
-
-            filtered_messages.append(m)
-
-        messages = filtered_messages
+        # 配置卫生提醒：bot 自身账号与排除列表都为空时，自消息会污染演化池
+        if not monitor_config["bot_self_id"] and not monitor_config["excluded_users"]:
+            _warn_no_bot_filter(stream_id)
         if len(messages) < 5:
             logger.debug("群%s过滤后消息不足5条，跳过分析", stream_id)
             return

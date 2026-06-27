@@ -174,7 +174,17 @@ class MonitorConfig(PluginConfigBase):
         description="排除发言人",
         json_schema_extra=_ui(
             "群内排除的发言人（可选）",
-            "这些 QQ 在监控群里的发言不参与演化（如机器人、小号）。与私聊无关。",
+            "这些账号在监控群里的发言不参与演化。强烈建议至少在此处或下方「bot 自身账号」填入 bot 账号，否则 bot 自消息会混入演化分析池导致人设自指。与私聊无关。",
+            placeholder="qq:12345678",
+            advanced=True,
+        ),
+    )
+    bot_self_id: list[str] = Field(
+        default_factory=list,
+        description="bot 自身账号",
+        json_schema_extra=_ui(
+            "bot 自身账号（强烈建议填写）",
+            "bot 自己的账号，格式 平台:ID（如 qq:12345678）。演化分析时一律排除这些账号的发言，防止 bot 自消息污染人设演化（自指泄漏）。可填多个以支持多平台。",
             placeholder="qq:12345678",
             advanced=True,
         ),

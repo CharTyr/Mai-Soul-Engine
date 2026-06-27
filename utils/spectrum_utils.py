@@ -122,6 +122,39 @@ def is_user_monitored(platform: str, user_id: str, config: dict) -> bool:
     return False
 
 
+def is_bot_self_message(platform: str, user_id: str, bot_self_ids: list[str]) -> bool:
+    """判断某条消息是否来自 bot 自身（演化分析时排除自消息，防自指泄漏）。
+
+    bot_self_ids 为 ``[monitor].bot_self_id`` 配置，格式同 excluded_users（平台:ID）。
+    空列表 = 未配置，返回 False（不排除，由 excluded_users 兜底）。
+    """
+    for bid in bot_self_ids or []:
+        if match_user(platform, user_id, bid):
+            return True
+    return False
+
+
+def filter_messages_for_evolution(messages: list[dict], monitor_config: dict) -> list[dict]:
+    """过滤群消息的发言者，用于演化分析。
+
+    过滤顺序：bot 自身短路排除 → is_user_monitored（excluded_users / monitored_users）。
+    bot 自身检查**优先于**白名单，避免 monitored_users 非空时反而把 bot 放进分析池。
+    命令消息（以 ``/`` 开头）的过滤由调用方在调用前完成，本函数只管发言者。
+    """
+    bot_self_ids = monitor_config.get("bot_self_id", [])
+    filtered: list[dict] = []
+    for m in messages:
+        user_info = m.get("user_info", {}) if isinstance(m, dict) else {}
+        msg_platform = str(user_info.get("platform", "") or "")
+        msg_user_id = str(user_info.get("user_id", "") or "")
+        if is_bot_self_message(msg_platform, msg_user_id, bot_self_ids):
+            continue
+        if not is_user_monitored(msg_platform, msg_user_id, monitor_config):
+            continue
+        filtered.append(m)
+    return filtered
+
+
 # EMA平滑
 def ema_update(current: float, new_value: float, alpha: float = 0.3) -> float:
     """指数移动平均，alpha越大新值权重越高"""
