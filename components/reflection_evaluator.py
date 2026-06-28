@@ -256,7 +256,7 @@ async def _maybe_create_self_observation_seed(
 ) -> str | None:
     """为显著偏离的 substantive 回复创建自我观察种子（走 /soul_approve 人工审批）。
 
-    默认 auto_internalize_threshold=0 → 全部人工审批（防自指跑偏）。
+    默认全部人工审批（防自指跑偏）。
     """
     try:
         from ..thought.seed_manager import ThoughtSeedManager

@@ -172,7 +172,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 - **prompt（`prompts/self_reflection_prompts.py`）**：**不给完整光谱+trait"标准答案"**（评估 LLM 与注入 LLM 同模型，共享判断框架→系统性高分），只给**抽象倾向** + **对立视角**（挑剔外部观察者，倾向于找不一致）+ 相关性门槛三档**具体判例**。
 - **相关性门槛三档**（`relevance_gate_enabled` 默认开）：`social_glue`（哈哈/表情/附和）跳过不打分 → `reactive`（接话无表态）只评语气 → `substantive`（表态/决策/信息性回答）完整评。**群聊大量回复是闲聊，不该带观点，门槛防"哈哈"被误判"不够真诚"**。
 - **批次归一化**（`normalize_across_batch` 可选）：自评分减本批均值，对冲系统性高估。
-- **self_observation 种子**：仅 substantive + 一致性分<70 + LLM 给了 trait 时生成，走现有 `/soul_approve` 人工审批（`auto_internalize_threshold=0` 默认全审批，防自指跑偏）。
+- **self_observation 种子**：仅 substantive + 一致性分<70 + LLM 给了 trait 时生成，走现有 `/soul_approve` 人工审批（默认全人工审批，防自指跑偏）。
 
 ### 双路反馈（`components/reflection_feedback.py`）
 

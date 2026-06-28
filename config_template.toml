@@ -51,10 +51,6 @@ evaluation_interval_hours = 6.0
 max_replies_per_cycle = 20
 # 自评对光谱的影响权重（0=不影响，1=与看别人同等，建议0.5自己评自己有偏差）
 self_reflection_weight = 0.5
-# 自我观察 trait 自动内化阈值（0=全部人工审批，推荐；提高可能自指强化）
-auto_internalize_threshold = 0
-# 用户反应信号（对方后续回复/@/情绪作弱辅助，噪声大，建议先跑稳纯自评再开）
-user_reaction_signal_enabled = false
 # 相关性门槛（纯闲聊跳过不打分，只有表态/决策才完整评）
 relevance_gate_enabled = true
 # 批次归一化（自评分减本批均值，对冲系统性高估）

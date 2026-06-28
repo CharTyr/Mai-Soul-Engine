@@ -605,27 +605,6 @@ class SelfReflectionConfig(PluginConfigBase):
             advanced=True,
         ),
     )
-    auto_internalize_threshold: int = Field(
-        default=0,
-        ge=0,
-        le=100,
-        description="自动内化阈值",
-        json_schema_extra=_ui(
-            "自我观察 trait 自动内化阈值",
-            "自评生成的自我观察 trait，置信度≥此值时自动内化，低于则走 /soul_approve 人工审批。"
-            "0=全部人工审批（推荐，防自指跑偏）。提高此值可能自指强化，建议仅在启用用户反应信号时使用。",
-            advanced=True,
-        ),
-    )
-    user_reaction_signal_enabled: bool = Field(
-        default=False,
-        description="用户反应信号",
-        json_schema_extra=_ui(
-            "启用用户反应信号",
-            "用对方后续是否回复/@/情绪作为自评的弱辅助参考。噪声较大，建议先跑稳纯自评再开。",
-            advanced=True,
-        ),
-    )
     relevance_gate_enabled: bool = Field(
         default=True,
         description="相关性门槛",

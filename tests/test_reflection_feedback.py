@@ -22,8 +22,6 @@ def _cfg(weight: float = 0.5, enabled: bool = True) -> SimpleNamespace:
         self_reflection_weight=weight,
         evaluation_interval_hours=6.0,
         max_replies_per_cycle=20,
-        auto_internalize_threshold=0,
-        user_reaction_signal_enabled=False,
         relevance_gate_enabled=True,
         normalize_across_batch=False,
         pending_max_age_hours=48,
