@@ -16,6 +16,7 @@ from ._conn import *
 from .history import *
 from .p1 import *
 from .seeds import *
+from .self_reflection import *
 from .spectrum import *
 from .traits import *
 

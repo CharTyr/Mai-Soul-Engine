@@ -107,6 +107,15 @@ async def run_evolution_loop(plugin) -> None:
                 logger.debug("开始分析群组: %s", group_config_id)
                 await _analyze_group(plugin, group_config_id, evolution_rate)
 
+            # P1.5：自评反馈 → 光谱修正（仅 self_reflection.enabled）
+            if plugin.config.self_reflection.enabled:
+                try:
+                    from .reflection_feedback import apply_self_reflection_spectrum_correction
+
+                    apply_self_reflection_spectrum_correction(plugin, evolution_rate)
+                except Exception:
+                    logger.exception("[SelfReflection] 光谱修正失败")
+
         except asyncio.CancelledError:
             logger.info("灵魂光谱演化任务已停止")
             break

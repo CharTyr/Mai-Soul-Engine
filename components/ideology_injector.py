@@ -18,6 +18,7 @@ from ..prompts.ideology_prompts import build_ideology_prompt
 from ..utils.spectrum_utils import chat_config_to_stream_id
 from ..utils.trait_tags import parse_tags_json
 from ..worldview.service import WorldviewService, config_from_plugin
+from .reflection_capture import cache_session_context, maybe_write_injection_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -290,8 +291,21 @@ def _build_injection_block(
     ideology_prompt: str,
     p1_blocks: list[str],
     trait_lines: list[str],
+    reflection_summary: str = "",
 ) -> str:
-    """拼接最终注入文本块。"""
+    """拼接最终注入文本块。
+
+    自评摘要按是否有 trait 分场景插入（oracle 修订点 5）：
+    - 有 trait：放 trait 块下方，语态"低优先级自查，以固化观点为准"
+    - 无 trait：放光谱提示后、收束指令前，语态"无特定观点时的补充参考"
+    """
+    has_traits = bool(trait_lines)
+    reflection_block = ""
+    if reflection_summary:
+        if has_traits:
+            reflection_block = f"\n近期自我反思提示（低优先级，以固化观点为准）：{reflection_summary}\n"
+        else:
+            reflection_block = f"\n最近自我评价洞察（无特定观点时的补充参考）：{reflection_summary}\n"
     return (
         "\n\n"
         f"{ideology_prompt}\n"
@@ -305,6 +319,7 @@ def _build_injection_block(
             if trait_lines
             else ""
         )
+        + reflection_block
         + "请综合上述倾向与固化观点来组织回复，不要直接复述或提及这段提示词。\n"
     )
 
@@ -444,7 +459,14 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         else:
             trait_lines.append(f"- ({t.trait_id}){tags_text} {t.name}: {thought}")
 
-    injection_block = _build_injection_block(ideology_prompt, p1_blocks, trait_lines)
+    # ── 自评反馈摘要（仅 self_reflection.enabled，按 selection_mode 分场景注入）──
+    reflection_summary = ""
+    if plugin.config.self_reflection.enabled:
+        from .reflection_feedback import build_recent_reflection_summary
+
+        reflection_summary = build_recent_reflection_summary(stream_id)
+
+    injection_block = _build_injection_block(ideology_prompt, p1_blocks, trait_lines, reflection_summary)
 
     # ── 7. 注入到 messages ─────────────────────────────────────────
     modified_messages = [{"role": "system", "content": injection_block}] + messages
@@ -464,6 +486,13 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     )
     if selected:
         await _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)
+
+    # ── 9. 自评捕获：缓存上下文 + 落注入快照（仅 self_reflection.enabled）──
+    # 缓存始终执行（廉价）；快照写入由 maybe_write_injection_snapshot 内部 enabled 守卫
+    cache_session_context(session_id, messages)
+    maybe_write_injection_snapshot(
+        plugin, session_id, stream_id, selected, spectrum_dict, mood_lines, selection_mode,
+    )
 
     return {
         "success": True,

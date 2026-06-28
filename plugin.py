@@ -65,6 +65,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         self._data_dir: Path = self._plugin_dir / "data"
         self._evolution_task: asyncio.Task | None = None
         self._notion_sync_task: asyncio.Task | None = None
+        self._self_reflection_task: asyncio.Task | None = None
         # 问卷会话状态：{session_key: {current, answers, started_at}}
         self._questionnaire_sessions: dict[str, dict[str, Any]] = {}
         # P1 缓存：避免每条消息重建 WorldviewConfigView 和 WorldviewService
@@ -106,6 +107,11 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             self._notion_sync_task = asyncio.create_task(self._notion_sync_loop())
             logger.info("[Mai-Soul-Engine] Notion 同步任务已启动")
 
+        # 启动自我评价任务
+        if self.config.self_reflection.enabled:
+            self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
+            logger.info("[Mai-Soul-Engine] 自我评价任务已启动")
+
         # 初始化 P1 缓存
         self._wv_config_view = config_from_plugin(self)
         self._wv_service = WorldviewService(self._wv_config_view)
@@ -130,6 +136,14 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
                 pass
             self._notion_sync_task = None
 
+        if self._self_reflection_task is not None:
+            self._self_reflection_task.cancel()
+            try:
+                await self._self_reflection_task
+            except asyncio.CancelledError:
+                pass
+            self._self_reflection_task = None
+
         close_db()
         logger.info("[Mai-Soul-Engine] 插件已卸载")
 
@@ -153,6 +167,12 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             elif not self.config.notion.enabled and self._notion_sync_task is not None:
                 self._notion_sync_task.cancel()
                 self._notion_sync_task = None
+            # 自我评价任务启停
+            if self.config.self_reflection.enabled and self._self_reflection_task is None:
+                self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
+            elif not self.config.self_reflection.enabled and self._self_reflection_task is not None:
+                self._self_reflection_task.cancel()
+                self._self_reflection_task = None
 
     # ===== 周期任务 =====
 
@@ -167,6 +187,12 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.notion_sync import run_notion_sync_loop
 
         await run_notion_sync_loop(self)
+
+    async def _self_reflection_loop(self) -> None:
+        """自我评价循环 — 委托到 reflection_evaluator 模块。"""
+        from .components.reflection_evaluator import run_reflection_loop
+
+        await run_reflection_loop(self)
 
     # ===== HookHandler：意识形态注入 =====
 
@@ -184,6 +210,36 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.ideology_injector import inject_ideology
 
         return await inject_ideology(self, **kwargs)
+
+    # ===== HookHandler：自我评价捕获（OBSERVE，不改写输出）=====
+
+    @HookHandler(
+        "maisaka.planner.after_response",
+        name="soul_reflection_planner_capture",
+        description="捕获 planner LLM 决策输出供自我评价（OBSERVE，不改写）",
+        mode=HookMode.OBSERVE,
+        order=HookOrder.NORMAL,
+        error_policy=ErrorPolicy.SKIP,
+    )
+    async def hook_reflection_planner_after(self, **kwargs: Any) -> dict[str, Any]:
+        """planner 决策后捕获输出入待评队列。"""
+        from .components.reflection_capture import capture_after_response
+
+        return await capture_after_response(self, "planner", **kwargs)
+
+    @HookHandler(
+        "maisaka.replyer.after_response",
+        name="soul_reflection_replyer_capture",
+        description="捕获 replyer 最终回复供自我评价（OBSERVE，不改写）",
+        mode=HookMode.OBSERVE,
+        order=HookOrder.NORMAL,
+        error_policy=ErrorPolicy.SKIP,
+    )
+    async def hook_reflection_replyer_after(self, **kwargs: Any) -> dict[str, Any]:
+        """replyer 回复后捕获最终文本入待评队列。"""
+        from .components.reflection_capture import capture_after_response
+
+        return await capture_after_response(self, "replyer", **kwargs)
 
     # ===== Command：问卷初始化 =====
 
@@ -320,6 +376,15 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.thought_commands import handle_trait_delete
 
         return await handle_trait_delete(self, stream_id, **kwargs)
+
+    # ===== Command：自我评价 =====
+
+    @Command("soul_reflect", description="查看近期自我评价记录（管理员）", pattern=r"^/soul_reflect(?:\s+(?P<count>\d+))?\s*$")
+    async def cmd_soul_reflect(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """/soul_reflect [N] — 查看近期自我评价。"""
+        from .components.reflection_command import handle_reflect
+
+        return await handle_reflect(self, stream_id, **kwargs)
 
     # ===== @API 组件：Soul 数据接口 =====
     #

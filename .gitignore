@@ -12,3 +12,6 @@ __pycache__/
 .vscode/
 .idea/
 config_back/
+
+# deepwork 进度文件（本地会话状态，不提交）
+.slim/

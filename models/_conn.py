@@ -158,6 +158,51 @@ _CREATE_SQL = [
         created_at TEXT DEFAULT ''
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_injection_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        stream_id TEXT DEFAULT '',
+        session_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        trait_ids_json TEXT DEFAULT '[]',
+        spectrum_json TEXT DEFAULT '{}',
+        mood_json TEXT DEFAULT '{}',
+        selection_mode TEXT DEFAULT '',
+        context_fingerprint TEXT DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_pending_reflections (
+        pending_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stream_id TEXT DEFAULT '',
+        session_id TEXT DEFAULT '',
+        reply_message_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        snapshot_id TEXT DEFAULT '',
+        source TEXT DEFAULT '',
+        response_text TEXT DEFAULT '',
+        context_json TEXT DEFAULT '[]',
+        status TEXT DEFAULT 'pending'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_self_reflections (
+        reflection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stream_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        pending_id INTEGER DEFAULT 0,
+        snapshot_id TEXT DEFAULT '',
+        reply_type TEXT DEFAULT '',
+        evaluated INTEGER DEFAULT 0,
+        consistency_score INTEGER DEFAULT 0,
+        deviating_axis TEXT DEFAULT '',
+        deviating_direction TEXT DEFAULT '',
+        reason TEXT DEFAULT '',
+        user_reaction_signal TEXT DEFAULT '',
+        seed_id TEXT DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_pending_created ON soul_pending_reflections (created_at)",
 ]
 
 

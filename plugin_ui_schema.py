@@ -10,7 +10,7 @@ from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "2.2.0"
+CONFIG_VERSION = "2.3.0"
 
 
 def _ui(
@@ -563,6 +563,102 @@ class WorldviewConfig(PluginConfigBase):
     )
 
 
+class SelfReflectionConfig(PluginConfigBase):
+    """自我评价反馈回路：bot 自评过往回复是否符合人设，反馈到演化与下次注入。"""
+
+    __ui_label__ = "自我评价 (P1)"
+    __ui_icon__ = "refresh-cw"
+    __ui_order__ = 26
+
+    enabled: bool = Field(
+        default=False,
+        description="启用自评",
+        json_schema_extra=_ui(
+            "启用自我评价反馈回路",
+            "关闭后不捕获 bot 回复、不评价、不反馈。开启后在 planner/replyer 决策后捕获回复，"
+            "定期评价是否符合人设，反馈到光谱演化与下次注入提醒。默认关闭。",
+        ),
+    )
+    evaluation_interval_hours: float = Field(
+        default=6.0,
+        ge=0.5,
+        le=72.0,
+        description="评价周期",
+        json_schema_extra=_ui("评价周期（小时）", "多久批量评价一次攒下的回复。", step=0.5, advanced=True),
+    )
+    max_replies_per_cycle: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="单周期上限",
+        json_schema_extra=_ui("单周期评价上限", "每轮最多评价多少条回复，防单轮 token 爆炸。", advanced=True),
+    )
+    self_reflection_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="自评权重",
+        json_schema_extra=_ui(
+            "自评对光谱的影响权重",
+            "0=关闭光谱修正；0.5≈每周期最多±1；1.0≈每周期最多±2（需净偏离≥3次才触发）。建议 0.5。",
+            step=0.1,
+            advanced=True,
+        ),
+    )
+    auto_internalize_threshold: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="自动内化阈值",
+        json_schema_extra=_ui(
+            "自我观察 trait 自动内化阈值",
+            "自评生成的自我观察 trait，置信度≥此值时自动内化，低于则走 /soul_approve 人工审批。"
+            "0=全部人工审批（推荐，防自指跑偏）。提高此值可能自指强化，建议仅在启用用户反应信号时使用。",
+            advanced=True,
+        ),
+    )
+    user_reaction_signal_enabled: bool = Field(
+        default=False,
+        description="用户反应信号",
+        json_schema_extra=_ui(
+            "启用用户反应信号",
+            "用对方后续是否回复/@/情绪作为自评的弱辅助参考。噪声较大，建议先跑稳纯自评再开。",
+            advanced=True,
+        ),
+    )
+    relevance_gate_enabled: bool = Field(
+        default=True,
+        description="相关性门槛",
+        json_schema_extra=_ui(
+            "启用相关性门槛",
+            "纯闲聊社交回复（哈哈/表情/附和）跳过不打分；只有表态/决策的回复才完整评价。关闭则全部评价。",
+        ),
+    )
+    normalize_across_batch: bool = Field(
+        default=False,
+        description="批次归一化",
+        json_schema_extra=_ui(
+            "批次归一化",
+            "自评分减去本批均值，把绝对高低转为相对偏离，对冲 AI 系统性高估。可选。",
+            advanced=True,
+        ),
+    )
+    pending_max_age_hours: int = Field(
+        default=48,
+        ge=1,
+        le=720,
+        description="待评过期",
+        json_schema_extra=_ui("待评回复过期（小时）", "超龄未评的待评回复标过期，防队列堆积。", advanced=True),
+    )
+    pending_max_rows: int = Field(
+        default=5000,
+        ge=100,
+        le=100000,
+        description="待评上限",
+        json_schema_extra=_ui("待评队列上限", "超过则物理删最旧，防表膨胀。", advanced=True),
+    )
+
+
 class MaiSoulEngineConfig(PluginConfigBase):
     """Mai-Soul-Engine 插件配置。"""
 
@@ -577,3 +673,4 @@ class MaiSoulEngineConfig(PluginConfigBase):
     api: ApiConfig = Field(default_factory=ApiConfig)
     notion: NotionConfig = Field(default_factory=NotionConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
+    self_reflection: SelfReflectionConfig = Field(default_factory=SelfReflectionConfig)

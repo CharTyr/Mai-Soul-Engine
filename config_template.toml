@@ -41,6 +41,29 @@ excluded_users = []
 # bot 自身账号(强烈建议填写)，格式：平台:ID。演化时一律排除这些账号发言，防止 bot 自消息污染人设(自指泄漏)
 bot_self_id = []
 
+# ─── 自我评价反馈回路（dev 分支新增）─────────────────────────────────
+[self_reflection]
+# 启用后：planner/replyer 决策后捕获回复，定期评价是否符合人设，反馈到光谱演化与下次注入提醒
+enabled = false
+# 评价周期（小时）：多久批量评价一次攒下的回复
+evaluation_interval_hours = 6.0
+# 单周期评价上限：每轮最多评价多少条回复
+max_replies_per_cycle = 20
+# 自评对光谱的影响权重（0=不影响，1=与看别人同等，建议0.5自己评自己有偏差）
+self_reflection_weight = 0.5
+# 自我观察 trait 自动内化阈值（0=全部人工审批，推荐；提高可能自指强化）
+auto_internalize_threshold = 0
+# 用户反应信号（对方后续回复/@/情绪作弱辅助，噪声大，建议先跑稳纯自评再开）
+user_reaction_signal_enabled = false
+# 相关性门槛（纯闲聊跳过不打分，只有表态/决策才完整评）
+relevance_gate_enabled = true
+# 批次归一化（自评分减本批均值，对冲系统性高估）
+normalize_across_batch = false
+# 待评回复过期（小时）
+pending_max_age_hours = 48
+# 待评队列上限（超过物理删最旧）
+pending_max_rows = 5000
+
 # ─── 档位阈值 ───────────────────────────────────────────────────────
 [threshold]
 # 启用极端档位(98-100触发)

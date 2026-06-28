@@ -2,7 +2,7 @@
 
 独立仓库：https://github.com/CharTyr/Mai-Soul-Engine。分支：
 - `main` = v2.0.0 稳定（SDK 2.x 基线）
-- `dev` = v2.1.0（**P1 三观生长 + 光谱轴重构**，本文档对应此分支）
+- `dev` = v2.3.0（**自我评价反馈回路 + P1 三观生长 + 光谱轴重构**，本文档对应此分支）
 - 旧版归档：`archive/legacy-sdk1-v1`
 
 在 Maibot 宿主中路径：`plugins/CharTyr_Mai-Soul-Engine/`，**自带 `.git`**，勿把 `config.toml` / `data/` / `config_back/` 提交进插件仓。
@@ -13,11 +13,11 @@
 |----|------|
 | 运行时 | **maibot-plugin-sdk 2.x**，独立 Runner；入口 `plugin.py` + `create_plugin()` |
 | 禁止 | `import src.*`、写宿主 `data/MaiBot.db`、恢复 POST_LLM 注入 |
-| 注入 | 唯一接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py` |
-| 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 6 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
+| 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有两个 `@HookHandler(mode=OBSERVE)`（`planner.after_response` + `replyer.after_response`，见"自我评价反馈回路"） |
+| 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 7 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
-| Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.1.0`；`normalize_plugin_config` 会补齐旧配置 |
+| Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.3.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
 | 功能总开关 | `plugin.enabled`（注入等）；`admin_user_id` 仅标识管理员 QQ |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
@@ -149,6 +149,57 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 - **配置**：`[render]` 段（`card_enabled`/`viewport_width`/`device_scale_factor`/`render_timeout_ms`），`CONFIG_VERSION=2.2.0`。
 - **约束**：html2png 走宿主无头浏览器有渲染开销，**只用于管理员主动触发的命令**，不进热路径；CSS 全内联不引外部资源；渲染失败必须降级文本而非崩。
 
+## 自我评价反馈回路（v2.3.0 新增）
+
+补上插件此前最大缺口：**单向注入**（只告诉 planner"你是谁"，从不检查"你表现得像不像自己"）。v2.3.0 加闭环：注入→输出→自评→校准人设+下次提醒。受 `[self_reflection].enabled` 控制（默认关）。
+
+### 接线（唯一新增 hook 点）
+
+- **捕获**：`@HookHandler("maisaka.planner.after_response")` + `@HookHandler("maisaka.replyer.after_response")`，均 `mode=HookMode.OBSERVE` + `error_policy=ErrorPolicy.SKIP`（**零干扰不改写输出**，失败不影响 bot 回复）。宿主触发点（**只读引用，不改**）：`src/maisaka/chat_loop_service.py:992` / `src/chat/replyer/maisaka_generator_base.py:1182`，payload 含 `response`/`session_id`/`reply_message_id`/token 统计。
+- **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode）；`after_response` 用 session_id 取最近 snapshot 配对（**1:N**，一个 snapshot 可配多条 pending：planner + replyer 或 replyer 多次重试）。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
+- **context 来源**：`after_response` payload **不含触发消息**，故 `reflection_capture.cache_session_context` 在 before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回（一次性）。**缓存缺失/超龄 = context_json 空 = 合法降级**（评估只基于 response 文本判语气）。
+
+### 数据（3 表，`models/self_reflection.py`）
+
+- `soul_injection_snapshots`：注入快照（仅 enabled 时写，防膨胀）。
+- `soul_pending_reflections`：待评队列，**TTL + 上限 + `expired` 状态**防堆积（`cleanup_expired_pending` 每轮清超龄 + 超量删最旧）。
+- `soul_self_reflections`：评价结果（reply_type/evaluated/consistency_score/deviating_axis/deviating_direction/reason/seed_id）。
+
+### 评价层（`components/reflection_evaluator.py`）
+
+独立异步协程（`plugin._self_reflection_task`，`on_unload` cancel，**不复用演化循环**）。每周期：清理 pending → 取队列 → 批量送 LLM → 落 self_reflections + 更新 pending 状态 → 显著偏离生成 `self_observation` 种子。
+
+- **prompt（`prompts/self_reflection_prompts.py`）**：**不给完整光谱+trait"标准答案"**（评估 LLM 与注入 LLM 同模型，共享判断框架→系统性高分），只给**抽象倾向** + **对立视角**（挑剔外部观察者，倾向于找不一致）+ 相关性门槛三档**具体判例**。
+- **相关性门槛三档**（`relevance_gate_enabled` 默认开）：`social_glue`（哈哈/表情/附和）跳过不打分 → `reactive`（接话无表态）只评语气 → `substantive`（表态/决策/信息性回答）完整评。**群聊大量回复是闲聊，不该带观点，门槛防"哈哈"被误判"不够真诚"**。
+- **批次归一化**（`normalize_across_batch` 可选）：自评分减本批均值，对冲系统性高估。
+- **self_observation 种子**：仅 substantive + 一致性分<70 + LLM 给了 trait 时生成，走现有 `/soul_approve` 人工审批（`auto_internalize_threshold=0` 默认全审批，防自指跑偏）。
+
+### 双路反馈（`components/reflection_feedback.py`）
+
+- **演化路**：`apply_self_reflection_spectrum_correction` 在演化循环末尾调用（仅 enabled）。自评偏离 ×`self_reflection_weight`(0.5) 折算光谱 delta，**dead zone**（净偏离≥3 才修正）+ weight<1 防自指闭环。方向：bot 偏低→人设向下校准（向可兑现的现实靠拢，非拔高要求）。**直接应用原始 delta（±1 经 EMA smooth_delta 会被归零）**。写演化历史 reason 标注"自评修正"。
+- **planner 反馈路**：`build_recent_reflection_summary` 聚合近期自评为一行，`ideology_injector._build_injection_block` 按 selection_mode 分场景注入：**有 trait**（tag_hit 等）→ trait 块下方"低优先级自查，以固化观点为准"；**无 trait**（spectrum_only）→ 光谱后"无特定观点时的补充参考"。
+
+### 自指风险护栏（关键）
+
+OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened trait 豁免 / self_observation 默认全人工审批 / 评估 prompt 不给标准答案+对立视角 / 批次归一化可选。
+
+### P0 前置修复（v2.3.0 同步，单独提交 f58b41b）
+
+**bot 自消息泄漏**：此前 `get_by_time_in_chat` 返回含 bot 自己消息，`excluded_users` 默认空 → bot 自消息混入"看别人"演化池（不受控自指）。修：`[monitor].bot_self_id` 配置 + `filter_messages_for_evolution` bot 自身短路优先于 `monitored_users` 白名单 + 每群一次告警。**必须先修此隐患再做自评，否则两条自指回路纠缠无法调试**。
+
+### 关键文件
+
+| 文件 | 职责 |
+|------|------|
+| `models/self_reflection.py` | 3 表 dataclass + CRUD（含 `cleanup_expired_pending` TTL/上限、`get_injection_snapshot` 按 id 配对） |
+| `components/reflection_capture.py` | 两个 OBSERVE hook 委托 + context 缓存 + snapshot 守卫。**懒导入 models 避开预存循环导入** |
+| `components/reflection_evaluator.py` | 评价协程 + 批量 LLM + 相关性门槛 + self_observation 种子 + 批次归一化 |
+| `components/reflection_feedback.py` | 双路反馈：光谱修正（dead zone）+ planner 摘要聚合 |
+| `components/reflection_command.py` | `/soul_reflect [N]` 管理员查看 |
+| `prompts/self_reflection_prompts.py` | 评价 prompt（抽象倾向+对立视角+门槛判例） |
+| `plugin_ui_schema.py` | `SelfReflectionConfig` 段；`CONFIG_VERSION=2.3.0` |
+| `plugin.py` | 两个 after_response HookHandler + `_self_reflection_task` 生命周期 + `/soul_reflect` 命令 |
+
 ## 迁移注意（重要）
 
 ### 从 v1.x（旧 SDK1）→ dev
@@ -166,16 +217,17 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - **`monitored_groups`**：群**白名单**；空 = 不做群演化。
 - **`excluded_groups`**：从白名单里再减掉（可选）。
 - **`monitored_users` / `excluded_users`**：只过滤**监控群内谁的发言**计入演化，**与私聊无关**；用户列表留空 = 该群全员计入。
+- **`bot_self_id`**（v2.3.0 新增，强烈建议填）：bot 自身账号（`平台:ID`），演化时**一律短路排除**其发言，防 bot 自消息污染演化池（自指泄漏）。优先级高于 `monitored_users` 白名单。未填且 `excluded_users` 也空时，演化任务每群告警一次。
 
 ## 目录职责
 
-- `components/` — 命令、演化循环、注入、Notion（可选）、状态命令、dashboard 数据聚合/渲染/命令
+- `components/` — 命令、演化循环、注入、Notion（可选）、状态命令、dashboard 数据聚合/渲染/命令、自我评价捕获/评价/反馈/命令（`reflection_*.py`，v2.3.0）
 - `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
-- `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本）
-- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD，含 `update_seed_status` 原子守卫）、`traits.py`（trait CRUD）、`p1.py`（切片/情绪/图谱边）；`ideology_model.py` 保留为**重导出 shim**（`from ._conn/seeds/... import *` + `__getattr__` 委托动态变量），40+ 处 `from ..models.ideology_model import xxx` 零破坏。**新代码直接从子模块 import；改 shim 不影响调用方**
+- `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`）
+- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD，含 `update_seed_status` 原子守卫）、`traits.py`（trait CRUD）、`p1.py`（切片/情绪/图谱边）、`self_reflection.py`（**v2.3.0**：注入快照/待评队列/自评结果 3 表 CRUD）；`ideology_model.py` 保留为**重导出 shim**（`from ._conn/seeds/... import *` + `__getattr__` 委托动态变量），40+ 处 `from ..models.ideology_model import xxx` 零破坏。**新代码直接从子模块 import；改 shim 不影响调用方**
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `tests/` — 插件内测试（48 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard+trait+inspect 数据聚合与渲染降级
+- `tests/` — 插件内测试（100 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard+trait+inspect 数据聚合与渲染降级/bot 自消息过滤/自评 3 表 CRUD/捕获配对/评价周期/双路反馈
 
 ## 开发与验证
 
@@ -200,20 +252,20 @@ cd /path/to/Maibot
 .venv/bin/python -c "import importlib; p=importlib.import_module('plugins.CharTyr_Mai-Soul-Engine.plugin'); i=p.create_plugin(); print(len(i.get_components()))"
 ```
 
-重载插件后联调：`/soul_setup` → `/soul_answer` → `/soul_status`（dev 下 status 会显示层计数、切片偏移、情绪）；看 Runner 日志与 `data/migration_state.json`。
+重载插件后联调：`/soul_setup` → `/soul_answer` → `/soul_status`（dev 下 status 会显示层计数、切片偏移、情绪）；开启 `[self_reflection].enabled` 后 `/soul_reflect` 看自评记录；看 Runner 日志与 `data/migration_state.json`。
 
 ## 修改约束
 
 - **不要改 Maibot 主程序**（`src/`）除非维护者明确许可。
 - 配置示例与文档中的 QQ/群号用占位符，勿提交真实 ID。
-- 可选能力默认关：**Notion**、**思维阁**、**@API**（有 `api.enabled` 守卫）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
+- 可选能力默认关：**Notion**、**思维阁**、**@API**（有 `api.enabled` 守卫）、**自我评价反馈回路**（`[self_reflection].enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
 - **`p1_enabled=false` 只关分层/切片/情绪，社交轴仍然生效**，不会回滚到政治轴。
 - 发版：插件仓自行 `git push`；宿主侧 `plugins/*` 多在 `.gitignore`，pytest 文件在宿主仓维护。
-- Manifest 版本须严格三段式 semver（`2.1.0`），**禁止 `-dev` 后缀**。
+- Manifest 版本须严格三段式 semver（`2.3.0`），**禁止 `-dev` 后缀**。
 
 ## 参考
 
 - 升级计划与 P0 验收、P1 分阶段计划：`MIGRATION_PLAN.md`
 - 用户向：`README.md`（dev 含完整 P1 架构/轴表/层映射/隐私/API/差异表）
-- 变更：`CHANGELOG.md`（v2.1.0 含轴重构 + P1）
+- 变更：`CHANGELOG.md`（v2.3.0 含自我评价反馈回路；v2.1.0 含轴重构 + P1）
 - SDK 指南：https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md

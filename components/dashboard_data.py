@@ -123,7 +123,18 @@ def collect_dashboard_data(plugin: Any, stream_id: str = "") -> dict[str, Any]:
         "notion": cfg.notion.enabled,
         "api": cfg.api.enabled,
         "card_render": cfg.render.card_enabled,
+        "self_reflection": cfg.self_reflection.enabled,
     }
+
+    # ── 自我评价反馈回路 ────────────────────────────────────────────
+    self_reflection_data: dict[str, Any] = {"enabled": cfg.self_reflection.enabled}
+    if cfg.self_reflection.enabled:
+        from ..models.self_reflection import count_pending_reflections, count_self_reflections
+        from .reflection_feedback import build_recent_reflection_summary
+
+        self_reflection_data["pending_counts"] = count_pending_reflections()
+        self_reflection_data["reflection_counts"] = count_self_reflections()
+        self_reflection_data["recent_summary"] = build_recent_reflection_summary(stream_id, limit=10)
 
     return {
         "initialized": spectrum.initialized,
@@ -156,4 +167,5 @@ def collect_dashboard_data(plugin: Any, stream_id: str = "") -> dict[str, Any]:
         "recent_evolutions": recent_evolutions,
         "graph_edge_total": graph_edge_total,
         "feature_flags": feature_flags,
+        "self_reflection": self_reflection_data,
     }

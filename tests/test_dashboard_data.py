@@ -24,6 +24,7 @@ def _make_plugin(
     notion_enabled: bool = False,
     api_enabled: bool = True,
     card_enabled: bool = True,
+    self_reflection_enabled: bool = False,
 ) -> Any:
     """构造模拟的插件实例（仅含 collect_dashboard_data 需要的 config 属性）。"""
     return SimpleNamespace(
@@ -37,6 +38,7 @@ def _make_plugin(
             notion=SimpleNamespace(enabled=notion_enabled),
             api=SimpleNamespace(enabled=api_enabled),
             render=SimpleNamespace(card_enabled=card_enabled),
+            self_reflection=SimpleNamespace(enabled=self_reflection_enabled),
         ),
     )
 
@@ -137,7 +139,11 @@ def test_empty_db_aggregation(soul_db: Any) -> None:
         "notion": False,
         "api": True,
         "card_render": True,
+        "self_reflection": False,
     }
+
+    # ── 自我评价（未启用时仅 enabled）──
+    assert result["self_reflection"]["enabled"] is False
 
 
 # ─── 2. 满状态聚合 ───────────────────────────────────────────────────
