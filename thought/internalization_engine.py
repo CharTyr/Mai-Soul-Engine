@@ -200,8 +200,7 @@ class InternalizationEngine:
             return None
 
     async def _apply_spectrum_impact(self, impact: dict) -> dict:
-        from ..models.ideology_model import get_or_create_spectrum
-        from ..utils.spectrum_utils import update_spectrum_value
+        from ..models.ideology_model import apply_spectrum_deltas, get_or_create_spectrum
 
         spectrum = get_or_create_spectrum("global")
 
@@ -213,19 +212,23 @@ class InternalizationEngine:
         }
         logger.debug(f"应用光谱影响前: {old_values}")
 
-        for dim in ["sincerity", "engagement", "closeness", "directness"]:
-            delta = max(-10, min(10, impact.get(dim, 0)))
-            new_val = update_spectrum_value(getattr(spectrum, dim), delta)
-            setattr(spectrum, dim, new_val)
+        # 经统一光谱闸门（v2.3.0 收口：clamp ±10 + save + history 可观测）
+        # 注：内化保留 ±10 现行幅度；如需收紧改 max_per_axis 一处。
+        applied = apply_spectrum_deltas(
+            "internalize",
+            {
+                "sincerity": int(impact.get("sincerity", 0) or 0),
+                "engagement": int(impact.get("engagement", 0) or 0),
+                "closeness": int(impact.get("closeness", 0) or 0),
+                "directness": int(impact.get("directness", 0) or 0),
+            },
+            max_per_axis=10,
+            group_id="",
+            reason="trait 内化光谱影响",
+        )
 
-        spectrum.updated_at = datetime.now()
-        spectrum.save()
-
-        result = {
-            dim: getattr(spectrum, dim) - old_values[dim] for dim in ["sincerity", "engagement", "closeness", "directness"]
-        }
-        logger.debug(f"应用光谱影响后: {result}")
-        return result
+        logger.debug(f"应用光谱影响后: {applied}")
+        return applied
 
     async def _upsert_crystallized_trait(
         self,

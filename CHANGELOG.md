@@ -17,9 +17,10 @@
 - **捕获层**：`components/reflection_capture.py` 两个 `@HookHandler(mode=OBSERVE, error_policy=SKIP)`——`maisaka.planner.after_response` + `maisaka.replyer.after_response`，零干扰不改写输出；before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回配对（1:N）；snapshot 仅 `enabled` 时写防膨胀；context 缓存缺失=合法降级。**懒导入 models 避开预存循环导入**（`_conn→worldview→service→ideology_model→history→_conn`）。
 - **评价层**：`components/reflection_evaluator.py` 独立异步消费协程（`plugin._self_reflection_task`，`on_unload` cancel）；`prompts/self_reflection_prompts.py` 批量评价 prompt——**不给完整光谱+trait"标准答案"**（防评估与注入共享判断框架→系统性高分），只给抽象倾向 + **对立视角**（挑剔外部观察者）+ 相关性门槛三档**具体判例**；可选批次归一化（`normalize_across_batch`，自评分减本批均值对冲高估）；显著偏离的 substantive 回复生成 `self_observation` 种子走 `/soul_approve` 人工审批（默认全人工审批，防自指跑偏）。
 - **双路反馈**：`components/reflection_feedback.py`——①演化路 `apply_self_reflection_spectrum_correction`：自评偏离折算光谱 delta，dead zone（净偏离≥3 才修正）+ magnitude 受 `self_reflection_weight` 缩放（0.5→±1，1.0→±2）防自指闭环，直接应用原始 delta（经 EMA smooth_delta 会被归零）；②planner 反馈路 `build_recent_reflection_summary`：聚合近期自评为一行，`ideology_injector._build_injection_block` 按 selection_mode 分场景注入（有 trait→trait 块下方"低优先级自查"；无 trait→光谱后"补充参考"）。
+- **统一光谱写入闸门**：`models/spectrum.py::apply_spectrum_deltas(source, deltas, ...)` 收口三回路（群演化/内化/自评）的散装光谱写入，clamp→resistance→smooth→update→save→history 一条链，演化历史 reason 现统一带 `[evolution]`/`[internalize]`/`[self_reflection]` 标记可区分来源；内化现也写历史（此前不写，可观测性增量）。
 - **配置**：新增 `[self_reflection]` 段（enabled/evaluation_interval_hours/max_replies_per_cycle/self_reflection_weight/relevance_gate_enabled/normalize_across_batch/pending_max_age_hours/pending_max_rows）；`CONFIG_VERSION` 升至 `2.3.0`，manifest 同步 `2.3.0`，`config_template.toml` 同步。
 - **自指风险护栏**：OBSERVE 不改写输出 / 评价异步批量有 dead zone / weight<1 / strengthened trait 豁免 / self_observation trait 默认全人工审批 / 评估 prompt 不给标准答案+对立视角 / 批次归一化可选。
-- **测试**：新增 5 个测试文件共 44 项——`test_bot_self_filter.py`(8) + `test_self_reflection_model.py`(12) + `test_reflection_capture.py`(11) + `test_reflection_evaluator.py`(10) + `test_reflection_feedback.py`(11)，共 100 项插件测试全通过。
+- **测试**：新增 5 个测试文件共 47 项——`test_bot_self_filter.py`(8) + `test_self_reflection_model.py`(12) + `test_reflection_capture.py`(11) + `test_reflection_evaluator.py`(10) + `test_reflection_feedback.py`(11) + `test_spectrum_gate.py`(10)，共 110 项插件测试全通过。
 
 ## [2.2.0] — dev 分支（Soul 引擎状态可视化卡片）
 

@@ -13,21 +13,18 @@ from datetime import datetime
 from typing import Any
 
 from ..models.ideology_model import (
-    create_evolution_history,
+    apply_spectrum_deltas,
     get_or_create_group_evolution,
     get_or_create_spectrum,
 )
 from ..prompts.ideology_prompts import EVOLUTION_ANALYSIS_PROMPT
 from ..utils.audit_log import log_evolution
 from ..utils.spectrum_utils import (
-    apply_resistance,
     chat_config_to_stream_id,
     filter_messages_for_evolution,
     parse_chat_id,
     match_chat,
     sanitize_text,
-    smooth_delta,
-    update_spectrum_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,32 +265,17 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             evolution_rate,
         )
 
-        resisted_deltas = {}
-        new_dirs = {}
-        for dim in ["sincerity", "engagement", "closeness", "directness"]:
-            last_dir = int(getattr(spectrum, f"last_{dim}_dir", 0))
-            adj_delta, new_dir = apply_resistance(raw_deltas[dim], last_dir, resistance)
-            resisted_deltas[dim] = adj_delta
-            new_dirs[dim] = new_dir
-
-        smoothed_deltas = {
-            "sincerity": smooth_delta(spectrum.sincerity, resisted_deltas["sincerity"], ema_alpha),
-            "engagement": smooth_delta(spectrum.engagement, resisted_deltas["engagement"], ema_alpha),
-            "closeness": smooth_delta(spectrum.closeness, resisted_deltas["closeness"], ema_alpha),
-            "directness": smooth_delta(spectrum.directness, resisted_deltas["directness"], ema_alpha),
-        }
-
-        spectrum.sincerity = update_spectrum_value(spectrum.sincerity, smoothed_deltas["sincerity"])
-        spectrum.engagement = update_spectrum_value(spectrum.engagement, smoothed_deltas["engagement"])
-        spectrum.closeness = update_spectrum_value(spectrum.closeness, smoothed_deltas["closeness"])
-        spectrum.directness = update_spectrum_value(spectrum.directness, smoothed_deltas["directness"])
-        spectrum.last_sincerity_dir = new_dirs["sincerity"]
-        spectrum.last_engagement_dir = new_dirs["engagement"]
-        spectrum.last_closeness_dir = new_dirs["closeness"]
-        spectrum.last_directness_dir = new_dirs["directness"]
-        spectrum.last_evolution = now
-        spectrum.updated_at = now
-        spectrum.save()
+        # 经统一光谱闸门写入（v2.3.0 收口：resistance + EMA + save + history）
+        smoothed_deltas = apply_spectrum_deltas(
+            "evolution",
+            raw_deltas,
+            smooth_alpha=ema_alpha,
+            resistance=resistance,
+            max_per_axis=evolution_rate,
+            group_id=stream_id,
+            reason=f"分析了{len(messages)}条消息",
+        )
+        spectrum = get_or_create_spectrum("global")
 
         after = {
             "sincerity": spectrum.sincerity,
@@ -301,16 +283,6 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             "closeness": spectrum.closeness,
             "directness": spectrum.directness,
         }
-
-        create_evolution_history(
-            timestamp=now,
-            group_id=stream_id,
-            sincerity_delta=smoothed_deltas["sincerity"],
-            engagement_delta=smoothed_deltas["engagement"],
-            closeness_delta=smoothed_deltas["closeness"],
-            directness_delta=smoothed_deltas["directness"],
-            reason=f"分析了{len(messages)}条消息",
-        )
 
         await log_evolution(
             group_id=stream_id,
