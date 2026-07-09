@@ -94,6 +94,6 @@ async def handle_observe(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
         except OSError:
             pass
 
-    msg = "\n".join(lines)
+    msg = chr(10).join(lines)
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True
