@@ -202,6 +202,24 @@ _CREATE_SQL = [
         seed_id TEXT DEFAULT ''
     )
     """,
+
+    """
+    CREATE TABLE IF NOT EXISTS soul_self_memories (
+        memory_id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        tags_json TEXT DEFAULT '[]',
+        source TEXT DEFAULT 'manual',
+        stream_id TEXT DEFAULT '',
+        event_time TEXT DEFAULT '',
+        importance INTEGER DEFAULT 3,
+        enabled INTEGER DEFAULT 1,
+        deleted INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_self_memories_created ON soul_self_memories (created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_self_memories_deleted ON soul_self_memories (deleted, enabled)",
     "CREATE INDEX IF NOT EXISTS idx_pending_created ON soul_pending_reflections (created_at)",
 ]
 

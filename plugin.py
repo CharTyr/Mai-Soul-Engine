@@ -18,8 +18,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Iterable
 
-from maibot_sdk import API, Command, HookHandler, MaiBotPlugin
-from maibot_sdk.types import HookMode, HookOrder, ErrorPolicy
+from maibot_sdk import Tool, API, Command, HookHandler, MaiBotPlugin
+from maibot_sdk.types import ToolParameterInfo, ToolParamType, HookMode, HookOrder, ErrorPolicy
 
 from .plugin_ui_schema import CONFIG_VERSION, MaiSoulEngineConfig
 from .worldview.service import WorldviewConfigView, WorldviewService, config_from_plugin
@@ -385,6 +385,105 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.reflection_command import handle_reflect
 
         return await handle_reflect(self, stream_id, **kwargs)
+
+
+    # ===== Command：自我事件记忆 =====
+
+    @Command("soul_note", description="写入 bot 自我记忆（管理员）", pattern=r"^/soul_note(?:\s+.+)?$")
+    async def cmd_soul_note(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.self_memory_commands import handle_note
+
+        return await handle_note(self, stream_id, **kwargs)
+
+    @Command("soul_memories", description="检索/列出自我记忆（管理员）", pattern=r"^/soul_memories(?:\s+.*)?$")
+    async def cmd_soul_memories(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.self_memory_commands import handle_memories
+
+        return await handle_memories(self, stream_id, **kwargs)
+
+    @Command("soul_memory", description="查看单条自我记忆（管理员）", pattern=r"^/soul_memory\s+(\w+)\s*$")
+    async def cmd_soul_memory(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.self_memory_commands import handle_memory_get
+
+        return await handle_memory_get(self, stream_id, **kwargs)
+
+    @Command("soul_memory_del", description="删除自我记忆（管理员）", pattern=r"^/soul_memory_del\s+(\w+)\s*$")
+    async def cmd_soul_memory_del(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.self_memory_commands import handle_memory_del
+
+        return await handle_memory_del(self, stream_id, **kwargs)
+
+    # ===== Tool：自我记忆检索 =====
+
+    @Tool(
+        "query_self_memory",
+        description=(
+            "检索 bot 自身的事件/约定/经历记忆（不是群友画像）。"
+            "当需要回忆自己做过什么、承诺过什么、和主人的约定、人设相关经历时调用。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="query",
+                param_type=ToolParamType.STRING,
+                description="关键词或问题，可空则返回最近记忆",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="limit",
+                param_type=ToolParamType.INTEGER,
+                description="返回条数，默认 5，最大 15",
+                required=False,
+            ),
+        ],
+    )
+    async def tool_query_self_memory(
+        self,
+        query: str = "",
+        limit: int = 5,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Planner 可调用的自我记忆检索。"""
+        cfg = getattr(self.config, "self_memory", None)
+        if cfg is not None and not bool(getattr(cfg, "enabled", True)):
+            return {"success": False, "error": "self_memory disabled", "text": "自我记忆功能已关闭"}
+        if cfg is not None and not bool(getattr(cfg, "tool_enabled", True)):
+            return {"success": False, "error": "tool disabled", "text": "query_self_memory 工具已关闭"}
+
+        from .models.self_memory import format_memories_for_tool, list_self_memories, search_self_memories
+
+        try:
+            lim = int(limit or 5)
+        except (TypeError, ValueError):
+            lim = 5
+        lim = max(1, min(15, lim))
+        if cfg is not None:
+            try:
+                cap = int(getattr(cfg, "max_results", lim) or lim)
+                lim = max(1, min(lim, cap))
+            except (TypeError, ValueError):
+                pass
+
+        q = str(query or "").strip()
+        memories = search_self_memories(q, limit=lim) if q else list_self_memories(limit=lim)
+        text = format_memories_for_tool(memories)
+        return {
+            "success": True,
+            "count": len(memories),
+            "query": q,
+            "text": text,
+            "items": [
+                {
+                    "memory_id": m.memory_id,
+                    "content": m.content,
+                    "tags": m.tags,
+                    "source": m.source,
+                    "event_time": m.event_time or m.created_at,
+                    "importance": m.importance,
+                }
+                for m in memories
+            ],
+        }
+
 
     # ===== @API 组件：Soul 数据接口 =====
     #

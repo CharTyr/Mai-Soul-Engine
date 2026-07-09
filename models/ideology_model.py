@@ -17,6 +17,7 @@ from .history import *
 from .p1 import *
 from .seeds import *
 from .self_reflection import *
+from .self_memory import *
 from .spectrum import *
 from .traits import *
 
