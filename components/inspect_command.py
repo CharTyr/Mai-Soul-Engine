@@ -46,9 +46,8 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
         return True, msg, True
 
     # ── 2. 管理员鉴权 ────────────────────────────────────────────────
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
     admin_user_id = plugin.config.admin.admin_user_id
 
     if not match_user(platform, user_id, admin_user_id):

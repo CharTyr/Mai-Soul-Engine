@@ -13,11 +13,8 @@ async def handle_reset(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
     from ..models.ideology_model import get_or_create_spectrum
 
     admin_user_id = plugin.config.admin.admin_user_id
-    # 从 kwargs 中获取平台和用户信息
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以重置灵魂光谱"

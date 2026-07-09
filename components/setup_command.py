@@ -36,11 +36,8 @@ async def handle_setup(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    # 从 kwargs 中获取平台和用户信息
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以执行此命令"
@@ -78,11 +75,8 @@ async def handle_answer(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[boo
     cleanup_expired_sessions(plugin)
 
     admin_user_id = plugin.config.admin.admin_user_id
-    # 从 kwargs 中获取平台和用户信息
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
     session_key = f"{platform}:{user_id}"
 
     if not match_user(platform, user_id, admin_user_id):

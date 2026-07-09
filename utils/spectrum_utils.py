@@ -70,6 +70,34 @@ def match_user(platform: str, user_id: str, config_id: str) -> bool:
     return cfg_user_id == user_id
 
 
+def extract_command_actor(kwargs: dict | None) -> tuple[str, str]:
+    """从 SDK2 Command kwargs 解析 platform / user_id。
+
+    宿主 invoke_args 同时提供顶层 ``platform`` / ``user_id``，以及
+    ``message={platform, message_info:{user_info:{user_id}}}``。
+    旧写法只读 ``message.user_info`` 在 SDK2 下永远为空，导致管理员鉴权全失败。
+    """
+    raw = kwargs or {}
+    message = raw.get("message") or {}
+    if not isinstance(message, dict):
+        message = {}
+
+    platform = str(message.get("platform") or raw.get("platform") or "").strip()
+
+    user_info = message.get("user_info")
+    if not isinstance(user_info, dict) or not str(user_info.get("user_id") or "").strip():
+        message_info = message.get("message_info") or {}
+        if isinstance(message_info, dict):
+            user_info = message_info.get("user_info") or {}
+        else:
+            user_info = {}
+    if not isinstance(user_info, dict):
+        user_info = {}
+
+    user_id = str(user_info.get("user_id") or raw.get("user_id") or "").strip()
+    return platform, user_id
+
+
 def match_chat(platform: str, chat_id: str, chat_type: str, config_id: str) -> bool:
     """检查聊天是否匹配配置的ID"""
     cfg_platform, cfg_chat_id, cfg_chat_type = parse_chat_id(config_id)

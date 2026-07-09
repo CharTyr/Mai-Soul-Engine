@@ -18,10 +18,8 @@ async def handle_seeds_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
     from ..utils.spectrum_utils import match_user
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以查看思维种子"
@@ -50,10 +48,8 @@ async def handle_seed_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     from ..utils.spectrum_utils import match_user
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以查看思维种子"
@@ -129,10 +125,8 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     from ..utils.spectrum_utils import match_user
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以审核思维种子"
@@ -212,10 +206,8 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     from ..utils.spectrum_utils import match_user
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以审核思维种子"
@@ -266,10 +258,8 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     from ..models.ideology_model import query_crystallized_traits
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以查看 traits"
@@ -352,10 +342,8 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     from ..worldview.constants import LAYER_LABEL_ZH, LIFECYCLE_LABEL_ZH
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以查看 trait"
@@ -486,10 +474,8 @@ async def handle_trait_set_tags(plugin: Any, stream_id: str, **kwargs: Any) -> t
     from ..utils.trait_tags import dumps_tags_json, parse_tags_json
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以设置 trait tags"
@@ -538,10 +524,8 @@ async def handle_trait_merge(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     from ..utils.trait_evidence import dumps_evidence_json, parse_evidence_json
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以合并 trait"
@@ -608,10 +592,8 @@ async def handle_trait_disable(plugin: Any, stream_id: str, **kwargs: Any) -> tu
     from ..models.ideology_model import get_crystallized_trait_by_id
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以禁用 trait"
@@ -654,10 +636,8 @@ async def handle_trait_enable(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     from ..models.ideology_model import get_crystallized_trait_by_id
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以启用 trait"
@@ -700,10 +680,8 @@ async def handle_trait_delete(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     from ..models.ideology_model import get_crystallized_trait_by_id
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以删除 trait"
@@ -751,10 +729,8 @@ async def handle_seed_reject_all(plugin: Any, stream_id: str, **kwargs: Any) -> 
     from ..utils.spectrum_utils import match_user
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以审核思维种子"

@@ -37,10 +37,8 @@ async def handle_reflect(
     from ..utils.spectrum_utils import match_user
 
     admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    from ..utils.spectrum_utils import extract_command_actor
+    platform, user_id = extract_command_actor(kwargs)
 
     if not match_user(platform, user_id, admin_user_id):
         msg = "只有管理员可以查看自我评价"
