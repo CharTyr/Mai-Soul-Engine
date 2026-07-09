@@ -32,12 +32,16 @@
     "chat.get_all_streams",
     "chat.get_stream_by_group_id",
     "chat.get_stream_by_user_id",
-    "config.get"
+    "config.get",
+    "send.image",
+    "render.html2png"
   ],
   "i18n": {
     "default_locale": "zh-CN",
     "locales_path": "_locales",
-    "supported_locales": ["zh-CN"]
+    "supported_locales": [
+      "zh-CN"
+    ]
   },
   "plugin_type": "extension",
   "display": {
