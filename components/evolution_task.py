@@ -18,7 +18,7 @@ from ..models.ideology_model import (
     get_or_create_spectrum,
 )
 from ..prompts.ideology_prompts import EVOLUTION_ANALYSIS_PROMPT
-from ..utils.audit_log import log_evolution
+from ..utils.audit_log import log_evolution, log_evolution_cycle, log_evolution_skip
 from ..utils.spectrum_utils import (
     chat_config_to_stream_id,
     filter_messages_for_evolution,
@@ -100,9 +100,38 @@ async def run_evolution_loop(plugin) -> None:
                 logger.debug("监控群组全部被排除，跳过本轮")
                 continue
 
+            analyzed = 0
+            skipped = 0
+            seeds_before = 0
+            try:
+                from ..models.ideology_model import count_pending_thought_seeds
+
+                seeds_before = int(count_pending_thought_seeds() or 0)
+            except Exception:
+                seeds_before = 0
+
             for group_config_id in groups_to_analyze:
                 logger.debug("开始分析群组: %s", group_config_id)
+                # _analyze_group 内部写 evolution / evolution_skip
+                before_audit_hint = True
                 await _analyze_group(plugin, group_config_id, evolution_rate)
+                analyzed += 1  # 调用次数；成功/跳过细节见 audit
+
+            seeds_after = seeds_before
+            try:
+                from ..models.ideology_model import count_pending_thought_seeds
+
+                seeds_after = int(count_pending_thought_seeds() or 0)
+            except Exception:
+                pass
+
+            await log_evolution_cycle(
+                groups_planned=len(groups_to_analyze),
+                groups_analyzed=analyzed,
+                groups_skipped=max(0, len(groups_to_analyze) - analyzed),
+                seeds_created=max(0, seeds_after - seeds_before),
+                interval_hours=float(getattr(plugin.config.evolution, "evolution_interval_hours", 0) or 0),
+            )
 
             # P1.5：自评反馈 → 光谱修正（仅 self_reflection.enabled）
             if plugin.config.self_reflection.enabled:
@@ -144,8 +173,9 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 start_time=str(last_time.timestamp()),
                 end_time=str(now.timestamp()),
             )
-        except (RuntimeError, ValueError, OSError):
+        except (RuntimeError, ValueError, OSError) as exc:
             logger.exception("获取群%s消息失败", stream_id)
+            await log_evolution_skip(stream_id, "fetch_messages_failed", detail=str(exc))
             return
 
         # 新 SDK 返回的消息列表，每条是 dict
@@ -157,6 +187,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
 
         if len(messages) < 5:
             logger.debug("群%s消息不足5条，跳过分析", stream_id)
+            await log_evolution_skip(stream_id, "messages_lt_5", message_count=len(messages))
             return
 
         max_messages = plugin.config.evolution.max_messages_per_analysis
@@ -176,6 +207,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             _warn_no_bot_filter(stream_id)
         if len(messages) < 5:
             logger.debug("群%s过滤后消息不足5条，跳过分析", stream_id)
+            await log_evolution_skip(stream_id, "filtered_messages_lt_5", message_count=len(messages))
             return
 
         msg_lines = []
@@ -195,6 +227,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
 
         if not msg_text:
             logger.debug("群%s消息内容为空，跳过分析", stream_id)
+            await log_evolution_skip(stream_id, "empty_message_text", message_count=len(messages))
             return
 
         prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
@@ -210,8 +243,11 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.debug("发送LLM请求，prompt长度: %s", len(prompt))
         try:
             llm_result = await plugin.ctx.llm.generate(prompt)
-        except (RuntimeError, ValueError, OSError):
+        except (RuntimeError, ValueError, OSError) as exc:
             logger.exception("LLM 请求失败")
+            await log_evolution_skip(
+                stream_id, "llm_failed", message_count=len(messages), detail=str(exc)
+            )
             return
 
         response = ""
@@ -222,6 +258,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.debug("LLM响应长度: %s", len(response))
 
         if not response:
+            await log_evolution_skip(stream_id, "llm_empty_response", message_count=len(messages))
             return
 
         try:
@@ -238,6 +275,12 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 deltas = result
         except (_json.JSONDecodeError, ValueError):
             logger.warning("无法解析LLM响应: %s", response)
+            await log_evolution_skip(
+                stream_id,
+                "llm_parse_failed",
+                message_count=len(messages),
+                detail=(response or "")[:240],
+            )
             return
 
         spectrum = get_or_create_spectrum("global")

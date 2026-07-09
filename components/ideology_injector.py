@@ -132,7 +132,7 @@ def _trait_quality_score(trait) -> float:
 _injection_log_lock = asyncio.Lock()
 
 # 注入日志采样：每 N 条实际写一次，避免高频 IO
-INJECTION_LOG_EVERY: int = 10
+INJECTION_LOG_EVERY: int = 1  # 开发观察：全量记录（仍有 5MB 轮转）
 _injection_log_counter: int = 0
 INJECTION_LOG_MAX_BYTES: int = 5 * 1024 * 1024  # 5 MB 轮转
 

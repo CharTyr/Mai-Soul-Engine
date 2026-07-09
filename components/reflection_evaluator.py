@@ -84,6 +84,9 @@ async def _evaluate_cycle(plugin) -> None:
         max_age_hours=int(cfg.pending_max_age_hours),
     )
     if not pendings:
+        from ..utils.audit_log import log_reflection_cycle
+
+        await log_reflection_cycle(pending=0, evaluated=0, skipped=0, seeds=0)
         return
     logger.info("[SelfReflection] 本轮评价 %s 条待评回复", len(pendings))
 
@@ -131,8 +134,18 @@ async def _evaluate_cycle(plugin) -> None:
     # 4. 调 LLM
     try:
         llm_result = await plugin.ctx.llm.generate(prompt)
-    except (RuntimeError, ValueError, OSError):
+    except (RuntimeError, ValueError, OSError) as exc:
         logger.exception("[SelfReflection] 评价 LLM 请求失败")
+        from ..utils.audit_log import log_reflection_cycle
+
+        await log_reflection_cycle(
+            pending=len(pendings),
+            evaluated=0,
+            skipped=0,
+            seeds=0,
+            llm_failed=True,
+            detail=str(exc),
+        )
         return
     response = ""
     if isinstance(llm_result, dict):
@@ -141,12 +154,32 @@ async def _evaluate_cycle(plugin) -> None:
         response = llm_result
     if not response:
         logger.warning("[SelfReflection] 评价 LLM 返回空")
+        from ..utils.audit_log import log_reflection_cycle
+
+        await log_reflection_cycle(
+            pending=len(pendings),
+            evaluated=0,
+            skipped=0,
+            seeds=0,
+            llm_failed=True,
+            detail="empty_response",
+        )
         return
 
     # 5. 解析 JSON 数组
     results = _parse_evaluation_json(response)
     if not results:
         logger.warning("[SelfReflection] 无法解析评价结果: %s", response[:200])
+        from ..utils.audit_log import log_reflection_cycle
+
+        await log_reflection_cycle(
+            pending=len(pendings),
+            evaluated=0,
+            skipped=0,
+            seeds=0,
+            parse_failed=True,
+            detail=(response or "")[:200],
+        )
         return
 
     # 可选批次归一化（对冲系统性高估）
@@ -208,11 +241,21 @@ async def _evaluate_cycle(plugin) -> None:
             if seed_id:
                 seed_count += 1
 
+    evaluated_n = sum(1 for r in results if int(r.get("evaluated", 0) or 0))
+    skipped_n = sum(1 for r in results if not int(r.get("evaluated", 0) or 0))
     logger.info(
         "[SelfReflection] 评价完成：%s 条已评，%s 条跳过，%s 条生成自我观察种子",
-        sum(1 for r in results if int(r.get("evaluated", 0) or 0)),
-        sum(1 for r in results if not int(r.get("evaluated", 0) or 0)),
+        evaluated_n,
+        skipped_n,
         seed_count,
+    )
+    from ..utils.audit_log import log_reflection_cycle
+
+    await log_reflection_cycle(
+        pending=len(pendings),
+        evaluated=evaluated_n,
+        skipped=skipped_n,
+        seeds=seed_count,
     )
 
 

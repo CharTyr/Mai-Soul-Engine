@@ -386,6 +386,13 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_reflect(self, stream_id, **kwargs)
 
+    @Command("soul_observe", description="Soul 运行观察摘要（管理员/开发）", pattern=r"^/soul_observe\s*$")
+    async def cmd_soul_observe(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.observe_command import handle_observe
+
+        return await handle_observe(self, stream_id, **kwargs)
+
+
     # ===== @API 组件：Soul 数据接口 =====
     #
     # 安全模型（以下 7 个 @API 组件）：
