@@ -691,29 +691,30 @@ class DashboardRenderer:
 <meta charset="utf-8" />
 <style>
 :root {{
-  --ink: #f4f4f6;
-  --body: #cdcdcd;
-  --mute: #9c9c9d;
-  --ash: #6a6b6c;
-  --canvas: #07080a;
-  --surface: #0d0d0d;
-  --surface-elevated: #101111;
-  --surface-card: #121212;
-  --hairline: #242728;
-  --hairline-soft: rgba(255,255,255,0.08);
-  --hairline-strong: rgba(255,255,255,0.16);
-  --accent-blue: #57c1ff;
-  --accent-blue-soft: rgba(87,193,255,0.15);
-  --accent-red: #ff6161;
-  --accent-red-soft: rgba(255,97,97,0.15);
-  --accent-green: #59d499;
-  --accent-green-soft: rgba(89,212,153,0.15);
-  --accent-yellow: #ffc533;
-  --accent-yellow-soft: rgba(255,197,51,0.15);
-  --hero-stripe-start: #ff5757;
-  --hero-stripe-end: #a1131a;
-  --key-bg-start: #121212;
-  --key-bg-end: #0d0d0d;
+  /* light theme */
+  --ink: #14161a;
+  --body: #3a3f47;
+  --mute: #6b7280;
+  --ash: #9aa1ab;
+  --canvas: #f3f5f8;
+  --surface: #ffffff;
+  --surface-elevated: #f8fafc;
+  --surface-card: #eef2f7;
+  --hairline: #e2e8f0;
+  --hairline-soft: rgba(15,23,42,0.06);
+  --hairline-strong: rgba(15,23,42,0.14);
+  --accent-blue: #2563eb;
+  --accent-blue-soft: rgba(37,99,235,0.12);
+  --accent-red: #dc2626;
+  --accent-red-soft: rgba(220,38,38,0.10);
+  --accent-green: #059669;
+  --accent-green-soft: rgba(5,150,105,0.12);
+  --accent-yellow: #d97706;
+  --accent-yellow-soft: rgba(217,119,6,0.12);
+  --hero-stripe-start: #60a5fa;
+  --hero-stripe-end: #2563eb;
+  --key-bg-start: #ffffff;
+  --key-bg-end: #f1f5f9;
 }}
 * {{ box-sizing: border-box; }}
 body {{
@@ -734,6 +735,7 @@ body {{
   border: 1px solid var(--hairline);
   border-radius: 16px;
   background: var(--surface);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
 }}
 .hero {{
   position: relative;
