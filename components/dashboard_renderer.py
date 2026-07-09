@@ -179,7 +179,7 @@ class DashboardRenderer:
                 full_page=False,
                 omit_background=False,
                 wait_until="load",
-                timeout_ms=self.render_timeout_ms,
+                render_timeout_ms=self.render_timeout_ms,
                 allow_network=False,
             )
         except Exception:
