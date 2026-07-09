@@ -10,7 +10,7 @@ from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "2.4.0"
+CONFIG_VERSION = "2.3.0"
 
 
 def _ui(
@@ -638,39 +638,6 @@ class SelfReflectionConfig(PluginConfigBase):
     )
 
 
-
-
-class SelfMemoryConfig(PluginConfigBase):
-    """Bot 自我事件记忆（可检索，不写入用户 A_Memorix）。"""
-
-    __ui_label__ = "自我记忆"
-    __ui_icon__ = "brain"
-    __ui_order__ = 12
-
-    enabled: bool = Field(
-        default=True,
-        description="启用自我记忆",
-        json_schema_extra=_ui(
-            "启用自我记忆",
-            "关闭后命令与 query_self_memory 工具均不可用。",
-        ),
-    )
-    tool_enabled: bool = Field(
-        default=True,
-        description="启用 Planner 工具",
-        json_schema_extra=_ui(
-            "启用 query_self_memory 工具",
-            "供 Planner 按需检索 bot 自身经历/约定。",
-        ),
-    )
-    max_results: int = Field(
-        default=8,
-        ge=1,
-        le=30,
-        description="检索条数上限",
-        json_schema_extra=_ui("检索条数上限", "命令与工具默认返回上限。", advanced=True),
-    )
-
 class MaiSoulEngineConfig(PluginConfigBase):
     """Mai-Soul-Engine 插件配置。"""
 
@@ -686,4 +653,3 @@ class MaiSoulEngineConfig(PluginConfigBase):
     notion: NotionConfig = Field(default_factory=NotionConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     self_reflection: SelfReflectionConfig = Field(default_factory=SelfReflectionConfig)
-    self_memory: SelfMemoryConfig = Field(default_factory=SelfMemoryConfig)

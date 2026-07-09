@@ -202,9 +202,3 @@ viewport_width = 1100
 device_scale_factor = 2.0
 # 渲染超时（毫秒），超时回退纯文本
 render_timeout_ms = 60000
-
-
-[self_memory]
-enabled = true
-tool_enabled = true
-max_results = 8
