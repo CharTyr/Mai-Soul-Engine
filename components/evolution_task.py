@@ -137,17 +137,17 @@ async def run_evolution_loop(plugin) -> None:
             max_concurrent = int(getattr(plugin.config.evolution, "max_concurrent_groups", 3) or 3)
             semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-            async def _analyze_with_sem(gid: str) -> bool:
+            async def _analyze_with_sem(gid: str) -> str:
                 async with semaphore:
                     logger.debug("开始分析群组: %s", gid)
-                    await _analyze_group(plugin, gid, evolution_rate)
-                    return True
+                    return await _analyze_group(plugin, gid, evolution_rate)
 
             results = await asyncio.gather(
                 *[_analyze_with_sem(g) for g in groups_to_analyze],
                 return_exceptions=True,
             )
-            analyzed = sum(1 for r in results if r is True)
+            analyzed = sum(1 for r in results if r == "success")
+            skipped = sum(1 for r in results if r == "skipped")
 
             seeds_after = seeds_before
             try:
@@ -160,7 +160,7 @@ async def run_evolution_loop(plugin) -> None:
             await log_evolution_cycle(
                 groups_planned=len(groups_to_analyze),
                 groups_analyzed=analyzed,
-                groups_skipped=max(0, len(groups_to_analyze) - analyzed),
+                groups_skipped=skipped,
                 seeds_created=max(0, seeds_after - seeds_before),
                 interval_hours=float(getattr(plugin.config.evolution, "evolution_interval_hours", 0) or 0),
             )
@@ -222,7 +222,7 @@ async def run_evolution_loop(plugin) -> None:
             await asyncio.sleep(60)
 
 
-async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> None:
+async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> str:
     """分析单个群组的消息并更新光谱。
 
     Args:
@@ -235,7 +235,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         if not stream_id:
             logger.warning("监控群无法解析到当前宿主会话: %s", group_config_id)
             await log_evolution_skip(group_config_id, "stream_not_found")
-            return
+            return "skipped"
 
         record = get_or_create_group_evolution(group_id=stream_id)
         last_time = record.last_analyzed
@@ -251,7 +251,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         except (RuntimeError, ValueError, OSError) as exc:
             logger.exception("获取群%s消息失败", stream_id)
             await log_evolution_skip(stream_id, "fetch_messages_failed", detail=str(exc))
-            return
+            return "skipped"
 
         # 新 SDK 返回的消息列表，每条是 dict
         if not isinstance(messages_raw, list):
@@ -263,7 +263,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         if len(messages) < 5:
             logger.debug("群%s消息不足5条，跳过分析", stream_id)
             await log_evolution_skip(stream_id, "messages_lt_5", message_count=len(messages))
-            return
+            return "skipped"
 
         max_messages = plugin.config.evolution.max_messages_per_analysis
         max_chars = plugin.config.evolution.max_chars_per_message
@@ -286,7 +286,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         if len(messages) < 5:
             logger.debug("群%s过滤后消息不足5条，跳过分析", stream_id)
             await log_evolution_skip(stream_id, "filtered_messages_lt_5", message_count=len(messages))
-            return
+            return "skipped"
 
         msg_lines = []
         for m in messages[:max_messages]:
@@ -306,7 +306,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         if not msg_text:
             logger.debug("群%s消息内容为空，跳过分析", stream_id)
             await log_evolution_skip(stream_id, "empty_message_text", message_count=len(messages))
-            return
+            return "skipped"
 
         thought_cabinet_enabled = bool(plugin.config.thought_cabinet.enabled)
         logger.debug("思维阁启用状态: %s", thought_cabinet_enabled)
@@ -321,7 +321,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             await log_evolution_skip(
                 stream_id, "llm_failed", message_count=len(messages), detail=str(exc)
             )
-            return
+            return "skipped"
 
         response = ""
         if isinstance(llm_result, dict):
@@ -332,7 +332,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
 
         if not response:
             await log_evolution_skip(stream_id, "llm_empty_response", message_count=len(messages))
-            return
+            return "skipped"
 
         try:
             response = response.strip()
@@ -355,7 +355,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 message_count=len(messages),
                 detail=(response or "")[:240],
             )
-            return
+            return "skipped"
 
         spectrum = get_or_create_spectrum("global")
 
@@ -435,9 +435,12 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             smoothed_deltas["directness"],
         )
 
+        return "success"
+
     # 顶层兜底：单个群分析失败不阻断其他群
     except Exception as e:
         logger.error("分析群%s时出错: %s", group_config_id, e, exc_info=True)
+        return "failed"
 
 
 async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines: list[str]) -> list[str]:

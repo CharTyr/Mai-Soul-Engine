@@ -38,6 +38,8 @@ __all__ = [
     "get_latest_snapshot_for_session",
     "list_pending_reflections",
     "list_recent_reflections",
+    "list_unconsumed_reflections_for_correction",
+    "mark_reflections_correction_consumed",
     "update_pending_status",
 ]
 
@@ -87,7 +89,10 @@ class SelfReflection:
     snapshot_id: str = ""
     reply_type: str = ""  # social_glue | reactive | substantive
     evaluated: int = 0  # 0=未评(跳过) | 1=已评
-    consistency_score: int = 0  # 0-100
+    consistency_score: int = 0  # 0-100（主分 = raw，兼容旧读路径）
+    raw_consistency_score: int | None = None  # 归一化前原始分
+    normalized_consistency_score: int | None = None  # 归一化后分（若无归一化则 = raw）
+    correction_consumed_at: str = ""  # 空串=未消费，非空时间戳=已消费
     deviating_axis: str = ""  # sincerity | engagement | closeness | directness | ""
     deviating_direction: str = ""  # high | low | ""
     reason: str = ""
@@ -302,15 +307,24 @@ def create_self_reflection(
     reason: str = "",
     user_reaction_signal: str = "",
     seed_id: str = "",
+    raw_consistency_score: int | None = None,
+    normalized_consistency_score: int | None = None,
 ) -> int:
-    """落一条评价结果，返回 reflection_id。"""
+    """落一条评价结果，返回 reflection_id。
+
+    consistency_score 为主分（写入 raw 列兼容旧读路径），同时写 raw 与 normalized 列。
+    """
     conn = _get_conn()
+    # 归一化数据库也带自省值
+    raw = raw_consistency_score if raw_consistency_score is not None else consistency_score
+    norm = normalized_consistency_score if normalized_consistency_score is not None else raw
     cursor = conn.execute(
         """INSERT INTO soul_self_reflections
            (stream_id, created_at, pending_id, snapshot_id, reply_type, evaluated,
-            consistency_score, deviating_axis, deviating_direction, reason,
+            consistency_score, raw_consistency_score, normalized_consistency_score,
+            deviating_axis, deviating_direction, reason,
             user_reaction_signal, seed_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             stream_id,
             _dt_to_str(datetime.now()),
@@ -319,6 +333,8 @@ def create_self_reflection(
             reply_type,
             evaluated,
             consistency_score,
+            raw,
+            norm,
             deviating_axis,
             deviating_direction,
             reason,
@@ -366,6 +382,44 @@ def count_self_reflections() -> dict[str, Any]:
     return {"total": total, "evaluated": evaluated, "skipped": skipped, "by_axis": by_axis}
 
 
+def list_unconsumed_reflections_for_correction(limit: int = 30) -> list[SelfReflection]:
+    """取未消费的评价记录（供光谱修正用），不限制 stream_id（修复跨 session 空转）。
+
+    条件：已评(evaluated=1) + substantive + correction_consumed_at 为空串/NULL。
+    按 created_at 降序，取最新 limit 条。
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT * FROM soul_self_reflections
+           WHERE evaluated = 1 AND reply_type = 'substantive'
+             AND (correction_consumed_at IS NULL OR correction_consumed_at = '')
+           ORDER BY created_at DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [_row_to_reflection(row) for row in rows]
+
+
+def mark_reflections_correction_consumed(reflection_ids: list[int], consumed_at: str) -> int:
+    """批量标记自评记录为已消费（correction_consumed_at 写入时间戳）。
+
+    Args:
+        reflection_ids: 参与聚合的 reflection_id 列表。
+        consumed_at: 消费时间戳（ISO 格式）。
+
+    Returns: 受影响行数。
+    """
+    if not reflection_ids:
+        return 0
+    conn = _get_conn()
+    placeholders = ",".join("?" for _ in reflection_ids)
+    cursor = conn.execute(
+        f"UPDATE soul_self_reflections SET correction_consumed_at = ? WHERE reflection_id IN ({placeholders})",
+        (consumed_at, *reflection_ids),
+    )
+    conn.commit()
+    return int(cursor.rowcount)
+
+
 # ─── 行映射 ───────────────────────────────────────────────────────
 
 
@@ -399,6 +453,10 @@ def _row_to_pending(row) -> PendingReflection:
 
 
 def _row_to_reflection(row) -> SelfReflection:
+    raw = row["raw_consistency_score"]
+    norm = row["normalized_consistency_score"]
+    raw_val: int | None = int(raw) if raw is not None else None
+    norm_val: int | None = int(norm) if norm is not None else None
     return SelfReflection(
         reflection_id=int(row["reflection_id"]),
         stream_id=row["stream_id"],
@@ -408,6 +466,9 @@ def _row_to_reflection(row) -> SelfReflection:
         reply_type=row["reply_type"],
         evaluated=int(row["evaluated"]),
         consistency_score=int(row["consistency_score"]),
+        raw_consistency_score=raw_val,
+        normalized_consistency_score=norm_val,
+        correction_consumed_at=row["correction_consumed_at"] or "",
         deviating_axis=row["deviating_axis"],
         deviating_direction=row["deviating_direction"],
         reason=row["reason"],

@@ -86,6 +86,7 @@ def build_self_reflection_prompt(
     tendency: str,
     replies_block: str,
     traits_header: str = "",
+    relevance_gate_enabled: bool = True,
 ) -> str:
     """组装自评 prompt。
 
@@ -93,10 +94,15 @@ def build_self_reflection_prompt(
         tendency: 抽象人设倾向（build_abstract_tendency 的输出）。
         replies_block: 待评价回复块（每条含注入观点/上文/回复内容）。
         traits_header: 可选，本次评价的总体观点说明（通常为空，观点按条在 replies_block 内）。
+        relevance_gate_enabled: 是否使用三档相关性门槛。False 时替换为简短说明。
     """
+    if relevance_gate_enabled:
+        relevance_gate = _RELEVANCE_GATE
+    else:
+        relevance_gate = "不使用三档门槛，对每条回复完整评价，统一按 substantive 标准打分。"
     return SELF_REFLECTION_PROMPT.format(
         tendency=tendency,
-        relevance_gate=_RELEVANCE_GATE,
+        relevance_gate=relevance_gate,
         traits_header=traits_header,
         replies_block=replies_block,
         output_spec=_OUTPUT_SPEC,

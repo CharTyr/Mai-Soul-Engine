@@ -200,6 +200,7 @@ async def _evaluate_batch(
     prompt = build_self_reflection_prompt(
         tendency=tendency,
         replies_block="\n\n".join(reply_blocks),
+        relevance_gate_enabled=bool(cfg.relevance_gate_enabled),
     )
 
     # 调 LLM
@@ -223,6 +224,10 @@ async def _evaluate_batch(
         logger.warning("[SelfReflection] 无法解析评价结果: %s", response[:200])
         return None
 
+    # ★ R3: 在归一化之前保存 raw score
+    for r in results:
+        r["_raw_score"] = int(r.get("consistency_score", 0) or 0)
+
     # 可选批次归一化（对冲系统性高估）
     if cfg.normalize_across_batch and len(results) > 1:
         results = _normalize_batch_scores(results)
@@ -238,6 +243,9 @@ async def _evaluate_batch(
         reply_type = str(item.get("reply_type", "") or "")
         evaluated = int(item.get("evaluated", 0) or 0)
         score = int(item.get("consistency_score", 0) or 0)
+        # ★ R3: 原始分用 _raw_score（归一化前），归一化分用 score（可能已被归一化）
+        raw_score = int(item.get("_raw_score", score) or 0)
+        normalized_score = score
         axis = str(item.get("deviating_axis", "") or "")
         direction = str(item.get("deviating_direction", "") or "")
         reason = str(item.get("reason", "") or "")
@@ -250,11 +258,13 @@ async def _evaluate_batch(
                 snapshot_id=p.snapshot_id,
                 reply_type=reply_type,
                 evaluated=evaluated,
-                consistency_score=score,
+                consistency_score=raw_score,  # 主分=raw（兼容旧读路径）
                 deviating_axis=axis,
                 deviating_direction=direction,
                 reason=reason,
                 seed_id="",
+                raw_consistency_score=raw_score,
+                normalized_consistency_score=normalized_score,
             )
         except sqlite3.Error:
             logger.exception("[SelfReflection] 写 self_reflection 失败 (pending=%s)", p.pending_id)
@@ -272,11 +282,12 @@ async def _evaluate_batch(
             logger.exception("[SelfReflection] 更新 pending 状态失败 (pending=%s)", p.pending_id)
 
         # 生成 self_observation 种子（仅 substantive + 显著偏离 + LLM 给了 trait）
+        # 种子门槛用 raw_score（归一化前），不是归一化后分数
         if (
             reflection_id
             and reply_type == "substantive"
             and evaluated == 1
-            and score < _SEED_SCORE_THRESHOLD
+            and raw_score < _SEED_SCORE_THRESHOLD
             and isinstance(sot, dict)
             and sot.get("name")
         ):

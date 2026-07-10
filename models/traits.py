@@ -45,6 +45,7 @@ class CrystallizedTrait:
     deleted: bool = False
     ideology_layer: str = "conduct"
     lifecycle_state: str = "active"
+    origin_stream_id: str = ""
 
     def save(self) -> None:
         """持久化当前 trait。"""
@@ -70,8 +71,15 @@ def create_crystallized_trait(
     deleted: bool = False,
     ideology_layer: str = "conduct",
     lifecycle_state: str = "active",
+    origin_stream_id: str = "",
 ) -> None:
-    """创建固化 trait。"""
+    """创建固化 trait。
+
+    Args:
+        origin_stream_id: 来源流 ID（内化种子所属的群 stream_id），
+            用于溯源该 trait 最初来源于哪个群的讨论。
+            空串表示无特定来源。
+    """
     # 空串 = 未设置 = 全局作用域，归一为显式 GLOBAL_STREAM，避免与"异常空值"混淆
     if not stream_id:
         stream_id = GLOBAL_STREAM
@@ -80,8 +88,8 @@ def create_crystallized_trait(
         """INSERT INTO soul_crystallized_traits
            (trait_id, stream_id, seed_id, name, question, thought, tags_json,
             confidence, evidence_json, spectrum_impact_json, created_at, enabled, deleted,
-            ideology_layer, lifecycle_state)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ideology_layer, lifecycle_state, origin_stream_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             trait_id, stream_id, seed_id, name, question, thought, tags_json,
             confidence, evidence_json, spectrum_impact_json,
@@ -89,6 +97,7 @@ def create_crystallized_trait(
             int(enabled), int(deleted),
             ideology_layer or "conduct",
             lifecycle_state or "active",
+            origin_stream_id or "",
         ),
     )
     conn.commit()
@@ -111,7 +120,7 @@ def save_crystallized_trait(t: CrystallizedTrait) -> None:
            stream_id = ?, seed_id = ?, name = ?, question = ?, thought = ?,
            tags_json = ?, confidence = ?, evidence_json = ?, spectrum_impact_json = ?,
            created_at = ?, enabled = ?, deleted = ?,
-           ideology_layer = ?, lifecycle_state = ?
+           ideology_layer = ?, lifecycle_state = ?, origin_stream_id = ?
            WHERE trait_id = ?""",
         (
             t.stream_id, t.seed_id, t.name, t.question, t.thought,
@@ -119,6 +128,7 @@ def save_crystallized_trait(t: CrystallizedTrait) -> None:
             _dt_to_str(t.created_at), int(t.enabled), int(t.deleted),
             t.ideology_layer or "conduct",
             t.lifecycle_state or "active",
+            t.origin_stream_id or "",
             t.trait_id,
         ),
     )
@@ -220,6 +230,7 @@ def _row_to_trait(row: sqlite3.Row) -> CrystallizedTrait:
         deleted=bool(row["deleted"]),
         ideology_layer=row["ideology_layer"] if "ideology_layer" in row.keys() else "conduct",
         lifecycle_state=row["lifecycle_state"] if "lifecycle_state" in row.keys() else "active",
+        origin_stream_id=row["origin_stream_id"] if "origin_stream_id" in row.keys() else "",
     )
 
 

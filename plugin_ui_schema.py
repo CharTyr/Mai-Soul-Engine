@@ -412,7 +412,7 @@ class ApiConfig(PluginConfigBase):
     __ui_order__ = 7
 
     enabled: bool = Field(
-        default=True,
+        default=False,
         description="启用 API",
         json_schema_extra=_ui("启用 Soul @API", "关闭后 soul.* 接口返回未启用；不影响命令与注入。"),
     )

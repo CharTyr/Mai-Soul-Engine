@@ -118,6 +118,64 @@ def test_correction_records_history(soul_db: Any) -> None:
     assert "自评修正" in (history[0].reason or "")
 
 
+# ─── R5: 跨 stream 修正 & 不重复消费 ─────────────────────────────
+
+
+def test_correction_cross_stream(soul_db: Any) -> None:
+    """不同群的评价记录也能参与修正（不限制 stream_id）。"""
+    fb = _import_soul_submodule("components.reflection_feedback")
+    soul_db.get_or_create_spectrum("global")
+    # 在两个不同群各写 2 条 substantive + directness low
+    soul_db.create_self_reflection("group_a", 1, "", "substantive", 1, 30, "directness", "low", "x")
+    soul_db.create_self_reflection("group_a", 2, "", "substantive", 1, 40, "directness", "low", "x")
+    soul_db.create_self_reflection("group_b", 3, "", "substantive", 1, 35, "directness", "low", "x")
+    soul_db.create_self_reflection("group_b", 4, "", "substantive", 1, 45, "directness", "low", "x")
+    # 净偏离 -4 ≥ 3，触发修正
+    before = soul_db.get_or_create_spectrum("global").directness
+    fb.apply_self_reflection_spectrum_correction(_plugin(weight=0.5), evolution_rate=6)
+    after = soul_db.get_or_create_spectrum("global").directness
+    assert after < before  # 修正生效
+
+
+def test_correction_no_repeat_consumption(soul_db: Any) -> None:
+    """同一批记录被修正后，二次调用不会再重复消费。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    fb = _import_soul_submodule("components.reflection_feedback")
+    soul_db.get_or_create_spectrum("global")
+    for _ in range(4):
+        soul_db.create_self_reflection("global", 1, "", "substantive", 1, 50, "directness", "low", "x")
+
+    # 第一次调用：应有修正
+    before = soul_db.get_or_create_spectrum("global").directness
+    fb.apply_self_reflection_spectrum_correction(_plugin(weight=0.5), evolution_rate=6)
+    after = soul_db.get_or_create_spectrum("global").directness
+    assert after < before
+
+    # 二次调用：无未消费记录，不应有修正
+    before2 = soul_db.get_or_create_spectrum("global").directness
+    fb.apply_self_reflection_spectrum_correction(_plugin(weight=0.5), evolution_rate=6)
+    after2 = soul_db.get_or_create_spectrum("global").directness
+    assert after2 == before2  # 没有额外修正
+
+
+def test_correction_dead_zone_marks_consumed_anyway(soul_db: Any) -> None:
+    """dead zone 导致无修正时，仍标记参与聚合的记录为已消费（防永久重试）。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    fb = _import_soul_submodule("components.reflection_feedback")
+    soul_db.get_or_create_spectrum("global")
+    # 仅 2 条偏低（净 -2 < 3 dead zone）
+    for _ in range(2):
+        soul_db.create_self_reflection("global", 1, "", "substantive", 1, 50, "directness", "low", "x")
+
+    fb.apply_self_reflection_spectrum_correction(_plugin(weight=0.5), evolution_rate=6)
+
+    # 虽然无修正，但记录已被标记已消费，不再返回
+    unconsumed = sr.list_unconsumed_reflections_for_correction(limit=10)
+    assert len(unconsumed) == 0
+
+
 # ─── _build_injection_block 分场景合并（oracle 修订点 5）───────────
 
 

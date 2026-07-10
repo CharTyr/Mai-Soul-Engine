@@ -227,6 +227,15 @@ async def _process_fermenting_seed(plugin: Any, seed: Any) -> None:
     # L3 LLM 批量判断关联度
     relevance_scores = await _llm_judge_relevance(plugin, seed, candidates)
 
+    # LLM 失败（空列表）：不推进 checked_at，下轮重试
+    if not relevance_scores:
+        logger.warning(
+            "[Fermentation] 种子 %s 关联度判断 LLM 失败/返回空，不推进 checked_at，下轮重试",
+            seed.seed_id,
+        )
+        await _check_completion(plugin, seed)
+        return
+
     # 收录关联度达标的消息
     added = 0
     for i, line in enumerate(candidates):
@@ -266,7 +275,7 @@ async def _llm_judge_relevance(plugin: Any, seed: Any, messages: list[str]) -> l
         response = result.get("response", "") if isinstance(result, dict) else str(result)
     except (RuntimeError, ValueError, OSError, asyncio.TimeoutError) as exc:
         logger.warning("[Fermentation] 关联度判断 LLM 失败: %s", exc)
-        return [0.0] * len(messages)
+        return []
 
     # 解析 JSON 数组
     try:
@@ -275,10 +284,10 @@ async def _llm_judge_relevance(plugin: Any, seed: Any, messages: list[str]) -> l
             response = response.split("\n", 1)[1].rsplit("```", 1)[0]
         parsed = json.loads(response)
         if not isinstance(parsed, list):
-            return [0.0] * len(messages)
+            return []
     except (json.JSONDecodeError, ValueError):
         logger.warning("[Fermentation] 关联度判断响应解析失败: %s", response[:200])
-        return [0.0] * len(messages)
+        return []
 
     # 构建 score 列表，按 index 对齐
     scores = [0.0] * len(messages)
@@ -293,6 +302,43 @@ async def _llm_judge_relevance(plugin: Any, seed: Any, messages: list[str]) -> l
                 pass
 
     return scores
+
+
+async def _try_notify_admin_insufficient(plugin: Any, seed: Any, input_count: int, min_inputs: int) -> None:
+    """尝试通知管理员种子因证据不足无法内化。失败仅记日志，不抛出。"""
+    from ..utils.spectrum_utils import parse_user_id
+
+    admin_config_id = plugin.config.admin.admin_user_id
+    if not admin_config_id:
+        logger.debug("[Fermentation] admin_user_id 未配置，跳过通知 seed=%s", seed.seed_id)
+        return
+
+    platform, user_id = parse_user_id(admin_config_id)
+    if not platform or not user_id:
+        logger.debug("[Fermentation] admin_user_id 无法解析，跳过通知 seed=%s", seed.seed_id)
+        return
+
+    try:
+        admin_stream_id = await plugin.ctx.chat.get_stream_by_user_id(
+            platform=platform, user_id=user_id
+        )
+    except (RuntimeError, ValueError, OSError):
+        logger.debug("[Fermentation] 获取管理员 stream_id 失败 seed=%s", seed.seed_id)
+        return
+
+    if not admin_stream_id:
+        logger.debug("[Fermentation] 未找到管理员聊天流 seed=%s", seed.seed_id)
+        return
+
+    text = (
+        f"🧬 发酵种子 {seed.seed_id} 证据不足\n"
+        f"收集到 {input_count}/{min_inputs} 条相关输入，已达最大延长次数\n"
+        f"种子保持发酵状态，可手动处理 (approve/reject)"
+    )
+    try:
+        await plugin.ctx.send.text(text=text, stream_id=admin_stream_id)
+    except (RuntimeError, ValueError, OSError):
+        logger.debug("[Fermentation] 发送管理员通知失败 seed=%s", seed.seed_id)
 
 
 async def _check_completion(plugin: Any, seed: Any) -> None:
@@ -329,10 +375,14 @@ async def _check_completion(plugin: Any, seed: Any) -> None:
             )
             return
         else:
-            logger.info(
-                "[Fermentation] 种子 %s 输入不足(%d<%d)且已达最大延长次数，强制内化",
-                seed.seed_id, input_count, min_inputs,
+            logger.warning(
+                "[Fermentation] 种子 %s 输入不足(%d<%d)且已达最大延长次数(%d)，证据不足，保持发酵",
+                seed.seed_id, input_count, min_inputs, max_extensions,
             )
+            # 不触发内化：种子保持 fermenting，等待管理员处理或未来新消息。
+            # 正常路径下调用前已推进 checked_at；LLM 失败路径未推进 checked_at，下轮会重试同批消息。
+            await _try_notify_admin_insufficient(plugin, seed, input_count, min_inputs)
+            return
 
     # 触发最终内化
     logger.info("[Fermentation] 种子 %s 发酵到期，触发最终内化（%d 条输入）", seed.seed_id, input_count)

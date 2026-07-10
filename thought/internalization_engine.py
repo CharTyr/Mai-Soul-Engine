@@ -352,9 +352,12 @@ class InternalizationEngine:
                     )
 
                     # 1) 先创建新 trait（active）
+                    from ..worldview.constants import GLOBAL_STREAM
+
+                    origin = seed_info.get("stream_id", "") or ""
                     create_crystallized_trait(
                         trait_id=trait_id,
-                        stream_id=seed_info.get("stream_id", "") or "",
+                        stream_id=GLOBAL_STREAM,  # 思想属于 Bot 全局
                         seed_id=seed_info.get("id", "") or "",
                         name=seed_info.get("type", "trait"),
                         question=seed_info.get("question", "") or "",
@@ -368,6 +371,7 @@ class InternalizationEngine:
                         deleted=False,
                         ideology_layer=layer,
                         lifecycle_state="active",
+                        origin_stream_id=origin,  # 经历来源
                     )
 
                     # 2) 新 trait 创建成功后，再标记旧 trait（contradicted 同时禁用）
@@ -392,7 +396,7 @@ class InternalizationEngine:
                     return {"trait_id": trait_id, "merged": False, "relation": relation, "related_to": target_trait_id}
 
         # none 或未匹配：创建新 trait（现有路径）
-        from ..worldview.constants import normalize_ideology_layer
+        from ..worldview.constants import GLOBAL_STREAM, normalize_ideology_layer
         from ..worldview.service import WorldviewService, config_from_plugin
 
         tags = parse_tags_json(dumps_tags_json(seed_info.get("tags")))
@@ -401,9 +405,10 @@ class InternalizationEngine:
             default=WorldviewService.infer_layer_from_tags(tags),
         )
 
+        origin = seed_info.get("stream_id", "") or ""
         create_crystallized_trait(
             trait_id=trait_id,
-            stream_id=seed_info.get("stream_id", "") or "",
+            stream_id=GLOBAL_STREAM,  # 思想属于 Bot 全局
             seed_id=seed_info.get("id", "") or "",
             name=seed_info.get("type", "trait"),
             question=seed_info.get("question", "") or "",
@@ -417,6 +422,7 @@ class InternalizationEngine:
             deleted=False,
             ideology_layer=layer,
             lifecycle_state="active",
+            origin_stream_id=origin,  # 经历来源
         )
         logger.info(f"已创建 trait 记录: {trait_id} (seed={seed_info.get('id', '')})")
         return {"trait_id": trait_id, "merged": False}

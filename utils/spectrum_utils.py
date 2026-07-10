@@ -3,12 +3,7 @@ from typing import Any
 
 
 def update_spectrum_value(current: int, delta: int) -> int:
-    new_value = current + delta
-    if new_value > 100:
-        new_value = 100 - (new_value - 100)
-    elif new_value < 0:
-        new_value = 0 - new_value
-    return max(0, min(100, new_value))
+    return max(0, min(100, current + delta))
 
 
 def format_spectrum_display(spectrum: dict) -> str:

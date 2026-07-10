@@ -119,19 +119,28 @@ def apply_self_reflection_spectrum_correction(plugin, evolution_rate: int) -> No
 
     仅在 ``[self_reflection].enabled`` 且 weight>0 时生效。dead zone（净偏离≥3）防噪声，
     magnitude 受 weight 缩放（0.5→±1，1.0→±2，受 evolution_rate 上限）。
+    使用 ``list_unconsumed_reflections_for_correction`` 避免跨 session 重复消费。
+    即使 dead zone 导致无修正，仍标记已消费（防永久重试噪声）。
     """
     cfg = plugin.config.self_reflection
     weight = float(cfg.self_reflection_weight)
     if weight <= 0:
         return
-    from ..models.self_reflection import list_recent_reflections
+    from datetime import datetime
+    from ..models.self_reflection import (
+        list_unconsumed_reflections_for_correction,
+        mark_reflections_correction_consumed,
+    )
     from ..models.ideology_model import apply_spectrum_deltas
-    from ..worldview.constants import GLOBAL_STREAM
 
-    reflections = list_recent_reflections(GLOBAL_STREAM, limit=30)
-    agg = _aggregate_deviations(reflections)
-    if not agg:
+    reflections = list_unconsumed_reflections_for_correction(limit=30)
+    if not reflections:
         return
+
+    # 收集本批参与聚合的 id（不论 dead zone 是否触发，都标记已消费）
+    batch_ids = [r.reflection_id for r in reflections]
+
+    agg = _aggregate_deviations(reflections)
 
     corrections: dict[str, int] = {}
     reason_parts: list[str] = []
@@ -149,16 +158,20 @@ def apply_self_reflection_spectrum_correction(plugin, evolution_rate: int) -> No
         direction = "偏高" if net > 0 else "偏低"
         reason_parts.append(f"{_AXIS_LABELS[axis]}{direction}{abs(net)}次")
 
-    if not corrections:
-        return
+    if corrections:
+        # 经统一光谱闸门写入（v2.3.0 收口）：不 smooth（±1 经 EMA 会归零）、不 resistance；
+        # dead zone + weight 已是护栏。group_id="global" 区分于群演化记录。
+        applied = apply_spectrum_deltas(
+            "self_reflection",
+            corrections,
+            max_per_axis=evolution_rate,
+            group_id="global",
+            reason=f"自评修正：{', '.join(reason_parts)}",
+        )
+        logger.info("[SelfReflection] 光谱自评修正：%s", applied)
+    else:
+        logger.debug("[SelfReflection] 无有效修正（dead zone 拦截或无偏离），标记 %s 条已消费", len(batch_ids))
 
-    # 经统一光谱闸门写入（v2.3.0 收口）：不 smooth（±1 经 EMA 会归零）、不 resistance；
-    # dead zone + weight 已是护栏。group_id="global" 区分于群演化记录。
-    applied = apply_spectrum_deltas(
-        "self_reflection",
-        corrections,
-        max_per_axis=evolution_rate,
-        group_id="global",
-        reason=f"自评修正：{', '.join(reason_parts)}",
-    )
-    logger.info("[SelfReflection] 光谱自评修正：%s", applied)
+    # 本批参与聚合的记录全部标记已消费（防永久重试噪声）
+    consumed_at = datetime.now().isoformat()
+    mark_reflections_correction_consumed(batch_ids, consumed_at)

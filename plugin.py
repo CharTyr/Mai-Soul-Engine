@@ -75,7 +75,51 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         # /soul_reset 二次确认：{session_id: timestamp}
         self._reset_confirm_ts: dict[str, float] = {}
 
-    # ===== 生命周期 =====
+    # ===== 后台任务管理 =====
+
+    @staticmethod
+    def _compute_desired_tasks(config: MaiSoulEngineConfig) -> dict[str, bool]:
+        """纯函数：根据配置计算四个后台任务的期望状态（便于单测）。"""
+        master = bool(config.plugin.enabled)
+        return {
+            "evolution": master and bool(config.evolution.evolution_enabled),
+            "notion": master and bool(config.notion.enabled),
+            "reflection": master and bool(config.self_reflection.enabled),
+            "fermentation": master
+            and bool(config.thought_cabinet.enabled)
+            and bool(getattr(config.thought_cabinet, "fermentation_enabled", False)),
+        }
+
+    async def _reconcile_background_tasks(self) -> None:
+        """统一管理后台任务生命周期（on_load / on_config_update 共用）。
+
+        根据 _compute_desired_tasks 的结果，启动缺失的任务、停止多余的任务。
+        """
+        desired = self._compute_desired_tasks(self.config)
+
+        # 每个任务 (desired_key, 属性名, 循环方法名)
+        task_entries: list[tuple[str, str, str]] = [
+            ("evolution", "_evolution_task", "_evolution_loop"),
+            ("notion", "_notion_sync_task", "_notion_sync_loop"),
+            ("reflection", "_self_reflection_task", "_self_reflection_loop"),
+            ("fermentation", "_fermentation_task", "_fermentation_loop"),
+        ]
+
+        for key, attr_name, loop_attr in task_entries:
+            current = getattr(self, attr_name)
+            should_run = desired[key]
+
+            if should_run and current is None:
+                loop_fn = getattr(self, loop_attr)
+                setattr(self, attr_name, asyncio.create_task(loop_fn()))
+                logger.info("[Mai-Soul-Engine] %s 任务已启动", attr_name)
+            elif not should_run and current is not None:
+                current.cancel()
+                try:
+                    await current
+                except (asyncio.CancelledError, Exception):
+                    pass
+                setattr(self, attr_name, None)
 
     async def on_load(self) -> None:
         """插件加载：初始化数据库、执行旧版迁移、启动周期任务。"""
@@ -120,25 +164,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         except Exception as e:
             logger.error("[Mai-Soul-Engine] 旧版数据迁移失败: %s", e, exc_info=True)
 
-        # 启动演化任务
-        if self.config.evolution.evolution_enabled:
-            self._evolution_task = asyncio.create_task(self._evolution_loop())
-            logger.info("[Mai-Soul-Engine] 演化任务已启动")
-
-        # 启动 Notion 同步任务
-        if self.config.notion.enabled:
-            self._notion_sync_task = asyncio.create_task(self._notion_sync_loop())
-            logger.info("[Mai-Soul-Engine] Notion 同步任务已启动")
-
-        # 启动自我评价任务
-        if self.config.self_reflection.enabled:
-            self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
-            logger.info("[Mai-Soul-Engine] 自我评价任务已启动")
-
-        # v2.4.0: 启动发酵任务
-        if self.config.thought_cabinet.enabled and getattr(self.config.thought_cabinet, "fermentation_enabled", False):
-            self._fermentation_task = asyncio.create_task(self._fermentation_loop())
-            logger.info("[Mai-Soul-Engine] 发酵任务已启动")
+        # 启动周期任务（统一管理）
+        await self._reconcile_background_tasks()
 
     async def on_unload(self) -> None:
         """插件卸载：取消周期任务、关闭数据库。"""
@@ -203,36 +230,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             # 清注入冷却表（配置热更后旧冷却状态可能与新 max_traits/cooldown_seconds 不匹配）
             from .components.ideology_injector import _RECENT_TRAIT_INJECTION
             _RECENT_TRAIT_INJECTION.clear()
-            # 演化任务启停
-            if self.config.evolution.evolution_enabled and self._evolution_task is None:
-                self._evolution_task = asyncio.create_task(self._evolution_loop())
-            elif not self.config.evolution.evolution_enabled and self._evolution_task is not None:
-                self._evolution_task.cancel()
-                try:
-                    await self._evolution_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                self._evolution_task = None
-            # Notion 同步任务启停
-            if self.config.notion.enabled and self._notion_sync_task is None:
-                self._notion_sync_task = asyncio.create_task(self._notion_sync_loop())
-            elif not self.config.notion.enabled and self._notion_sync_task is not None:
-                self._notion_sync_task.cancel()
-                try:
-                    await self._notion_sync_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                self._notion_sync_task = None
-            # 自我评价任务启停
-            if self.config.self_reflection.enabled and self._self_reflection_task is None:
-                self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
-            elif not self.config.self_reflection.enabled and self._self_reflection_task is not None:
-                self._self_reflection_task.cancel()
-                try:
-                    await self._self_reflection_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                self._self_reflection_task = None
+            # 统一管理后台任务启停（含发酵补上）
+            await self._reconcile_background_tasks()
 
     # ===== 周期任务 =====
 

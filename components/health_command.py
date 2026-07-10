@@ -15,9 +15,12 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
         return True, err, True
 
     lines = ["插件健康状态：\n"]
+    lines.append(f"引擎开关: {'开启' if plugin.config.plugin.enabled else '关闭'}")
     lines.append(f"演化任务: {'运行中' if plugin._evolution_task else '已停止'}")
     lines.append(f"Notion同步: {'运行中' if plugin._notion_sync_task else '已停止'}")
     lines.append(f"自评任务: {'运行中' if plugin._self_reflection_task else '已停止'}")
+    lines.append(f"发酵任务: {'运行中' if plugin._fermentation_task else '已停止'}")
+    lines.append(f"数据目录: {plugin._data_dir}")
 
     # DB 大小
     try:

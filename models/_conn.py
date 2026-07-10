@@ -132,7 +132,8 @@ _CREATE_SQL = [
         spectrum_impact_json TEXT DEFAULT '{}',
         created_at TEXT DEFAULT '',
         enabled INTEGER DEFAULT 1,
-        deleted INTEGER DEFAULT 0
+        deleted INTEGER DEFAULT 0,
+        origin_stream_id TEXT DEFAULT ''
     )
     """,
     """
@@ -204,6 +205,9 @@ _CREATE_SQL = [
         reply_type TEXT DEFAULT '',
         evaluated INTEGER DEFAULT 0,
         consistency_score INTEGER DEFAULT 0,
+        raw_consistency_score INTEGER DEFAULT NULL,
+        normalized_consistency_score INTEGER DEFAULT NULL,
+        correction_consumed_at TEXT DEFAULT '',
         deviating_axis TEXT DEFAULT '',
         deviating_direction TEXT DEFAULT '',
         reason TEXT DEFAULT '',
@@ -319,6 +323,18 @@ def _run_migrations() -> None:
         (GLOBAL_STREAM,),
     )
     conn.commit()
+
+    # 0B.1：soul_crystallized_traits 加 origin_stream_id 溯源列
+    if not _has_column("soul_crystallized_traits", "origin_stream_id"):
+        _add_column("soul_crystallized_traits", "origin_stream_id", "TEXT DEFAULT ''")
+
+    # Phase 0A R1：soul_self_reflections 加列
+    if not _has_column("soul_self_reflections", "raw_consistency_score"):
+        _add_column("soul_self_reflections", "raw_consistency_score", "INTEGER DEFAULT NULL")
+    if not _has_column("soul_self_reflections", "normalized_consistency_score"):
+        _add_column("soul_self_reflections", "normalized_consistency_score", "INTEGER DEFAULT NULL")
+    if not _has_column("soul_self_reflections", "correction_consumed_at"):
+        _add_column("soul_self_reflections", "correction_consumed_at", "TEXT DEFAULT ''")
 
 
 def _rename_spectrum_axes() -> None:

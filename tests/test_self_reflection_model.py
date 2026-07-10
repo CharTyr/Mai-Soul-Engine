@@ -193,3 +193,128 @@ def test_count_self_reflections(soul_db: Any) -> None:
     assert counts["skipped"] == 1
     assert counts["by_axis"].get("directness") == 1
     assert counts["by_axis"].get("sincerity") == 1
+
+
+# ─── 新列 CRUD（Phase 0A R2） ──────────────────────────────────────
+
+
+def test_create_reflection_with_raw_normalized_scores(soul_db: Any) -> None:
+    """创建时传入 raw/normalized 分数，验证持久化。"""
+    rid = soul_db.create_self_reflection(
+        stream_id="g",
+        pending_id=1,
+        snapshot_id="snap",
+        reply_type="substantive",
+        evaluated=1,
+        consistency_score=80,  # 主分=raw
+        deviating_axis="sincerity",
+        deviating_direction="low",
+        reason="test",
+        seed_id="",
+        raw_consistency_score=80,
+        normalized_consistency_score=65,
+    )
+    assert rid > 0
+    refs = soul_db.list_recent_reflections("g", limit=10)
+    ref = next(r for r in refs if r.reflection_id == rid)
+    assert ref.consistency_score == 80  # 主分兼容
+    assert ref.raw_consistency_score == 80
+    assert ref.normalized_consistency_score == 65
+    assert ref.correction_consumed_at == ""  # 默认空串
+
+
+def test_create_reflection_without_raw_normalized(soul_db: Any) -> None:
+    """不传 raw/normalized 时，raw 从 consistency_score 继承，normalized 从 raw 继承。"""
+    rid = soul_db.create_self_reflection(
+        stream_id="g",
+        pending_id=1,
+        snapshot_id="snap",
+        reply_type="substantive",
+        evaluated=1,
+        consistency_score=75,
+    )
+    refs = soul_db.list_recent_reflections("g", limit=10)
+    ref = next(r for r in refs if r.reflection_id == rid)
+    # consistency_score=75 → raw=75, normalized=75
+    assert ref.consistency_score == 75
+    assert ref.raw_consistency_score == 75
+    assert ref.normalized_consistency_score == 75
+
+
+def test_row_to_reflection_fallback_to_consistency_score(soul_db: Any) -> None:
+    """新列为 NULL 时，_row_to_reflection 的 raw/normalized 为 None（不是 0），
+    correction_consumed_at 为空串。"""
+    conn = _import_soul_submodule("models._conn")._get_conn()
+    conn.execute(
+        """INSERT INTO soul_self_reflections
+           (stream_id, created_at, pending_id, snapshot_id, reply_type, evaluated,
+            consistency_score, deviating_axis, deviating_direction, reason, seed_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("g", "2024-01-01T00:00:00", 1, "snap", "substantive", 1, 72, "directness", "high", "x", ""),
+    )
+    conn.commit()
+    refs = soul_db.list_recent_reflections("g", limit=10)
+    ref = next(r for r in refs if r.pending_id == 1 and r.created_at is not None)
+    assert ref.consistency_score == 72
+    assert ref.raw_consistency_score is None  # NULL 列 → None
+    assert ref.normalized_consistency_score is None
+    assert ref.correction_consumed_at == ""
+
+
+# ─── list_unconsumed_reflections_for_correction ──────────────────
+
+
+def test_list_unconsumed_returns_only_substantive_evaluated(soul_db: Any) -> None:
+    """仅返回 evaluated=1 + reply_type='substantive' 的记录。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    soul_db.create_self_reflection("g", 1, "", "substantive", 1, 50, "directness", "low", "x")
+    soul_db.create_self_reflection("g", 2, "", "reactive", 1, 80, "", "", "")
+    soul_db.create_self_reflection("g", 3, "", "social_glue", 0, 0, "", "", "skip")
+    soul_db.create_self_reflection("g", 4, "", "substantive", 1, 30, "sincerity", "high", "y")
+    results = sr.list_unconsumed_reflections_for_correction(limit=10)
+    assert len(results) == 2
+    assert all(r.reply_type == "substantive" and r.evaluated == 1 for r in results)
+
+
+def test_list_unconsumed_excludes_consumed(soul_db: Any) -> None:
+    """已消费（correction_consumed_at 非空）的记录不被返回。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    r1 = soul_db.create_self_reflection("g", 1, "", "substantive", 1, 50, "directness", "low", "x")
+    r2 = soul_db.create_self_reflection("g", 2, "", "substantive", 1, 40, "sincerity", "high", "y")
+    # 标记 r1 已消费
+    sr.mark_reflections_correction_consumed([r1], "2024-01-01T00:00:00")
+    results = sr.list_unconsumed_reflections_for_correction(limit=10)
+    assert len(results) == 1
+    assert results[0].reflection_id == r2
+
+
+def test_list_unconsumed_cross_stream(soul_db: Any) -> None:
+    """不限制 stream_id，不同群的记录都能被消费。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    soul_db.create_self_reflection("group_a", 1, "", "substantive", 1, 50, "directness", "low", "x")
+    soul_db.create_self_reflection("group_b", 2, "", "substantive", 1, 40, "sincerity", "high", "y")
+    results = sr.list_unconsumed_reflections_for_correction(limit=10)
+    assert len(results) == 2
+
+
+# ─── mark_reflections_correction_consumed ──────────────────────────
+
+
+def test_mark_reflections_correction_consumed(soul_db: Any) -> None:
+    """批量标记已消费。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    r1 = soul_db.create_self_reflection("g", 1, "", "substantive", 1, 50, "directness", "low", "x")
+    r2 = soul_db.create_self_reflection("g", 2, "", "substantive", 1, 40, "sincerity", "high", "y")
+    affected = sr.mark_reflections_correction_consumed([r1, r2], "2024-06-01T12:00:00")
+    assert affected == 2
+    assert len(sr.list_unconsumed_reflections_for_correction(limit=10)) == 0
+
+
+def test_mark_reflections_correction_consumed_empty_list(soul_db: Any) -> None:
+    """空列表不报错，返回 0。"""
+    sr = _import_soul_submodule("models.self_reflection")
+    assert sr.mark_reflections_correction_consumed([], "2024-01-01T00:00:00") == 0
