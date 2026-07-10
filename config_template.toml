@@ -67,6 +67,8 @@ normalize_across_batch = false
 pending_max_age_hours = 48
 # 待评队列上限（超过物理删最旧）
 pending_max_rows = 5000
+# 自我观察种子每日上限（0=关闭上限，与群聊种子日上限独立）
+self_observation_daily_cap = 2
 
 # ─── 档位阈值 ───────────────────────────────────────────────────────
 [threshold]

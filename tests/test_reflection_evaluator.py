@@ -96,6 +96,7 @@ def _self_reflection_config() -> SimpleNamespace:
         normalize_across_batch=False,
         pending_max_age_hours=48,
         pending_max_rows=5000,
+        self_observation_daily_cap=0,
     )
 
 

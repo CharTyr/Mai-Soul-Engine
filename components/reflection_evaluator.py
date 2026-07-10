@@ -344,6 +344,14 @@ async def _maybe_create_self_observation_seed(
 
     默认全部人工审批（防自指跑偏）。
     """
+    # 0B.4：检查 self_observation 日上限（与群聊种子日上限独立）
+    cap = int(plugin.config.self_reflection.self_observation_daily_cap)
+    if cap > 0:
+        from ..models.seeds import count_self_observation_seeds_created_today
+        if count_self_observation_seeds_created_today() >= cap:
+            logger.info("[SelfReflection] 今日 self_observation 种子已达上限 %s，跳过", cap)
+            return None
+
     try:
         from ..thought.seed_manager import ThoughtSeedManager
 

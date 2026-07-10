@@ -723,6 +723,17 @@ class SelfReflectionConfig(PluginConfigBase):
         description="待评上限",
         json_schema_extra=_ui("待评队列上限", "超过则物理删最旧，防表膨胀。", advanced=True),
     )
+    self_observation_daily_cap: int = Field(
+        default=2,
+        ge=0,
+        le=50,
+        description="自评种子日上限",
+        json_schema_extra=_ui(
+            "自我观察种子每日上限",
+            "每天最多由自评产生多少个 self_observation 种子。0=关闭上限。与群聊种子日上限独立。",
+            advanced=True,
+        ),
+    )
 
 
 class MaiSoulEngineConfig(PluginConfigBase):

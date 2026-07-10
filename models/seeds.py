@@ -17,6 +17,7 @@ __all__ = [
     "count_pending_thought_seeds",
     "count_reviewed_seeds",
     "count_seeds_created_today",
+    "count_self_observation_seeds_created_today",
     "create_thought_seed",
     "delete_oldest_reviewed_seeds",
     "delete_thought_seed",
@@ -333,6 +334,17 @@ def count_seeds_created_today(stream_id: str) -> int:
     row = conn.execute(
         "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE stream_id = ? AND created_at >= ?",
         (stream_id, today_start),
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def count_self_observation_seeds_created_today() -> int:
+    """统计今天创建的 self_observation 种子数（所有 stream、所有状态）。"""
+    conn = _get_conn()
+    today_start = _dt_to_str(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE seed_type = 'self_observation' AND created_at >= ?",
+        (today_start,),
     ).fetchone()
     return int(row["cnt"]) if row else 0
 
