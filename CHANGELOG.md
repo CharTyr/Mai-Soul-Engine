@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.0+++] — 插件侧 H1/H2（不依赖宿主新 PR）
+
+### 开发侧
+
+- **群会话解析**：`get_stream_by_group_id` 失败时回退 `chat.open_session` 持久恢复/创建会话，缓解重启后 `stream_not_found`。
+- **宿主人设**：经 `config.get` 读取 `personality.personality` / `reply_style`，生成 `profile_hash`；内化 prompt 追加「宿主固定人设基底」段。
+- 声明 capability `chat.open_session`。
+
 ## [2.4.0++] — Phase1 混合：迁移账本 + 12 槽接入
 
 ### 用户可感知

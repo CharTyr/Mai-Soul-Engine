@@ -35,6 +35,84 @@ def test_group_resolution_returns_empty_when_host_has_no_stream() -> None:
     assert stream_id == ""
 
 
+def test_group_resolution_falls_back_to_open_session() -> None:
+    """get_stream_by_group_id returns empty → open_session resolves → stream_id."""
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            return {"success": True, "stream": None}
+
+        async def open_session(self, platform: str, group_id: str, chat_type: str):
+            return {"session_id": "session-from-open-session"}
+
+    plugin = SimpleNamespace(ctx=SimpleNamespace(chat=Chat()))
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == "session-from-open-session"
+
+
+def test_group_resolution_open_session_extracts_stream_key() -> None:
+    """open_session returns nested stream dict → extracts session_id."""
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            return {"success": True, "stream": None}
+
+        async def open_session(self, platform: str, group_id: str, chat_type: str):
+            return {"stream": {"session_id": "nested-session"}}
+
+    plugin = SimpleNamespace(ctx=SimpleNamespace(chat=Chat()))
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == "nested-session"
+
+
+def test_group_resolution_get_stream_raises_open_session_succeeds() -> None:
+    """get_stream_by_group_id raises → open_session fallback succeeds."""
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            raise RuntimeError("host not ready")
+
+        async def open_session(self, platform: str, group_id: str, chat_type: str):
+            return {"session_id": "fallback-session"}
+
+    plugin = SimpleNamespace(ctx=SimpleNamespace(chat=Chat()))
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == "fallback-session"
+
+
+def test_group_resolution_both_fail_returns_empty() -> None:
+    """Both get_stream_by_group_id and open_session fail → returns ''."""
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            return {"success": True, "stream": None}
+
+    plugin = SimpleNamespace(ctx=SimpleNamespace(chat=Chat()))
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == ""
+
+
+def test_group_resolution_no_platform_uses_md5_fallback() -> None:
+    """No platform prefix → chat_config_to_stream_id fallback."""
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    plugin = SimpleNamespace(ctx=SimpleNamespace(chat=SimpleNamespace()))
+    stream_id = asyncio.run(
+        runtime.resolve_monitored_group_stream(plugin, "plain_group_id")
+    )
+
+    # chat_config_to_stream_id with no platform → returns raw group_id
+    assert stream_id == "plain_group_id"
+
+
 def test_soul_text_generation_uses_planner_task_with_long_rpc_timeout() -> None:
     runtime = _import_soul_submodule("utils.runtime_resolution")
     captured: dict[str, object] = {}

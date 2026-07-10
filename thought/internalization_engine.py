@@ -126,6 +126,14 @@ class InternalizationEngine:
                 )
                 is_fermented = False
 
+            # H2: 追加宿主固定人设基底（若已配置），让内化 LLM 感知 bot 人格约束
+            from ..utils.host_persona import fetch_host_persona, format_persona_for_prompt
+
+            persona_snap = await fetch_host_persona(self._plugin)
+            persona_block = format_persona_for_prompt(persona_snap)
+            if persona_block:
+                prompt += persona_block
+
             result = await generate_soul_text(self._plugin, prompt)
             response = result.get("response", "")
             logger.debug(f"内化LLM响应长度: {len(response) if response else 0}")

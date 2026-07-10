@@ -32,6 +32,7 @@
     "chat.get_all_streams",
     "chat.get_stream_by_group_id",
     "chat.get_stream_by_user_id",
+    "chat.open_session",
     "config.get",
     "send.image",
     "render.html2png"
