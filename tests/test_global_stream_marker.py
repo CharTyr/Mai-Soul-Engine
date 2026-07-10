@@ -106,6 +106,11 @@ def test_migration_converts_empty_stream_to_global(soul_db: Any) -> None:
     conn.commit()
     conn.close()
 
+    # 回退 PRAGMA user_version 到 0，模拟 legacy v0 库升级场景
+    conn_rw = sqlite3.connect(str(soul_db._db_path))  # type: ignore[attr-defined]
+    conn_rw.execute("PRAGMA user_version = 0")
+    conn_rw.close()
+
     # 重新 init_db——迁移逻辑会把 stream_id='' 改为 'global'
     soul_db.close_db()
     soul_db.init_db(soul_db._db_path)  # type: ignore[attr-defined]

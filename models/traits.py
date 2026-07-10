@@ -46,6 +46,7 @@ class CrystallizedTrait:
     ideology_layer: str = "conduct"
     lifecycle_state: str = "active"
     origin_stream_id: str = ""
+    cabinet_slot_no: int | None = None
 
     def save(self, commit: bool = True) -> None:
         """持久化当前 trait。"""
@@ -72,6 +73,7 @@ def create_crystallized_trait(
     ideology_layer: str = "conduct",
     lifecycle_state: str = "active",
     origin_stream_id: str = "",
+    cabinet_slot_no: int | None = None,
     commit: bool = True,
 ) -> None:
     """创建固化 trait。
@@ -90,8 +92,8 @@ def create_crystallized_trait(
         """INSERT INTO soul_crystallized_traits
            (trait_id, stream_id, seed_id, name, question, thought, tags_json,
             confidence, evidence_json, spectrum_impact_json, created_at, enabled, deleted,
-            ideology_layer, lifecycle_state, origin_stream_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ideology_layer, lifecycle_state, origin_stream_id, cabinet_slot_no)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             trait_id, stream_id, seed_id, name, question, thought, tags_json,
             confidence, evidence_json, spectrum_impact_json,
@@ -100,6 +102,7 @@ def create_crystallized_trait(
             ideology_layer or "conduct",
             lifecycle_state or "active",
             origin_stream_id or "",
+            cabinet_slot_no,
         ),
     )
     if commit:
@@ -123,7 +126,8 @@ def save_crystallized_trait(t: CrystallizedTrait, commit: bool = True) -> None:
            stream_id = ?, seed_id = ?, name = ?, question = ?, thought = ?,
            tags_json = ?, confidence = ?, evidence_json = ?, spectrum_impact_json = ?,
            created_at = ?, enabled = ?, deleted = ?,
-           ideology_layer = ?, lifecycle_state = ?, origin_stream_id = ?
+           ideology_layer = ?, lifecycle_state = ?, origin_stream_id = ?,
+           cabinet_slot_no = ?
            WHERE trait_id = ?""",
         (
             t.stream_id, t.seed_id, t.name, t.question, t.thought,
@@ -132,6 +136,7 @@ def save_crystallized_trait(t: CrystallizedTrait, commit: bool = True) -> None:
             t.ideology_layer or "conduct",
             t.lifecycle_state or "active",
             t.origin_stream_id or "",
+            t.cabinet_slot_no,
             t.trait_id,
         ),
     )
@@ -235,6 +240,7 @@ def _row_to_trait(row: sqlite3.Row) -> CrystallizedTrait:
         ideology_layer=row["ideology_layer"] if "ideology_layer" in row.keys() else "conduct",
         lifecycle_state=row["lifecycle_state"] if "lifecycle_state" in row.keys() else "active",
         origin_stream_id=row["origin_stream_id"] if "origin_stream_id" in row.keys() else "",
+        cabinet_slot_no=row["cabinet_slot_no"] if "cabinet_slot_no" in row.keys() else None,
     )
 
 

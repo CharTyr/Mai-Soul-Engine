@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import hashlib
 import logging
 import sqlite3
 
@@ -25,6 +26,8 @@ __all__ = [
     "datetime",
     "init_db",
 ]
+
+CURRENT_SCHEMA_VERSION = 2
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -226,6 +229,18 @@ _CREATE_SQL = [
         added_at TEXT DEFAULT ''
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS soul_schema_migrations (
+        version INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        checksum TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL DEFAULT '',
+        finished_at TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (version, name)
+    )
+    """,
 ]
 
 
@@ -252,12 +267,19 @@ def _create_indexes() -> None:
         "CREATE INDEX IF NOT EXISTS idx_history_group ON soul_evolution_history(group_id, id)",
         "CREATE INDEX IF NOT EXISTS idx_fermentation_seed ON soul_fermentation_inputs(seed_id)",
     ]
+    # cabinet_slot_no 列可能由 v2 迁移添加，在 _create_indexes 中追加以保证索引存在
+    if _has_column("soul_crystallized_traits", "cabinet_slot_no"):
+        index_sqls.append(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_slot_active "
+            "ON soul_crystallized_traits(cabinet_slot_no) "
+            "WHERE cabinet_slot_no IS NOT NULL AND enabled = 1 AND deleted = 0"
+        )
     for sql in index_sqls:
         conn.execute(sql)
     conn.commit()
 
 
-# ─── 迁移工具 ─────────────────────────────────────────────────────
+# ─── 迁移框架 ─────────────────────────────────────────────────────
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
@@ -281,8 +303,99 @@ def _rename_column(table_name: str, old_name: str, new_name: str) -> None:
     conn.commit()
 
 
+# ─── Schema 版本管理 ────────────────────────────────────────────────
+
+
+def _get_schema_version() -> int:
+    """通过 PRAGMA user_version 获取当前 schema 版本。"""
+    conn = _get_conn()
+    row = conn.execute("PRAGMA user_version").fetchone()
+    return int(row[0]) if row else 0
+
+
+def _set_schema_version(v: int) -> None:
+    """设置 PRAGMA user_version。"""
+    conn = _get_conn()
+    conn.execute(f"PRAGMA user_version = {v}")
+
+
+def _migration_checksum(name: str) -> str:
+    """迁移名称的 sha256 前 16 字符作为 checksum。"""
+    return hashlib.sha256(name.encode()).hexdigest()[:16]
+
+
+def _record_migration_start(version: int, name: str) -> None:
+    """记录迁移开始。"""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO soul_schema_migrations "
+        "(version, name, checksum, started_at, status, error) "
+        "VALUES (?, ?, ?, ?, 'running', '')",
+        (version, name, _migration_checksum(name), now),
+    )
+    conn.commit()
+
+
+def _record_migration_success(version: int, name: str) -> None:
+    """记录迁移成功。"""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE soul_schema_migrations SET finished_at = ?, status = 'success', error = '' "
+        "WHERE version = ? AND name = ?",
+        (now, version, name),
+    )
+    conn.commit()
+
+
+def _record_migration_failed(version: int, name: str, error: str) -> None:
+    """记录迁移失败——不推进 user_version。"""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE soul_schema_migrations SET finished_at = ?, status = 'failed', error = ? "
+        "WHERE version = ? AND name = ?",
+        (now, error[:500], version, name),
+    )
+    conn.commit()
+
+
 def _run_migrations() -> None:
-    """就地迁移：补齐旧版可能缺失的列 + v2.1.0 政治轴→社交轴重命名。"""
+    """版本驱动的就地迁移。
+
+    流程：
+        1. 确保 soul_schema_migrations 表已存在
+        2. 读取 PRAGMA user_version 得到当前版本
+        3. 逐版本检查并执行缺失的迁移
+        4. 每个迁移成功后才推进 user_version
+        5. 迁移失败不推进版本，之后重试仍从失败版本开始
+    """
+    current = _get_schema_version()
+
+    if current < 1:
+        _record_migration_start(1, "v1_legacy_bootstrap")
+        try:
+            _run_v1_migration()
+            _record_migration_success(1, "v1_legacy_bootstrap")
+            _set_schema_version(1)
+        except Exception as e:
+            _record_migration_failed(1, "v1_legacy_bootstrap", str(e))
+            raise
+
+    if current < 2:
+        _record_migration_start(2, "v2_cabinet_slot_no")
+        try:
+            _run_v2_migration()
+            _record_migration_success(2, "v2_cabinet_slot_no")
+            _set_schema_version(2)
+        except Exception as e:
+            _record_migration_failed(2, "v2_cabinet_slot_no", str(e))
+            raise
+
+
+def _run_v1_migration() -> None:
+    """Version 1：现有全部 has_column / rename / global 归一 / origin / raw 列（保持幂等）。"""
     if not _has_column("soul_thought_seeds", "stream_id"):
         _add_column("soul_thought_seeds", "stream_id", "TEXT DEFAULT ''")
     if not _has_column("soul_thought_seeds", "confidence"):
@@ -335,6 +448,19 @@ def _run_migrations() -> None:
         _add_column("soul_self_reflections", "normalized_consistency_score", "INTEGER DEFAULT NULL")
     if not _has_column("soul_self_reflections", "correction_consumed_at"):
         _add_column("soul_self_reflections", "correction_consumed_at", "TEXT DEFAULT ''")
+
+
+def _run_v2_migration() -> None:
+    """Version 2：cabinet_slot_no 列 + 唯一部分索引。"""
+    conn = _get_conn()
+    if not _has_column("soul_crystallized_traits", "cabinet_slot_no"):
+        _add_column("soul_crystallized_traits", "cabinet_slot_no", "INTEGER DEFAULT NULL")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_slot_active "
+        "ON soul_crystallized_traits(cabinet_slot_no) "
+        "WHERE cabinet_slot_no IS NOT NULL AND enabled = 1 AND deleted = 0"
+    )
+    conn.commit()
 
 
 def _rename_spectrum_axes() -> None:
