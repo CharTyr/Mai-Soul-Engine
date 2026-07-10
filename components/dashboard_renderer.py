@@ -9,6 +9,506 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 _ROOT_ID = "soul-dashboard"
+
+
+# Dashboard card CSS. PLAIN string only — never convert this to an f-string.
+_DASHBOARD_CSS = """
+:root {
+  /* light theme */
+  --ink: #14161a;
+  --body: #3a3f47;
+  --mute: #6b7280;
+  --ash: #9aa1ab;
+  --canvas: #f3f5f8;
+  --surface: #ffffff;
+  --surface-elevated: #f8fafc;
+  --surface-card: #eef2f7;
+  --hairline: #e2e8f0;
+  --hairline-soft: rgba(15,23,42,0.06);
+  --hairline-strong: rgba(15,23,42,0.14);
+  --accent-blue: #2563eb;
+  --accent-blue-soft: rgba(37,99,235,0.12);
+  --accent-red: #dc2626;
+  --accent-red-soft: rgba(220,38,38,0.10);
+  --accent-green: #059669;
+  --accent-green-soft: rgba(5,150,105,0.12);
+  --accent-yellow: #d97706;
+  --accent-yellow-soft: rgba(217,119,6,0.12);
+  --hero-stripe-start: #60a5fa;
+  --hero-stripe-end: #2563eb;
+  --key-bg-start: #ffffff;
+  --key-bg-end: #f1f5f9;
+}
+/* harden: never paint raw CSS even if a style node is misplaced */
+style { display: none !important; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--canvas);
+}
+#soul-dashboard, #soul-trait, #soul-inspect {
+  margin: 0;
+}
+body {
+  padding: 24px !important;
+}
+.dash {
+  min-height: 880px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--body);
+  font-family: "Inter", "Inter Fallback", system-ui, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-feature-settings: "calt", "kern", "liga", "ss03";
+  font-size: 16px;
+  line-height: 1.6;
+  background: var(--canvas);
+}
+.dash {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+.hero {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+}
+.hero-stripe {
+  height: 6px;
+  background:
+    repeating-linear-gradient(
+      105deg,
+      var(--hero-stripe-start) 0px,
+      var(--hero-stripe-end) 28px,
+      transparent 28px,
+      transparent 36px
+    ),
+    linear-gradient(90deg, var(--hero-stripe-start), var(--hero-stripe-end));
+  opacity: 0.95;
+}
+.hero-inner {
+  padding: 16px 20px;
+}
+.hero-compact .hero-inner { padding: 14px 18px; }
+.hero-main { min-width: 0; }
+.eyebrow {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+h1 {
+  margin: 4px 0 6px;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+.title-trait { font-size: 20px; }
+.meta {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--mute);
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--hairline);
+}
+.badge-ok {
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+  border-color: transparent;
+}
+.badge-alert {
+  background: var(--accent-red-soft);
+  color: var(--accent-red);
+  border-color: transparent;
+}
+.badge-muted {
+  background: var(--surface-card);
+  color: var(--ash);
+  border-color: var(--hairline);
+}
+.badge-layer {
+  background: var(--accent-blue-soft);
+  color: var(--accent-blue);
+  border-color: transparent;
+}
+.badge-mode {
+  background: var(--accent-blue-soft);
+  color: var(--accent-blue);
+  border-color: transparent;
+}
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.grid.two { grid-template-columns: 1fr 1fr; }
+.grid.three { grid-template-columns: 1fr 1fr 1fr; }
+.panel {
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+}
+.panel-dim { opacity: 0.92; }
+.panel-accent {
+  background: var(--surface-elevated);
+  border-color: var(--hairline-strong);
+}
+.label {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  color: var(--mute);
+}
+.label.sub { margin-top: 12px; }
+.bars { display: grid; gap: 8px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+.bar-row-wide { grid-template-columns: 48px 1fr 52px; }
+.bar-name { font-size: 14px; color: var(--mute); }
+.bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent-blue);
+}
+.bar-val { font-weight: 500; font-size: 14px; text-align: right; color: var(--ink); }
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.stat-card {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--hairline);
+  text-align: center;
+}
+.stat-card strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.stat-card span { font-size: 13px; color: var(--mute); }
+.divider {
+  height: 1px;
+  margin: 12px 0;
+  background: var(--hairline);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.chip b { font-weight: 600; }
+.lc-active { background: var(--accent-green-soft); color: var(--accent-green); }
+.lc-strong { background: var(--accent-green-soft); color: var(--accent-green); }
+.lc-expired { background: var(--accent-yellow-soft); color: var(--accent-yellow); }
+.lc-bad { background: var(--accent-red-soft); color: var(--accent-red); }
+.lc-warn { background: var(--accent-yellow-soft); color: var(--accent-yellow); }
+.lc-revised { background: var(--accent-blue-soft); color: var(--accent-blue); }
+.trait-total {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--mute);
+}
+.trait-total strong { color: var(--ink); font-size: 16px; font-weight: 500; }
+.bipolar { display: grid; gap: 8px; }
+.bipolar-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+.bipolar-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+}
+.bipolar-mid {
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  width: 1px;
+  height: 10px;
+  background: var(--hairline-strong);
+  transform: translateX(-50%);
+}
+.bipolar-fill {
+  position: absolute;
+  top: 1px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+}
+.slice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.slice-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--surface-card);
+  font-size: 14px;
+  color: var(--body);
+}
+.thought-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+}
+.big-num {
+  font-size: 32px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1;
+}
+.big-label { font-size: 13px; color: var(--mute); margin-top: 4px; }
+.evo-stack { display: grid; gap: 6px; }
+.palette-row {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.palette-row-active {
+  background: var(--surface-card);
+  border-color: var(--hairline);
+}
+.edge-palette-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.evo-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+.evo-deltas {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-blue);
+  margin-bottom: 4px;
+}
+.row-detail {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--body);
+}
+.muted { color: var(--mute); }
+.footnote {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--mute);
+}
+.footnote-block { margin: 0 4px 4px; padding: 0 4px; }
+.empty {
+  font-size: 14px;
+  color: var(--mute);
+  padding: 6px 0;
+}
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 13px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-elevated);
+}
+.flag.on {
+  background: var(--accent-green-soft);
+  border-color: transparent;
+}
+.flag.off {
+  background: var(--surface-card);
+  opacity: 0.9;
+}
+.flag-name { color: var(--mute); }
+.flag-state { font-weight: 500; color: var(--ink); }
+.flag.off .flag-state { color: var(--ash); }
+.panel-flags { margin-bottom: 0; }
+.body-text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--body);
+}
+.thought-body {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.6;
+  font-weight: 500;
+  color: var(--ink);
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--body);
+  background: linear-gradient(180deg, var(--key-bg-start), var(--key-bg-end));
+  border: 1px solid var(--hairline);
+}
+.keycap-hit {
+  color: var(--accent-green);
+  border-color: var(--hairline-strong);
+}
+.impact-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.impact-chip {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  color: var(--body);
+}
+.impact-chip strong { color: var(--accent-blue); margin-left: 4px; font-weight: 500; }
+.list-body { margin: 0; padding-left: 18px; color: var(--body); }
+.list-body li { margin: 6px 0; font-size: 14px; line-height: 1.55; }
+.edge-stack { display: grid; gap: 6px; }
+.edge-badge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.edge-derived { background: var(--accent-blue-soft); color: var(--accent-blue); }
+.edge-support { background: var(--accent-green-soft); color: var(--accent-green); }
+.edge-bad { background: var(--accent-red-soft); color: var(--accent-red); }
+.edge-warn { background: var(--accent-yellow-soft); color: var(--accent-yellow); }
+.edge-revised { background: var(--accent-blue-soft); color: var(--accent-blue); }
+.edge-target { font-size: 14px; color: var(--mute); word-break: break-all; }
+.query-block {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent-blue);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-elevated);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--body);
+}
+.hit-stack { display: grid; gap: 8px; }
+.hit-card { padding: 10px 12px; }
+.hit-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.hit-rank { font-size: 14px; font-weight: 600; color: var(--accent-blue); }
+.hit-name { font-size: 16px; font-weight: 500; color: var(--ink); }
+.hit-id { font-size: 12px; }
+.hit-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.hit-metric {
+  font-size: 12px;
+  color: var(--mute);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--hairline);
+}
+.hit-tags { margin-bottom: 6px; }
+.empty-inline { font-size: 13px; color: var(--mute); }
+.hit-thought { margin: 0; font-size: 14px; line-height: 1.55; color: var(--mute); }
+.skip-stack { display: grid; gap: 6px; }
+.skip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 14px;
+  opacity: 0.85;
+}
+.skip-name { color: var(--ash); }
+.skip-reason { color: var(--accent-yellow); font-weight: 500; text-align: right; }
+"""
 _TRAIT_ROOT_ID = "soul-trait"
 _INSPECT_ROOT_ID = "soul-inspect"
 
@@ -161,6 +661,7 @@ class DashboardRenderer:
             self._log_exception("Soul inspect 预览渲染失败")
             return ""
 
+
     async def _render_html(
         self,
         html: str,
@@ -170,24 +671,209 @@ class DashboardRenderer:
     ) -> str:
         if self._ctx is None:
             return ""
+
+        # Live-path probe: dump HTML for diagnosis.
         try:
+            from datetime import datetime
+            from pathlib import Path as _Path
+
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dump_dir = _Path("/tmp/soul-dash-live")
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            (dump_dir / f"{stamp}-{root_id}.html").write_text(html, encoding="utf-8")
+            body_part = html.split("<body", 1)[-1]
+            meta = {
+                "root_id": root_id,
+                "viewport_width": self.viewport_width,
+                "viewport_height": viewport_height,
+                "device_scale_factor": self.device_scale_factor,
+                "html_len": len(html),
+                "style_open": html.count("<style"),
+                "style_close": html.count("</style>"),
+                "css_in_body": ("justify-content" in body_part) or (".skip-row" in body_part),
+            }
+            (dump_dir / f"{stamp}-{root_id}.meta.txt").write_text(repr(meta), encoding="utf-8")
+        except Exception:
+            pass
+
+        def _png_size(blob: bytes) -> tuple[int | None, int | None]:
+            if blob[:8] == b"\x89PNG\r\n\x1a\n" and len(blob) >= 24:
+                return int.from_bytes(blob[16:20], "big"), int.from_bytes(blob[20:24], "big")
+            return None, None
+
+        def _crop_content_png(blob: bytes) -> bytes:
+            try:
+                from io import BytesIO
+                from PIL import Image
+
+                with Image.open(BytesIO(blob)) as im:
+                    im = im.convert("RGB")
+                    pixels = im.load()
+                    w, h = im.size
+                    left, top, right, bottom = w, h, 0, 0
+                    found = False
+                    step = 2
+                    for y in range(0, h, step):
+                        for x in range(0, w, step):
+                            r, g, b = pixels[x, y]
+                            if r + g + b < 735:
+                                found = True
+                                if x < left:
+                                    left = x
+                                if y < top:
+                                    top = y
+                                if x > right:
+                                    right = x
+                                if y > bottom:
+                                    bottom = y
+                    if not found:
+                        return blob
+                    pad = 12
+                    box = (
+                        max(0, left - pad),
+                        max(0, top - pad),
+                        min(w, right + 1 + pad),
+                        min(h, bottom + 1 + pad),
+                    )
+                    if box[2] - box[0] < 120 or box[3] - box[1] < 120:
+                        return blob
+                    cropped = im.crop(box)
+                    out = BytesIO()
+                    cropped.save(out, format="PNG", optimize=True)
+                    return out.getvalue()
+            except Exception:
+                return blob
+
+        def _top_looks_like_css_leak(blob: bytes) -> bool:
+            """Dense dark text in the top strip is the historical CSS-source leak signature."""
+            try:
+                from io import BytesIO
+                from PIL import Image
+
+                with Image.open(BytesIO(blob)) as im:
+                    im = im.convert("RGB")
+                    w, h = im.size
+                    band_h = min(28, h)
+                    pixels = im.load()
+                    dark = total = 0
+                    for y in range(band_h):
+                        for x in range(0, w, 3):
+                            r, g, b = pixels[x, y]
+                            total += 1
+                            if r + g + b < 420:
+                                dark += 1
+                    return total > 0 and (dark / total) > 0.08
+            except Exception:
+                return False
+
+        def _dump(name: str, blob: bytes | None, meta: dict) -> None:
+            try:
+                from datetime import datetime
+                from pathlib import Path as _Path
+
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                dump_dir = _Path("/tmp/soul-dash-live")
+                dump_dir.mkdir(parents=True, exist_ok=True)
+                (dump_dir / f"{stamp}-{root_id}-{name}.result.txt").write_text(
+                    repr(meta), encoding="utf-8"
+                )
+                if blob is not None:
+                    (dump_dir / f"{stamp}-{root_id}-{name}.png").write_bytes(blob)
+            except Exception:
+                pass
+
+        async def _once(*, selector: str, full_page: bool, wait_ms: int) -> tuple[str, bytes | None, int | None, int | None]:
             result = await self._ctx.render.html2png(
                 html,
-                selector=f"#{root_id}",
+                selector=selector,
                 viewport={"width": self.viewport_width, "height": viewport_height},
                 device_scale_factor=self.device_scale_factor,
-                full_page=False,
+                full_page=full_page,
                 omit_background=False,
                 wait_until="load",
+                wait_for_selector=f"#{root_id}",
+                wait_for_timeout_ms=wait_ms,
                 render_timeout_ms=self.render_timeout_ms,
                 allow_network=False,
             )
-        except Exception:
-            self._log_exception("html2png 调用失败")
-            return ""
-        if isinstance(result, dict):
+            if not isinstance(result, dict):
+                return "", None, None, None
             image_base64 = result.get("image_base64")
-            return image_base64 if isinstance(image_base64, str) else ""
+            if not isinstance(image_base64, str) or not image_base64:
+                return "", None, None, None
+            try:
+                import base64 as _b64
+
+                blob = _b64.b64decode(image_base64)
+            except Exception:
+                return image_base64, None, None, None
+            width, height = _png_size(blob)
+            return image_base64, blob, width, height
+
+        import base64 as _b64
+
+        # Live shared Chromium often paints a denser ~1066px card that is still complete.
+        # Never accept raw full-page 3200 canvases; always crop those.
+        attempts = [
+            {"name": "a1-element", "selector": f"#{root_id}", "full_page": False, "wait_ms": 250, "crop": False},
+            {"name": "a2-body", "selector": "body", "full_page": False, "wait_ms": 250, "crop": True},
+            {"name": "a3-full-crop", "selector": "body", "full_page": True, "wait_ms": 200, "crop": True},
+        ]
+
+        for attempt in attempts:
+            try:
+                image_base64, blob, width, height = await _once(
+                    selector=attempt["selector"],
+                    full_page=attempt["full_page"],
+                    wait_ms=attempt["wait_ms"],
+                )
+            except Exception:
+                self._log_exception(f"html2png failed ({attempt['name']})")
+                continue
+            if not image_base64 or blob is None:
+                continue
+
+            if attempt.get("crop"):
+                cropped = _crop_content_png(blob)
+                if cropped is not blob:
+                    blob = cropped
+                    width, height = _png_size(blob)
+                    image_base64 = _b64.b64encode(blob).decode("ascii")
+
+            leak = _top_looks_like_css_leak(blob)
+            _dump(
+                attempt["name"],
+                blob,
+                {
+                    "attempt": attempt,
+                    "width": width,
+                    "height": height,
+                    "bytes": len(blob),
+                    "css_leak_heuristic": leak,
+                },
+            )
+
+            if leak:
+                _logger.warning(
+                    "Soul dashboard rejected CSS-leak-looking frame %s: %sx%s",
+                    attempt["name"],
+                    width,
+                    height,
+                )
+                continue
+
+            if root_id == _ROOT_ID:
+                if height is None or height < 980 or height > 2300:
+                    _logger.warning(
+                        "Soul dashboard rejected size frame %s: %sx%s",
+                        attempt["name"],
+                        width,
+                        height,
+                    )
+                    continue
+            return image_base64
+
+        _logger.error("Soul dashboard render failed after all attempts")
         return ""
 
     def _log_exception(self, message: str) -> None:
@@ -684,495 +1370,27 @@ class DashboardRenderer:
         return '<div class="skip-stack">' + "".join(rows) + "</div>"
 
     @staticmethod
+    @staticmethod
     def _wrap_html(body: str) -> str:
-        return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<style>
-:root {{
-  /* light theme */
-  --ink: #14161a;
-  --body: #3a3f47;
-  --mute: #6b7280;
-  --ash: #9aa1ab;
-  --canvas: #f3f5f8;
-  --surface: #ffffff;
-  --surface-elevated: #f8fafc;
-  --surface-card: #eef2f7;
-  --hairline: #e2e8f0;
-  --hairline-soft: rgba(15,23,42,0.06);
-  --hairline-strong: rgba(15,23,42,0.14);
-  --accent-blue: #2563eb;
-  --accent-blue-soft: rgba(37,99,235,0.12);
-  --accent-red: #dc2626;
-  --accent-red-soft: rgba(220,38,38,0.10);
-  --accent-green: #059669;
-  --accent-green-soft: rgba(5,150,105,0.12);
-  --accent-yellow: #d97706;
-  --accent-yellow-soft: rgba(217,119,6,0.12);
-  --hero-stripe-start: #60a5fa;
-  --hero-stripe-end: #2563eb;
-  --key-bg-start: #ffffff;
-  --key-bg-end: #f1f5f9;
-}}
-* {{ box-sizing: border-box; }}
-body {{
-  margin: 0;
-  padding: 24px;
-  color: var(--body);
-  font-family: "Inter", "Inter Fallback", system-ui, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  font-feature-settings: "calt", "kern", "liga", "ss03";
-  font-size: 16px;
-  line-height: 1.6;
-  background: var(--canvas);
-}}
-.dash {{
-  width: 100%;
-  max-width: 100%;
-  margin: 0 auto;
-  padding: 16px;
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-  background: var(--surface);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-}}
-.hero {{
-  position: relative;
-  overflow: hidden;
-  margin-bottom: 16px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--surface-elevated);
-}}
-.hero-stripe {{
-  height: 6px;
-  background:
-    repeating-linear-gradient(
-      105deg,
-      var(--hero-stripe-start) 0px,
-      var(--hero-stripe-end) 28px,
-      transparent 28px,
-      transparent 36px
-    ),
-    linear-gradient(90deg, var(--hero-stripe-start), var(--hero-stripe-end));
-  opacity: 0.95;
-}}
-.hero-inner {{
-  padding: 16px 20px;
-}}
-.hero-compact .hero-inner {{ padding: 14px 18px; }}
-.hero-main {{ min-width: 0; }}
-.eyebrow {{
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: var(--mute);
-}}
-h1 {{
-  margin: 4px 0 6px;
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 1.15;
-  letter-spacing: 0;
-  color: var(--ink);
-}}
-.title-trait {{ font-size: 20px; }}
-.meta {{
-  margin: 0 0 10px;
-  font-size: 14px;
-  color: var(--mute);
-}}
-.badge {{
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px solid var(--hairline);
-}}
-.badge-ok {{
-  background: var(--accent-green-soft);
-  color: var(--accent-green);
-  border-color: transparent;
-}}
-.badge-alert {{
-  background: var(--accent-red-soft);
-  color: var(--accent-red);
-  border-color: transparent;
-}}
-.badge-muted {{
-  background: var(--surface-card);
-  color: var(--ash);
-  border-color: var(--hairline);
-}}
-.badge-layer {{
-  background: var(--accent-blue-soft);
-  color: var(--accent-blue);
-  border-color: transparent;
-}}
-.badge-mode {{
-  background: var(--accent-blue-soft);
-  color: var(--accent-blue);
-  border-color: transparent;
-}}
-.badge-row {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}}
-.grid {{
-  display: grid;
-  gap: 12px;
-  margin-bottom: 12px;
-}}
-.grid.two {{ grid-template-columns: 1fr 1fr; }}
-.grid.three {{ grid-template-columns: 1fr 1fr 1fr; }}
-.panel {{
-  padding: 16px;
-  border-radius: 10px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-}}
-.panel-dim {{ opacity: 0.92; }}
-.panel-accent {{
-  background: var(--surface-elevated);
-  border-color: var(--hairline-strong);
-}}
-.label {{
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.1px;
-  color: var(--mute);
-}}
-.label.sub {{ margin-top: 12px; }}
-.bars {{ display: grid; gap: 8px; }}
-.bar-row {{
-  display: grid;
-  grid-template-columns: 52px 1fr 40px;
-  gap: 8px;
-  align-items: center;
-}}
-.bar-row-wide {{ grid-template-columns: 48px 1fr 52px; }}
-.bar-name {{ font-size: 14px; color: var(--mute); }}
-.bar-track {{
-  height: 8px;
-  border-radius: 4px;
-  background: var(--surface-card);
-  border: 1px solid var(--hairline);
-  overflow: hidden;
-}}
-.bar-fill {{
-  height: 100%;
-  border-radius: 3px;
-  background: var(--accent-blue);
-}}
-.bar-val {{ font-weight: 500; font-size: 14px; text-align: right; color: var(--ink); }}
-.stat-grid {{
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}}
-.stat-card {{
-  padding: 12px;
-  border-radius: 8px;
-  background: var(--surface-elevated);
-  border: 1px solid var(--hairline);
-  text-align: center;
-}}
-.stat-card strong {{
-  display: block;
-  font-size: 24px;
-  font-weight: 500;
-  color: var(--ink);
-}}
-.stat-card span {{ font-size: 13px; color: var(--mute); }}
-.divider {{
-  height: 1px;
-  margin: 12px 0;
-  background: var(--hairline);
-}}
-.chips {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}}
-.chip {{
-  display: inline-flex;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px solid transparent;
-}}
-.chip b {{ font-weight: 600; }}
-.lc-active {{ background: var(--accent-green-soft); color: var(--accent-green); }}
-.lc-strong {{ background: var(--accent-green-soft); color: var(--accent-green); }}
-.lc-expired {{ background: var(--accent-yellow-soft); color: var(--accent-yellow); }}
-.lc-bad {{ background: var(--accent-red-soft); color: var(--accent-red); }}
-.lc-warn {{ background: var(--accent-yellow-soft); color: var(--accent-yellow); }}
-.lc-revised {{ background: var(--accent-blue-soft); color: var(--accent-blue); }}
-.trait-total {{
-  margin: 0 0 8px;
-  font-size: 14px;
-  color: var(--mute);
-}}
-.trait-total strong {{ color: var(--ink); font-size: 16px; font-weight: 500; }}
-.bipolar {{ display: grid; gap: 8px; }}
-.bipolar-row {{
-  display: grid;
-  grid-template-columns: 52px 1fr 40px;
-  gap: 8px;
-  align-items: center;
-}}
-.bipolar-track {{
-  position: relative;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--surface-card);
-  border: 1px solid var(--hairline);
-}}
-.bipolar-mid {{
-  position: absolute;
-  left: 50%;
-  top: -1px;
-  width: 1px;
-  height: 10px;
-  background: var(--hairline-strong);
-  transform: translateX(-50%);
-}}
-.bipolar-fill {{
-  position: absolute;
-  top: 1px;
-  width: 6px;
-  height: 6px;
-  margin-left: -3px;
-  border-radius: 50%;
-  background: var(--accent-blue);
-}}
-.slice-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
-.slice-row {{
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--surface-card);
-  font-size: 14px;
-  color: var(--body);
-}}
-.thought-box {{
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 72px;
-}}
-.big-num {{
-  font-size: 32px;
-  font-weight: 500;
-  color: var(--ink);
-  line-height: 1;
-}}
-.big-label {{ font-size: 13px; color: var(--mute); margin-top: 4px; }}
-.evo-stack {{ display: grid; gap: 6px; }}
-.palette-row {{
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: transparent;
-  border: 1px solid transparent;
-}}
-.palette-row-active {{
-  background: var(--surface-card);
-  border-color: var(--hairline);
-}}
-.edge-palette-row {{
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  align-items: start;
-}}
-.evo-head {{
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--mute);
-  margin-bottom: 4px;
-}}
-.evo-deltas {{
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--accent-blue);
-  margin-bottom: 4px;
-}}
-.row-detail {{
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--body);
-}}
-.muted {{ color: var(--mute); }}
-.footnote {{
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--mute);
-}}
-.footnote-block {{ margin: 0 4px 4px; padding: 0 4px; }}
-.empty {{
-  font-size: 14px;
-  color: var(--mute);
-  padding: 6px 0;
-}}
-.flags {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}}
-.flag {{
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  font-size: 13px;
-  border: 1px solid var(--hairline);
-  background: var(--surface-elevated);
-}}
-.flag.on {{
-  background: var(--accent-green-soft);
-  border-color: transparent;
-}}
-.flag.off {{
-  background: var(--surface-card);
-  opacity: 0.9;
-}}
-.flag-name {{ color: var(--mute); }}
-.flag-state {{ font-weight: 500; color: var(--ink); }}
-.flag.off .flag-state {{ color: var(--ash); }}
-.panel-flags {{ margin-bottom: 0; }}
-.body-text {{
-  margin: 0;
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--body);
-}}
-.thought-body {{
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.6;
-  font-weight: 500;
-  color: var(--ink);
-}}
-.tags {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}}
-.keycap {{
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  height: 20px;
-  border-radius: 4px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--body);
-  background: linear-gradient(180deg, var(--key-bg-start), var(--key-bg-end));
-  border: 1px solid var(--hairline);
-}}
-.keycap-hit {{
-  color: var(--accent-green);
-  border-color: var(--hairline-strong);
-}}
-.impact-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
-.impact-chip {{
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  background: var(--surface-card);
-  border: 1px solid var(--hairline);
-  color: var(--body);
-}}
-.impact-chip strong {{ color: var(--accent-blue); margin-left: 4px; font-weight: 500; }}
-.list-body {{ margin: 0; padding-left: 18px; color: var(--body); }}
-.list-body li {{ margin: 6px 0; font-size: 14px; line-height: 1.55; }}
-.edge-stack {{ display: grid; gap: 6px; }}
-.edge-badge {{
-  display: inline-flex;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}}
-.edge-derived {{ background: var(--accent-blue-soft); color: var(--accent-blue); }}
-.edge-support {{ background: var(--accent-green-soft); color: var(--accent-green); }}
-.edge-bad {{ background: var(--accent-red-soft); color: var(--accent-red); }}
-.edge-warn {{ background: var(--accent-yellow-soft); color: var(--accent-yellow); }}
-.edge-revised {{ background: var(--accent-blue-soft); color: var(--accent-blue); }}
-.edge-target {{ font-size: 14px; color: var(--mute); word-break: break-all; }}
-.query-block {{
-  margin: 0;
-  padding: 12px 14px;
-  border-left: 3px solid var(--accent-blue);
-  border-radius: 0 8px 8px 0;
-  background: var(--surface-elevated);
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--body);
-}}
-.hit-stack {{ display: grid; gap: 8px; }}
-.hit-card {{ padding: 10px 12px; }}
-.hit-head {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: baseline;
-  margin-bottom: 6px;
-}}
-.hit-rank {{ font-size: 14px; font-weight: 600; color: var(--accent-blue); }}
-.hit-name {{ font-size: 16px; font-weight: 500; color: var(--ink); }}
-.hit-id {{ font-size: 12px; }}
-.hit-badges {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  margin-bottom: 6px;
-}}
-.hit-metric {{
-  font-size: 12px;
-  color: var(--mute);
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--surface-elevated);
-  border: 1px solid var(--hairline);
-}}
-.hit-tags {{ margin-bottom: 6px; }}
-.empty-inline {{ font-size: 13px; color: var(--mute); }}
-.hit-thought {{ margin: 0; font-size: 14px; line-height: 1.55; color: var(--mute); }}
-.skip-stack {{ display: grid; gap: 6px; }}
-.skip-row {{
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: transparent;
-  font-size: 14px;
-  opacity: 0.85;
-}}
-.skip-name {{ color: var(--ash); }}
-.skip-reason {{ color: var(--accent-yellow); font-weight: 500; text-align: right; }}
-</style>
-</head>
-<body>{body}</body>
-</html>"""
+        """Assemble a full HTML document for html2png.
+
+        CSS is stored in ``_DASHBOARD_CSS`` as a plain string so curly braces are
+        never interpreted by f-string formatting.
+        """
+        return (
+            "<!doctype html>\n"
+            '<html lang="zh-CN">\n'
+            "<head>\n"
+            '<meta charset="utf-8" />\n'
+            "<style>\n"
+            + _DASHBOARD_CSS
+            + "</style>\n"
+            "</head>\n"
+            "<body>"
+            + body
+            + "</body>\n"
+            "</html>"
+        )
 
 
 def build_dashboard_text(data: dict) -> str:
