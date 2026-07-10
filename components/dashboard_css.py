@@ -128,6 +128,11 @@ h1 {
   color: var(--accent-blue);
   border-color: transparent;
 }
+.badge-slot {
+  background: var(--accent-yellow-soft);
+  color: var(--accent-yellow);
+  border-color: transparent;
+}
 .badge-row {
   display: flex;
   flex-wrap: wrap;
@@ -361,6 +366,8 @@ h1 {
   line-height: 1;
 }
 .big-label { font-size: 13px; color: var(--mute); margin-top: 4px; }
+.slot-item { font-size: 13px; color: var(--body); padding: 3px 6px; }
+.slot-item.muted { color: var(--ash); font-size: 12px; }
 .evo-stack { display: grid; gap: 6px; }
 .palette-row {
   padding: 8px 10px;

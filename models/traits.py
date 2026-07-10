@@ -23,6 +23,7 @@ __all__ = [
     "query_crystallized_traits",
     "save_crystallized_trait",
     "set_trait_lifecycle_state",
+    "set_trait_slot",
 ]
 
 
@@ -316,3 +317,67 @@ def set_trait_lifecycle_state(
     if commit:
         conn.commit()
     return cursor.rowcount > 0
+
+
+def set_trait_slot(trait_id: str, slot_no: int | None, *, commit: bool = True) -> bool:
+    """将 trait 放入槽位 1–12，或 slot_no=None 清空槽。
+
+    原子：
+    1. trait 必须存在且 deleted=0
+    2. slot_no 非 None 时必须 1–12
+    3. 若目标槽已被其他 enabled 活跃 trait 占用：先清空对方 cabinet_slot_no
+    4. 再写本 trait 的 cabinet_slot_no
+    单事务 BEGIN/COMMIT；失败 ROLLBACK
+
+    Returns:
+        成功 True，trait 不存在或 slot 越界返回 False。
+    """
+    conn = _get_conn()
+
+    # 验证 slot 范围
+    if slot_no is not None and (slot_no < 1 or slot_no > 12):
+        return False
+
+    try:
+        conn.execute("BEGIN")
+
+        # 1. 检查 trait 存在且未删除
+        row = conn.execute(
+            "SELECT 1 FROM soul_crystallized_traits WHERE trait_id = ? AND deleted = 0",
+            (trait_id,),
+        ).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            return False
+
+        # 2. slot_no=None → 清空
+        if slot_no is None:
+            conn.execute(
+                "UPDATE soul_crystallized_traits SET cabinet_slot_no = NULL WHERE trait_id = ?",
+                (trait_id,),
+            )
+            if commit:
+                conn.execute("COMMIT")
+            return True
+
+        # 3. 目标槽已被其他 enabled 活跃 trait 占用 → 先清空对方
+        conn.execute(
+            """UPDATE soul_crystallized_traits SET cabinet_slot_no = NULL
+               WHERE cabinet_slot_no = ? AND enabled = 1 AND deleted = 0
+                 AND trait_id != ?""",
+            (slot_no, trait_id),
+        )
+
+        # 4. 写本 trait 的 cabinet_slot_no
+        conn.execute(
+            "UPDATE soul_crystallized_traits SET cabinet_slot_no = ? WHERE trait_id = ?",
+            (slot_no, trait_id),
+        )
+
+        if commit:
+            conn.execute("COMMIT")
+        return True
+
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise

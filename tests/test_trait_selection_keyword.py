@@ -47,6 +47,7 @@ def _make_trait(
         created_at=created_at,
         ideology_layer="conduct",
         origin_stream_id="",
+        cabinet_slot_no=None,
     )
 
 

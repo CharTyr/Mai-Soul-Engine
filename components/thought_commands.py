@@ -321,7 +321,8 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
     for t in traits:
         status = "enabled" if t.enabled else "disabled"
-        lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}")
+        slot_tag = f" #slot{t.cabinet_slot_no}" if t.cabinet_slot_no is not None else ""
+        lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}{slot_tag}")
         try:
             from ..utils.trait_tags import parse_tags_json
 
@@ -456,6 +457,7 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         "spectrum_impact": spectrum_impact,
         "evidence": evidence_list,
         "edges": edges_list,
+        "cabinet_slot_no": trait.cabinet_slot_no,
     }
 
     # ── 出图：card_enabled 且渲染成功则发图，否则降级文本 ──

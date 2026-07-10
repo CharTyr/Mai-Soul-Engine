@@ -442,6 +442,8 @@ class DashboardRenderer:
         mood_block = self._render_mood(mood)
         slice_block = self._render_group_slice(group_slice) if stream_id and isinstance(group_slice, dict) else ""
         thought_block = self._render_thought_cabinet(thought)
+        cabinet_data = _as_dict(data.get("cabinet"))
+        cabinet_block = self._render_cabinet(cabinet_data) if cabinet_data.get("slots_used", 0) > 0 else ""
         evolution_block = self._render_evolutions(evolutions[:5])
         flags_block = self._render_feature_flags(flags)
         graph_total = _as_int(data.get("graph_edge_total"))
@@ -486,6 +488,7 @@ class DashboardRenderer:
               <div class="label">最近演化</div>
               {evolution_block}
             </div>
+            {cabinet_block}
             <div class="panel panel-flags panel-bottom">
               <div class="label">功能开关</div>
               {flags_block}
@@ -632,6 +635,29 @@ class DashboardRenderer:
         </div>
         """
 
+    def _render_cabinet(self, cabinet: dict[str, Any]) -> str:
+        """渲染思维阁槽位占用条。"""
+        used = _as_int(cabinet.get("slots_used"))
+        total = _as_int(cabinet.get("slots_total", 12))
+        occ = cabinet.get("occupancy", [])
+        if not isinstance(occ, list):
+            occ = []
+        slots_html = ""
+        for slot in occ[:6]:  # 最多显示 6 个
+            slot_no = slot.get("slot_no", "?")
+            name = escape(str(slot.get("name", "")) or "—")
+            slots_html += f'<div class="slot-item">#{slot_no} {name}</div>'
+        if len(occ) > 6:
+            slots_html += f'<div class="slot-item muted">… 还有 {len(occ) - 6} 个</div>'
+        return f"""
+        <div class="panel">
+          <div class="label">思维阁槽位</div>
+          <div class="big-num">{used}</div>
+          <span class="big-label">/ {total}</span>
+          {slots_html}
+        </div>
+        """
+
     def _render_evolutions(self, items: list[Any]) -> str:
         if not items:
             return (
@@ -701,6 +727,9 @@ class DashboardRenderer:
         stream_raw = str(data.get("stream_id") or "").strip()
         stream_display = "全局" if stream_raw == "global" or not stream_raw else stream_raw
 
+        slot_no = data.get("cabinet_slot_no")
+        slot_badge = f'<span class="badge badge-slot">槽位 #{slot_no}</span>' if slot_no is not None else ""
+
         tags = _as_list(data.get("tags"))
         tag_html = self._render_tag_cloud(tags)
         question = _dash_or(data.get("question"), empty="暂无")
@@ -723,6 +752,7 @@ class DashboardRenderer:
                   {enable_badge}
                   <span class="badge badge-layer">{escape(layer_label)}</span>
                   {lc_chip}
+                  {slot_badge}
                 </div>
               </div>
             </div>
@@ -1025,6 +1055,16 @@ def build_dashboard_text(data: dict) -> str:
 
     lines.extend(["", f"【思想图谱】边总数 {_as_int(data.get('graph_edge_total'))}"])
 
+    cabinet_data = data.get("cabinet")
+    if cabinet_data and isinstance(cabinet_data, dict):
+        used = _as_int(cabinet_data.get("slots_used"))
+        lines.append("")
+        lines.append(f"【思维阁槽位】{used}/12")
+        occ = cabinet_data.get("occupancy", [])
+        if isinstance(occ, list):
+            for slot in occ:
+                lines.append(f"  槽{slot.get('slot_no')}: {slot.get('name', '—')} ({slot.get('trait_id', '')[:10]}...)")
+
     evolutions = data.get("recent_evolutions")
     if not isinstance(evolutions, list):
         evolutions = []
@@ -1072,8 +1112,13 @@ def build_trait_text(data: dict) -> str:
         f"◇ Trait · {name}",
         f"ID {trait_id} · {enabled} · {layer} · {lifecycle}",
         f"来源 {stream_display} · 置信 {conf}% · 创建 {_dash_or(data.get('created_at'))}",
-        "",
     ]
+
+    slot_no = data.get("cabinet_slot_no")
+    if slot_no is not None:
+        lines[1] += f" · 槽位 #{slot_no}"
+
+    lines.append("")
 
     tags = _as_list(data.get("tags"))
     if tags:

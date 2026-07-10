@@ -350,7 +350,7 @@ def _select_traits(
     text_norm = text.casefold()
 
     # ── Phase 1: Tag 命中 ────────────────────────────────────────
-    scored: list[tuple[float, float, Any]] = []
+    scored: list[tuple[float, float, float, Any]] = []
     tag_hit_trait_ids: set[str] = set()
     tag_hit_map: dict[str, list[str]] = {}  # trait_id -> hit tags
 
@@ -359,6 +359,7 @@ def _select_traits(
         if not tags:
             continue
         quality = _trait_quality_score(t)
+        has_slot = 1.0 if t.cabinet_slot_no else 0.0
         hit = 0
         hit_tag_list: list[str] = []
         for tag in tags:
@@ -366,11 +367,11 @@ def _select_traits(
                 hit += 1
                 hit_tag_list.append(tag)
         if hit > 0:
-            scored.append((float(hit), quality, t))
+            scored.append((has_slot, float(hit), quality, t))
             tag_hit_trait_ids.add(t.trait_id)
             tag_hit_map[t.trait_id] = hit_tag_list
 
-    scored.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
+    scored.sort(key=lambda x: (x[0], x[1], x[2], x[3].created_at), reverse=True)
 
     selected: list[Any] = []
     picked: list[dict] = []
@@ -380,7 +381,7 @@ def _select_traits(
 
     if max_traits > 0:
         # Phase 1: Tag 命中
-        for _score, _quality, t in scored:
+        for _has_slot, _score, _quality, t in scored:
             if len(selected) >= max_traits:
                 break
             selected.append(t)
@@ -393,11 +394,12 @@ def _select_traits(
                 "mode": "tag_hit",
                 "hit_tags": hit_tags,
                 "activation_reason": f"tag_hit:{','.join(hit_tags)}" if hit_tags else "tag_hit",
+                "cabinet_slot_no": t.cabinet_slot_no,
             })
 
         # Phase 2: 关键词补位（有 tag 但未命中，用文本相关召回）
         if len(selected) < max_traits:
-            keyword_candidates: list[tuple[float, float, Any, list[str]]] = []
+            keyword_candidates: list[tuple[float, float, float, Any, list[str]]] = []
             for t in traits:
                 if t.trait_id in tag_hit_trait_ids:
                     continue
@@ -407,10 +409,11 @@ def _select_traits(
                 rel_score, matched_terms = _text_relevance_score(t, text_norm)
                 if rel_score > 0:
                     quality = _trait_quality_score(t)
-                    keyword_candidates.append((rel_score, quality, t, matched_terms))
+                    has_slot = 1.0 if t.cabinet_slot_no else 0.0
+                    keyword_candidates.append((has_slot, rel_score, quality, t, matched_terms))
 
-            keyword_candidates.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
-            for rel_score, _quality, t, matched_terms in keyword_candidates:
+            keyword_candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3].created_at), reverse=True)
+            for _has_slot, rel_score, _quality, t, matched_terms in keyword_candidates:
                 if len(selected) >= max_traits:
                     break
                 selected.append(t)
@@ -422,10 +425,11 @@ def _select_traits(
                     "mode": "keyword_fill",
                     "hit_tags": [],
                     "activation_reason": f"keyword:{','.join(matched_terms)}",
+                    "cabinet_slot_no": t.cabinet_slot_no,
                 })
 
         # Phase 3: 无 tag 补位（按 impact）
-        tagless: list[tuple[float, float, Any]] = []
+        tagless: list[tuple[float, float, float, Any]] = []
         seen_selected_ids = {t.trait_id for t in selected}
         for t in traits:
             if t.trait_id in seen_selected_ids:
@@ -436,10 +440,11 @@ def _select_traits(
             impact = _trait_impact_score(t)
             if impact > 0.0:
                 quality = _trait_quality_score(t)
-                tagless.append((impact, quality, t))
+                has_slot = 1.0 if t.cabinet_slot_no else 0.0
+                tagless.append((has_slot, impact, quality, t))
 
-        tagless.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
-        for _score, _quality, t in tagless:
+        tagless.sort(key=lambda x: (x[0], x[1], x[2], x[3].created_at), reverse=True)
+        for _has_slot, _score, _quality, t in tagless:
             if len(selected) >= max_traits:
                 break
             selected.append(t)
@@ -451,18 +456,20 @@ def _select_traits(
                 "mode": "tagless_fill",
                 "hit_tags": [],
                 "activation_reason": "tagless_impact",
+                "cabinet_slot_no": t.cabinet_slot_no,
             })
 
     selection_mode = _map_selection_mode(tag_hit_count, keyword_fill_count, tagless_fill_count)
 
     # Fallback 最近影响最大的 traits
     if not selected and fallback_recent_impact and max_traits > 0:
-        fallback_candidates: list[tuple[float, datetime, Any]] = []
+        fallback_candidates: list[tuple[float, float, datetime, Any]] = []
         for t in traits:
             impact_score = _trait_impact_score(t)
-            fallback_candidates.append((impact_score, t.created_at, t))
-        fallback_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        selected = [t for _score, _ts, t in fallback_candidates[:max_traits] if _score > 0.0]
+            has_slot = 1.0 if t.cabinet_slot_no else 0.0
+            fallback_candidates.append((has_slot, impact_score, t.created_at, t))
+        fallback_candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        selected = [t for _has_slot, _score, _ts, t in fallback_candidates[:max_traits] if _score > 0.0]
         if selected:
             selection_mode = "fallback_recent_impact"
             picked = []
@@ -474,6 +481,7 @@ def _select_traits(
                     "mode": "fallback_recent_impact",
                     "hit_tags": [],
                     "activation_reason": "fallback_recent_impact",
+                    "cabinet_slot_no": t.cabinet_slot_no,
                 })
 
     # 补全 picked 中未设 mode 的项（兜底）

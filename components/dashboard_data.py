@@ -136,6 +136,22 @@ def collect_dashboard_data(plugin: Any, stream_id: str = "") -> dict[str, Any]:
         self_reflection_data["reflection_counts"] = count_self_reflections()
         self_reflection_data["recent_summary"] = build_recent_reflection_summary(stream_id, limit=10)
 
+    # ── 思维阁槽位占用 ────────────────────────────────────────────
+    cabinet_slots: list[dict[str, Any]] = []
+    for t in all_traits:
+        if t.cabinet_slot_no is not None:
+            cabinet_slots.append({
+                "slot_no": t.cabinet_slot_no,
+                "trait_id": t.trait_id,
+                "name": t.name or "",
+            })
+    cabinet_slots.sort(key=lambda x: x["slot_no"])
+    cabinet_data: dict[str, Any] = {
+        "slots_used": len(cabinet_slots),
+        "slots_total": 12,
+        "occupancy": cabinet_slots,
+    }
+
     return {
         "initialized": spectrum.initialized,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -168,4 +184,5 @@ def collect_dashboard_data(plugin: Any, stream_id: str = "") -> dict[str, Any]:
         "graph_edge_total": graph_edge_total,
         "feature_flags": feature_flags,
         "self_reflection": self_reflection_data,
+        "cabinet": cabinet_data,
     }
