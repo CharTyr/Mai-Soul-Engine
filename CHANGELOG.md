@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.4.0+] — dev 分支 Phase 0 正确性打磨（v2.4.0 基线之上）
+
+在 v2.4.0 发酵/自评能力之上修复线上假闭环，**不建 v3 表、不改宿主**。测试约 **222** 项。
+
+### 用户可感知
+
+- **思想默认属于 Bot 全局**：新内化 trait 的 `stream_id=global`，A 群形成的观点可在 B 群相关话题被召回；来源群记在 `origin_stream_id`（仅溯源）。
+- **注入更可追踪**：选择顺序增加关键词相关补位；`/soul_inspect` 与 dashboard 可展示 `activation_reason`（tag/keyword/tagless/fallback）。
+- **人设优先**：Soul 动态层**追加到宿主首条 system**，不再前置竞争 system；找不到宿主 system 时 fail-open 不注入。
+- **自我观察种子有日上限**：`self_observation_daily_cap`（默认 2，0=不限），与群聊种子日上限独立，减轻自评洪水。
+- **发酵更诚实**：关联度 LLM 失败不丢消息窗口；证据不足达最大延长次数时**不强制内化**，保持 fermenting 并尽量通知管理员。
+- **总开关可信**：`plugin.enabled=false` 同时停注入与四后台任务；配置热更可启停发酵；`api.enabled` schema 默认关。
+
+### 开发侧
+
+- 演化 `AnalysisResult` 三态（success/skipped/failed），skip 不再假计成功。
+- 光谱 `update_spectrum_value` 硬 clamp，去掉越界反弹。
+- 自评 `raw_consistency_score` / `normalized_consistency_score` / `correction_consumed_at`；种子门槛用 raw；`relevance_gate_enabled` 接线；跨 session 光谱修正且一次性消费。
+- `_compute_desired_tasks` + `_reconcile_background_tasks` 统一四任务生命周期。
+- 内化光谱 + trait + 图谱边 `commit=False` + BEGIN/COMMIT 单事务（0C）。
+- 详见 `AGENTS.md`「Phase 0A/0B 正确性打磨」与「0C」表。
+
 ## [2.3.0] — dev 分支（自我评价反馈回路）
 
 ### 用户可感知
