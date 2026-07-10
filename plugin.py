@@ -99,6 +99,10 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         except Exception as e:
             logger.error("[Mai-Soul-Engine] 审计日志初始化失败: %s", e, exc_info=True)
 
+        # 审计日志开关（从配置读取）
+        from .utils.audit_log import set_audit_enabled
+        set_audit_enabled(getattr(self.config.admin, "audit_enabled", True))
+
         # 旧版数据迁移（带超时，防宿主 DB 锁住时卡 on_load）
         project_root = self._plugin_dir.parent.parent
         try:
@@ -178,6 +182,9 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             # 刷新 P1 缓存
             self._wv_config_view = config_from_plugin(self)
             self._wv_service = WorldviewService(self._wv_config_view)
+            # 审计日志开关同步
+            from .utils.audit_log import set_audit_enabled
+            set_audit_enabled(getattr(self.config.admin, "audit_enabled", True))
             # 清注入冷却表（配置热更后旧冷却状态可能与新 max_traits/cooldown_seconds 不匹配）
             from .components.ideology_injector import _RECENT_TRAIT_INJECTION
             _RECENT_TRAIT_INJECTION.clear()

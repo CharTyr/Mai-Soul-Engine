@@ -17,7 +17,14 @@ from typing import Any
 
 _audit_lock = asyncio.Lock()
 _audit_file: Path | None = None
+_audit_enabled: bool = True
 AUDIT_MAX_BYTES = 8 * 1024 * 1024  # 8MB 轮转
+
+
+def set_audit_enabled(enabled: bool) -> None:
+    """设置审计日志开关（由 plugin.on_config_update 调用）。"""
+    global _audit_enabled
+    _audit_enabled = enabled
 
 
 def init_audit_log(plugin_dir: Path) -> None:
@@ -37,6 +44,8 @@ def _rotate_if_needed(path: Path) -> None:
 
 async def log_audit_event(event_type: str, **fields: Any) -> None:
     """写入一条结构化审计事件。"""
+    if not _audit_enabled:
+        return
     if not _audit_file:
         return
     entry: dict[str, Any] = {

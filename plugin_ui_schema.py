@@ -84,6 +84,14 @@ class AdminConfig(PluginConfigBase):
             placeholder="qq:12345678",
         ),
     )
+    audit_enabled: bool = Field(
+        default=True,
+        description="审计日志开关",
+        json_schema_extra=_ui(
+            "审计日志",
+            "关闭后不写 audit.jsonl",
+        ),
+    )
 
 
 class EvolutionConfig(PluginConfigBase):
@@ -136,6 +144,13 @@ class EvolutionConfig(PluginConfigBase):
         ge=50,
         description="单条消息截断",
         json_schema_extra=_ui("单条消息最大字符", "过长消息截断，控制 LLM 成本与噪声。"),
+    )
+    max_concurrent_groups: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="多群演化分析的最大并发数",
+        json_schema_extra=_ui("最大并发群数", "多群演化并行分析的上限，防 LLM 限流"),
     )
 
 

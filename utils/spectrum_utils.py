@@ -246,6 +246,9 @@ def apply_resistance(delta: int, last_dir: int, resistance: float = 0.5) -> tupl
 
 
 # 隐私脱敏
+# 覆盖的 PII 类型：URL、Email、@提及、手机号（含+86）、身份证号（18位）、
+# QQ群号（带关键词前缀）、≥7位连续数字串（覆盖无前缀 QQ 号/手机号）。
+# 5-6位纯数字无前缀时不匹配，避免误伤年份/年龄/计数等正常数字。
 def sanitize_text(text: str, max_chars: int = 500) -> str:
     """过滤敏感信息"""
     s = (text or "").replace("\n", " ").replace("\r", " ").strip()

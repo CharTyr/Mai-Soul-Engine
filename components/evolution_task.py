@@ -125,12 +125,21 @@ async def run_evolution_loop(plugin) -> None:
             except Exception:
                 seeds_before = 0
 
-            for group_config_id in groups_to_analyze:
-                logger.debug("开始分析群组: %s", group_config_id)
-                # _analyze_group 内部写 evolution / evolution_skip
-                before_audit_hint = True
-                await _analyze_group(plugin, group_config_id, evolution_rate)
-                analyzed += 1  # 调用次数；成功/跳过细节见 audit
+            # 多群并行分析（Semaphore 限流防 LLM 限流）
+            max_concurrent = int(getattr(plugin.config.evolution, "max_concurrent_groups", 3) or 3)
+            semaphore = asyncio.Semaphore(max(1, max_concurrent))
+
+            async def _analyze_with_sem(gid: str) -> bool:
+                async with semaphore:
+                    logger.debug("开始分析群组: %s", gid)
+                    await _analyze_group(plugin, gid, evolution_rate)
+                    return True
+
+            results = await asyncio.gather(
+                *[_analyze_with_sem(g) for g in groups_to_analyze],
+                return_exceptions=True,
+            )
+            analyzed = sum(1 for r in results if r is True)
 
             seeds_after = seeds_before
             try:
