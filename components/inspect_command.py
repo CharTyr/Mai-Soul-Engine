@@ -78,6 +78,7 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
         max_traits, fallback_recent_impact, now_ts,
     )
     selected_ids = {t.trait_id for t in selected}
+    picked_by_id: dict[str, dict] = {p["thought_id"]: p for p in picked}
 
     # ── 6. 组装 selected 列表 ────────────────────────────────────────
     text_norm = query_text.casefold()
@@ -97,6 +98,10 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
         if len(thought) > 80:
             thought = thought[:80] + "..."
 
+        # 从 picked 获取 activation_reason
+        p = picked_by_id.get(t.trait_id, {})
+        activation_reason = p.get("activation_reason", selection_mode)
+
         selected_list.append({
             "trait_id": t.trait_id,
             "name": t.name,
@@ -105,6 +110,7 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
             "confidence": float(t.confidence) / 100.0,
             "quality_score": _trait_quality_score(t),
             "matched_tags": hit_tags,
+            "activation_reason": activation_reason,
             "thought": thought,
         })
 

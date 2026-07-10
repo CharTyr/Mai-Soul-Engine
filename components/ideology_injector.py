@@ -224,6 +224,83 @@ def _extract_user_text(messages: list[dict]) -> str:
 # ─── 辅助选择器 ─────────────────────────────────────────────────────
 
 
+def _extract_terms(trait, max_terms: int = 12) -> list[str]:
+    """从 trait 中提取关键词 terms（name / tags / question / thought 前 80 字）。
+
+    用于轻量文本相关召回，避免 FTS/LLM。
+    返回去重、casefold 后的 term 列表（至少 2 字），最多 max_terms 个。
+    """
+    seen: set[str] = set()
+    terms: list[str] = []
+
+    def _add(raw: str) -> None:
+        token = raw.casefold()
+        if len(token) >= 2 and token not in seen:
+            seen.add(token)
+            terms.append(token)
+
+    def _split_add(text: str) -> None:
+        """从文本中提取 ≥2 字的子串。
+        对含空白文本按 token 切分；
+        对连续 CJK 文本提取 2-gram（兼顾中文词匹配）。
+        """
+        cleaned = text.strip(".,;:!?\"'()[]{}<>/\\|`~@#$%^&*+-=《》，。！？、；：""''（）【】")
+        if not cleaned:
+            return
+        parts = cleaned.split()
+        if len(parts) > 1:
+            for part in parts:
+                _add(part)
+        else:
+            # Continuous text (likely CJK) — extract 2-grams
+            for i in range(len(cleaned) - 1):
+                bigram = cleaned[i:i + 2]
+                _add(bigram)
+
+    # 1. tags（全部）
+    try:
+        tags = parse_tags_json(trait.tags_json or "[]")
+        for tag in tags:
+            _add(tag)
+    except Exception:
+        pass
+
+    # 2. name 整串（≥2 字）
+    name = (getattr(trait, "name", None) or "").strip()
+    if len(name) >= 2:
+        _add(name)
+
+    # 3. question 中 ≥2 字 token
+    question = (getattr(trait, "question", None) or "").strip()
+    if question:
+        _split_add(question)
+
+    # 4. thought 前 80 字中 ≥2 字 token
+    thought = (getattr(trait, "thought", None) or "").strip()[:80]
+    if thought:
+        _split_add(thought)
+
+    return terms[:max_terms]
+
+
+def _text_relevance_score(trait, text_norm: str) -> tuple[float, list[str]]:
+    """返回 (score, matched_terms)。
+
+    在 name / tags / question / thought 中提取关键词 terms，
+    检查每个 term 是否以子串形式出现在 text_norm 中。
+    Tag 已命中的 trait 不应调用此函数（已在 tag 阶段选中）。
+    每个 term 匹配计 1 分，score ≥ 1 才算相关。
+    """
+    terms = _extract_terms(trait)
+    matched: list[str] = []
+    for term in terms:
+        if term in text_norm:
+            matched.append(term)
+    if matched:
+        return float(len(matched)), matched
+    return 0.0, []
+
+
 def _is_inject_enabled(plugin, messages: list[dict]) -> dict | None:
     """检查是否应执行注入。返回 None 表示允许注入，或返回终止字典。"""
     if not plugin.config.plugin.enabled:
@@ -233,10 +310,20 @@ def _is_inject_enabled(plugin, messages: list[dict]) -> dict | None:
     return None
 
 
-def _map_selection_mode(tag_hit_count: int, tagless_fill_count: int) -> str:
-    """根据 tag 命中与补位计数推断 selection_mode。"""
+def _map_selection_mode(
+    tag_hit_count: int, keyword_fill_count: int = 0, tagless_fill_count: int = 0,
+) -> str:
+    """根据 tag 命中、关键词补位与无 tag 补位计数推断 selection_mode。"""
+    if tag_hit_count > 0 and keyword_fill_count > 0 and tagless_fill_count > 0:
+        return "tag_hit+keyword+tagless"
+    if tag_hit_count > 0 and keyword_fill_count > 0:
+        return "tag_hit+keyword"
+    if keyword_fill_count > 0 and tagless_fill_count > 0:
+        return "keyword+tagless"
     if tag_hit_count > 0 and tagless_fill_count > 0:
         return "tag_hit+tagless"
+    if keyword_fill_count > 0:
+        return "keyword_fill"
     if tag_hit_count > 0:
         return "tag_hit"
     if tagless_fill_count > 0:
@@ -252,49 +339,121 @@ def _select_traits(
     fallback_recent_impact: bool,
     now_ts: float,
 ) -> tuple[list, str, list[dict]]:
-    """Tag 匹配 + 无 tag 补位 + Fallback 选择。返回 (selected, selection_mode, picked)。
+    """Tag 匹配 + 关键词补位 + 无 tag 补位 + Fallback 选择。返回 (selected, selection_mode, picked)。
 
     traits 需已由调用方完成冷却筛选（_in_cooldown），此函数不再重复检查。
+
+    picked 每项包含：
+    - thought_id, name, score, mode, hit_tags
+    - activation_reason: "tag_hit:tag1,tag2" / "keyword:term1,term2" / "tagless_impact" / "fallback_recent_impact"
     """
     text_norm = text.casefold()
 
+    # ── Phase 1: Tag 命中 ────────────────────────────────────────
     scored: list[tuple[float, float, Any]] = []
-    tagless: list[tuple[float, float, Any]] = []
+    tag_hit_trait_ids: set[str] = set()
+    tag_hit_map: dict[str, list[str]] = {}  # trait_id -> hit tags
+
     for t in traits:
         tags = parse_tags_json(t.tags_json or "[]")
-        quality = _trait_quality_score(t)
         if not tags:
-            impact = _trait_impact_score(t)
-            if impact > 0.0:
-                tagless.append((impact, quality, t))
             continue
+        quality = _trait_quality_score(t)
         hit = 0
+        hit_tag_list: list[str] = []
         for tag in tags:
             if tag and tag.casefold() in text_norm:
                 hit += 1
+                hit_tag_list.append(tag)
         if hit > 0:
             scored.append((float(hit), quality, t))
+            tag_hit_trait_ids.add(t.trait_id)
+            tag_hit_map[t.trait_id] = hit_tag_list
 
     scored.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
-    tagless.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
 
     selected: list[Any] = []
+    picked: list[dict] = []
     tag_hit_count = 0
+    keyword_fill_count = 0
     tagless_fill_count = 0
 
     if max_traits > 0:
+        # Phase 1: Tag 命中
         for _score, _quality, t in scored:
             if len(selected) >= max_traits:
                 break
             selected.append(t)
             tag_hit_count += 1
+            hit_tags = tag_hit_map.get(t.trait_id, [])
+            picked.append({
+                "thought_id": t.trait_id,
+                "name": t.name,
+                "score": float(_score),
+                "mode": "tag_hit",
+                "hit_tags": hit_tags,
+                "activation_reason": f"tag_hit:{','.join(hit_tags)}" if hit_tags else "tag_hit",
+            })
+
+        # Phase 2: 关键词补位（有 tag 但未命中，用文本相关召回）
+        if len(selected) < max_traits:
+            keyword_candidates: list[tuple[float, float, Any, list[str]]] = []
+            for t in traits:
+                if t.trait_id in tag_hit_trait_ids:
+                    continue
+                tags = parse_tags_json(t.tags_json or "[]")
+                if not tags:
+                    continue  # 有 tag 的 trait 才进入关键词补位
+                rel_score, matched_terms = _text_relevance_score(t, text_norm)
+                if rel_score > 0:
+                    quality = _trait_quality_score(t)
+                    keyword_candidates.append((rel_score, quality, t, matched_terms))
+
+            keyword_candidates.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
+            for rel_score, _quality, t, matched_terms in keyword_candidates:
+                if len(selected) >= max_traits:
+                    break
+                selected.append(t)
+                keyword_fill_count += 1
+                picked.append({
+                    "thought_id": t.trait_id,
+                    "name": t.name,
+                    "score": rel_score,
+                    "mode": "keyword_fill",
+                    "hit_tags": [],
+                    "activation_reason": f"keyword:{','.join(matched_terms)}",
+                })
+
+        # Phase 3: 无 tag 补位（按 impact）
+        tagless: list[tuple[float, float, Any]] = []
+        seen_selected_ids = {t.trait_id for t in selected}
+        for t in traits:
+            if t.trait_id in seen_selected_ids:
+                continue
+            tags = parse_tags_json(t.tags_json or "[]")
+            if tags:
+                continue
+            impact = _trait_impact_score(t)
+            if impact > 0.0:
+                quality = _trait_quality_score(t)
+                tagless.append((impact, quality, t))
+
+        tagless.sort(key=lambda x: (x[0], x[1], x[2].created_at), reverse=True)
         for _score, _quality, t in tagless:
             if len(selected) >= max_traits:
                 break
             selected.append(t)
             tagless_fill_count += 1
+            picked.append({
+                "thought_id": t.trait_id,
+                "name": t.name,
+                "score": _score,
+                "mode": "tagless_fill",
+                "hit_tags": [],
+                "activation_reason": "tagless_impact",
+            })
 
-    selection_mode = _map_selection_mode(tag_hit_count, tagless_fill_count)
+    selection_mode = _map_selection_mode(tag_hit_count, keyword_fill_count, tagless_fill_count)
 
     # Fallback 最近影响最大的 traits
     if not selected and fallback_recent_impact and max_traits > 0:
@@ -306,26 +465,20 @@ def _select_traits(
         selected = [t for _score, _ts, t in fallback_candidates[:max_traits] if _score > 0.0]
         if selected:
             selection_mode = "fallback_recent_impact"
+            picked = []
+            for t in selected:
+                picked.append({
+                    "thought_id": t.trait_id,
+                    "name": t.name,
+                    "score": _trait_impact_score(t),
+                    "mode": "fallback_recent_impact",
+                    "hit_tags": [],
+                    "activation_reason": "fallback_recent_impact",
+                })
 
-    # 构建 picked 列表
-    picked: list[dict] = []
-    for t in selected:
-        tags = parse_tags_json(t.tags_json or "[]")
-        score = 0.0
-        hit_tags: list[str] = []
-        if tags:
-            for tag in tags:
-                if tag and tag.casefold() in text_norm:
-                    score += 1.0
-                    hit_tags.append(tag)
-        picked_score = score if hit_tags else _trait_impact_score(t)
-        picked.append({
-            "thought_id": t.trait_id,
-            "name": t.name,
-            "score": picked_score,
-            "mode": selection_mode,
-            "hit_tags": hit_tags,
-        })
+    # 补全 picked 中未设 mode 的项（兜底）
+    for item in picked:
+        item.setdefault("mode", selection_mode)
 
     return selected, selection_mode, picked
 
@@ -388,7 +541,11 @@ def _policy_from_selection(selection_mode: str, picked: list[dict]) -> str:
         return "spectrum_only"
     policies = {
         "tag_hit": "tags+spectrum",
+        "tag_hit+keyword": "tags+keyword+spectrum",
+        "tag_hit+keyword+tagless": "tags+keyword+tagless+spectrum",
         "tag_hit+tagless": "tags+tagless+spectrum",
+        "keyword_fill": "keyword+spectrum",
+        "keyword+tagless": "keyword+tagless+spectrum",
         "tagless_fill": "tagless+spectrum",
         "fallback_recent_impact": "fallback+spectrum",
     }

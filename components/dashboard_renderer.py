@@ -26,7 +26,11 @@ _EDGE_RELATION_CSS: dict[str, str] = {
 
 _SELECTION_MODE_LABELS: dict[str, str] = {
     "tag_hit": "标签命中",
+    "tag_hit+keyword": "标签命中 + 关键词补位",
+    "tag_hit+keyword+tagless": "标签命中 + 关键词 + 无标签补位",
     "tag_hit+tagless": "标签命中 + 无标签补位",
+    "keyword_fill": "关键词补位",
+    "keyword+tagless": "关键词补位 + 无标签补位",
     "tagless_fill": "无标签补位",
     "fallback_recent_impact": "近期影响回退",
     "spectrum_only": "仅光谱注入",
@@ -1152,10 +1156,12 @@ def build_inspect_text(data: dict) -> str:
             quality = _as_float(item.get("quality_score"))
             tags = _as_list(item.get("matched_tags"))
             tag_s = " ".join(str(t).strip() for t in tags if str(t).strip()) if tags else "无标签"
+            reason = _dash_or(item.get("activation_reason"), empty="—")
             thought = _dash_or(item.get("thought"), empty="—")
             lines.append(
                 f"  #{idx} {name} [{layer}/{lc}] 置信{conf}% 质量{quality:.2f} 标签:{tag_s}"
             )
+            lines.append(f"    原因: {reason}")
             lines.append(f"    {thought}")
 
     lines.extend(["", "【跳过】"])
