@@ -445,6 +445,53 @@ h1 {
 }
 .impact-chip strong { color: var(--accent-blue); margin-left: 4px; font-weight: 700; }
 
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  border: 1px dashed var(--hairline);
+}
+.empty-state-compact {
+  min-height: 48px;
+  margin-top: 4px;
+}
+.empty-state-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--body);
+}
+.empty-state-desc {
+  font-size: 12px;
+  color: var(--mute);
+  line-height: 1.45;
+}
+.bottom-stack {
+  gap: 14px;
+  margin-top: 4px;
+}
+.panel-bottom .label {
+  margin-bottom: 10px;
+}
+.placeholder-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ash);
+}
+.placeholder-title {
+  margin-top: 2px;
+}
+.dash > .grid,
+.dash > .bottom-stack {
+  width: 100%;
+}
+
 .meta-sep { color: var(--ash); }
 .meta-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -500,8 +547,8 @@ h1 {
 }
 .bottom-stack {
   display: grid;
-  gap: 12px;
-  margin-top: 2px;
+  gap: 14px;
+  margin-top: 4px;
 }
 .bottom-stack > .panel {
   margin: 0;
@@ -959,11 +1006,11 @@ class DashboardRenderer:
           </section>
 
           <section class="bottom-stack">
-            <div class="panel">
+            <div class="panel panel-bottom">
               <div class="label">最近演化</div>
               {evolution_block}
             </div>
-            <div class="panel panel-flags">
+            <div class="panel panel-flags panel-bottom">
               <div class="label">功能开关</div>
               {flags_block}
             </div>
@@ -1004,13 +1051,24 @@ class DashboardRenderer:
 
     def _render_lifecycle(self, lifecycle: dict[str, Any], trait_total: int) -> str:
         chips: list[str] = []
+        nonzero = 0
         for key in _LIFECYCLE_LABELS:
             count = _as_int(lifecycle.get(key))
+            if count:
+                nonzero += count
             css = _LIFECYCLE_CSS[key]
             chips.append(
                 f'<span class="chip {css}">{escape(_LIFECYCLE_LABELS[key])} <b>{count}</b></span>'
             )
         total_line = f'<p class="trait-total">Trait 总数 <strong>{trait_total}</strong></p>'
+        if trait_total <= 0 and nonzero <= 0:
+            return (
+                total_line
+                + '<div class="empty-state empty-state-compact">'
+                + '<div class="empty-state-title">暂无 Trait</div>'
+                + '<div class="empty-state-desc">思维阁种子通过后会出现在这里</div>'
+                + "</div>"
+            )
         return total_line + '<div class="chips">' + "".join(chips) + "</div>"
 
     def _render_mood(self, mood: dict[str, Any]) -> str:
@@ -1070,9 +1128,10 @@ class DashboardRenderer:
         <div class="panel panel-dim panel-placeholder">
           <div class="label">本群切片</div>
           <div class="placeholder-body">
-            <div class="placeholder-title">全局视角</div>
-            <p class="placeholder-desc">当前不是群会话视角，群切片不会显示。</p>
-            <p class="placeholder-hint">在群里执行 /soul_dashboard 可查看本群偏移。</p>
+            <div class="placeholder-kicker">当前视角</div>
+            <div class="placeholder-title">全局 / 非群会话</div>
+            <p class="placeholder-desc">群切片只在群聊视角下提供偏移信息。</p>
+            <p class="placeholder-hint">到目标群执行 /soul_dashboard 查看本群切片。</p>
           </div>
         </div>
         """
@@ -1092,7 +1151,12 @@ class DashboardRenderer:
 
     def _render_evolutions(self, items: list[Any]) -> str:
         if not items:
-            return '<div class="empty">暂无演化记录</div>'
+            return (
+                '<div class="empty-state">'
+                '<div class="empty-state-title">暂无演化记录</div>'
+                '<div class="empty-state-desc">光谱演化产生后会显示在这里</div>'
+                "</div>"
+            )
         cards: list[str] = []
         for item in items:
             if not isinstance(item, dict):
