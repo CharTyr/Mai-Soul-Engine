@@ -1,9 +1,10 @@
-"""端到端测试 internalize_seed 的三种关系路径。
+"""端到端测试 internalize_seed 的三种关系路径与 Phase 0C 原子性。
 
 mock LLM 返回预置 JSON 响应，验证：
 - duplicate → 旧 trait 被 strengthened + evidence 合并
 - contradicted → 新 trait 创建 + 旧 trait disabled + contradicted_by 边
 - none → 新 trait 创建
+- atomic_rollback → 写入阶段异常时 spectrum + trait 全部回滚
 
 从宿主仓根运行：``uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/test_internalize_seed_e2e.py -q``
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -179,3 +181,69 @@ async def test_internalize_none_creates_new(soul_db: Any) -> None:
     assert new_trait is not None
     assert new_trait.enabled is True
     assert new_trait.lifecycle_state == "active"
+
+
+@pytest.mark.asyncio
+async def test_internalize_seed_atomic_rollback_on_graph_failure(soul_db: Any) -> None:
+    """Phase 0C 原子性：register_trait_graph 失败 → 全部回滚，光谱+traits 不变。"""
+    spec_before = soul_db.get_or_create_spectrum("global")
+    before_sincerity = spec_before.sincerity
+    before_engagement = spec_before.engagement
+    before_closeness = spec_before.closeness
+    before_directness = spec_before.directness
+
+    engine = _make_engine([
+        _INTERNALIZE_RESPONSE,
+        {"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": ""},
+    ])
+
+    # 让 register_trait_graph 抛出异常，触发事务回滚
+    wv_mod = _import_soul_submodule("worldview.service")
+
+    def _fail_on_graph(self, **kwargs):
+        raise RuntimeError("模拟 graph 写入故障")
+
+    with patch.object(wv_mod.WorldviewService, "register_trait_graph", _fail_on_graph):
+        result = await engine.internalize_seed(_make_seed())
+
+    assert result["success"] is False, "预期内化失败"
+
+    # 光谱不变
+    spec_after = soul_db.get_or_create_spectrum("global")
+    assert spec_after.sincerity == before_sincerity
+    assert spec_after.engagement == before_engagement
+    assert spec_after.closeness == before_closeness
+    assert spec_after.directness == before_directness
+
+    # 无新 trait 创建（原有的 active trait 应只有 0 个）
+    all_traits = soul_db.query_crystallized_traits(enabled=True)
+    assert len(all_traits) == 0
+
+
+@pytest.mark.asyncio
+async def test_internalize_seed_atomic_success_creates_both(soul_db: Any) -> None:
+    """Phase 0C 原子性：成功路径下 spectrum + trait 同时持久化。"""
+    spec_before = soul_db.get_or_create_spectrum("global")
+    before_sincerity = spec_before.sincerity
+
+    engine = _make_engine([
+        _INTERNALIZE_RESPONSE,
+        {"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": ""},
+    ])
+
+    result = await engine.internalize_seed(_make_seed())
+    assert result["success"] is True
+
+    # 光谱变更
+    spec_after = soul_db.get_or_create_spectrum("global")
+    # sincerity += 3 (from _INTERNALIZE_RESPONSE.spectrum_impact)
+    assert spec_after.sincerity != before_sincerity
+
+    # trait 存在
+    new_trait = soul_db.get_crystallized_trait_by_id(result["trait_id"])
+    assert new_trait is not None
+    assert new_trait.enabled is True
+
+    # 思想图谱边存在（derived_from）
+    edges = soul_db.list_thought_edges_for_trait(result["trait_id"])
+    assert any(e.relation_type == "derived_from" for e in edges)

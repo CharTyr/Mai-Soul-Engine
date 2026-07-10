@@ -47,9 +47,9 @@ class CrystallizedTrait:
     lifecycle_state: str = "active"
     origin_stream_id: str = ""
 
-    def save(self) -> None:
+    def save(self, commit: bool = True) -> None:
         """持久化当前 trait。"""
-        save_crystallized_trait(self)
+        save_crystallized_trait(self, commit=commit)
 
 
 # ─── CrystallizedTrait CRUD ─────────────────────────────────────────
@@ -72,6 +72,7 @@ def create_crystallized_trait(
     ideology_layer: str = "conduct",
     lifecycle_state: str = "active",
     origin_stream_id: str = "",
+    commit: bool = True,
 ) -> None:
     """创建固化 trait。
 
@@ -79,6 +80,7 @@ def create_crystallized_trait(
         origin_stream_id: 来源流 ID（内化种子所属的群 stream_id），
             用于溯源该 trait 最初来源于哪个群的讨论。
             空串表示无特定来源。
+        commit: 是否立即提交。atomic 路径传 ``commit=False``（由外层事务统一管理）。
     """
     # 空串 = 未设置 = 全局作用域，归一为显式 GLOBAL_STREAM，避免与"异常空值"混淆
     if not stream_id:
@@ -100,7 +102,8 @@ def create_crystallized_trait(
             origin_stream_id or "",
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def get_crystallized_trait_by_id(trait_id: str) -> CrystallizedTrait | None:
@@ -112,7 +115,7 @@ def get_crystallized_trait_by_id(trait_id: str) -> CrystallizedTrait | None:
     return _row_to_trait(row) if row else None
 
 
-def save_crystallized_trait(t: CrystallizedTrait) -> None:
+def save_crystallized_trait(t: CrystallizedTrait, commit: bool = True) -> None:
     """更新 trait。"""
     conn = _get_conn()
     conn.execute(
@@ -132,7 +135,8 @@ def save_crystallized_trait(t: CrystallizedTrait) -> None:
             t.trait_id,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def query_crystallized_traits(
@@ -283,6 +287,7 @@ def set_trait_lifecycle_state(
     lifecycle_state: str,
     *,
     enabled: bool | None = None,
+    commit: bool = True,
 ) -> bool:
     """设置 trait 的生命周期状态，可选同时改 enabled。
 
@@ -302,5 +307,6 @@ def set_trait_lifecycle_state(
             "UPDATE soul_crystallized_traits SET lifecycle_state = ? WHERE trait_id = ?",
             (lifecycle_state, trait_id),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cursor.rowcount > 0

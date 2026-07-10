@@ -145,6 +145,7 @@ def apply_spectrum_deltas(
     group_id: str = "",
     reason: str = "",
     write_history: bool = True,
+    commit: bool = True,
 ) -> dict[str, int]:
     """统一光谱写入闸门 — 所有改人设数值的路径都经此（ora-2 三回路瘦身高优先级建议）。
 
@@ -164,6 +165,7 @@ def apply_spectrum_deltas(
         group_id: 演化历史 group_id（回路1 传 stream_id；回路3 传 "global"；回路2 留空）。
         reason: 附加到 history reason 的说明。
         write_history: 是否写 soul_evolution_history（默认 True；回路2 经此获得可观测性）。
+        commit: 是否立即提交。``internalize_seed`` 等的原子化路径传 ``commit=False``（由外层事务统一 commit/rollback）。
 
     Returns:
         实际应用的 deltas（经 resistance/smooth 后），供调用方做 slice/mood/audit 副作用。
@@ -209,8 +211,38 @@ def apply_spectrum_deltas(
 
     # 事务原子化：直接内联 SQL，绕过 save_spectrum/create_evolution_history 各自的 commit，
     # 确保 UPDATE 光谱 + INSERT 历史在同一事务内（with conn: 退出时统一 commit/rollback）。
+    # commit=False 模式：由外层事务统一管理，此处不 with conn: 不 commit。
     conn = _get_conn()
-    with conn:
+    if commit:
+        with conn:
+            conn.execute(
+                """UPDATE soul_ideology_spectrum SET
+                   sincerity = ?, engagement = ?, closeness = ?, directness = ?,
+                   last_sincerity_dir = ?, last_engagement_dir = ?, last_closeness_dir = ?, last_directness_dir = ?,
+                   initialized = ?, last_evolution = ?, updated_at = ?
+                   WHERE scope_id = ?""",
+                (
+                    spectrum.sincerity, spectrum.engagement, spectrum.closeness, spectrum.directness,
+                    spectrum.last_sincerity_dir, spectrum.last_engagement_dir,
+                    spectrum.last_closeness_dir, spectrum.last_directness_dir,
+                    int(spectrum.initialized), _dt_to_str(now), _dt_to_str(now),
+                    spectrum.scope_id,
+                ),
+            )
+            if write_history:
+                tagged_reason = f"[{source}] {reason}" if reason else f"[{source}]"
+                conn.execute(
+                    """INSERT INTO soul_evolution_history
+                       (timestamp, group_id, sincerity_delta, engagement_delta, closeness_delta, directness_delta, reason)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        _dt_to_str(now), group_id,
+                        applied.get("sincerity", 0), applied.get("engagement", 0),
+                        applied.get("closeness", 0), applied.get("directness", 0),
+                        tagged_reason,
+                    ),
+                )
+    else:
         conn.execute(
             """UPDATE soul_ideology_spectrum SET
                sincerity = ?, engagement = ?, closeness = ?, directness = ?,

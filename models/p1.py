@@ -162,6 +162,7 @@ def create_thought_edge(
     to_trait_id: str,
     relation_type: str,
     source_ref: str = "",
+    commit: bool = True,
 ) -> None:
     conn = _get_conn()
     conn.execute(
@@ -170,7 +171,8 @@ def create_thought_edge(
            VALUES (?, ?, ?, ?, ?)""",
         (from_trait_id, to_trait_id or "", relation_type, source_ref, _dt_to_str(datetime.now())),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def list_thought_edges_for_trait(trait_id: str, limit: int = 20) -> list[ThoughtEdge]:

@@ -282,6 +282,7 @@ class WorldviewService:
         trait_id: str,
         seed_id: str = "",
         merged_into: str | None = None,
+        commit: bool = True,
     ) -> None:
         if seed_id:
             im.create_thought_edge(
@@ -289,6 +290,7 @@ class WorldviewService:
                 to_trait_id="",
                 relation_type="derived_from",
                 source_ref=seed_id,
+                commit=commit,
             )
         if merged_into:
             im.create_thought_edge(
@@ -296,4 +298,5 @@ class WorldviewService:
                 to_trait_id=merged_into,
                 relation_type="supports",
                 source_ref="dedup_merge",
+                commit=commit,
             )

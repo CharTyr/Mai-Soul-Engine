@@ -142,54 +142,73 @@ class InternalizationEngine:
                 internalization_confidence = 0.0
             internalization_confidence = max(0.0, min(1.0, internalization_confidence))
 
-            spectrum_impact = await self._apply_spectrum_impact(result.get("spectrum_deltas", result.get("spectrum_impact", {})), is_fermented=is_fermented)
-            logger.debug(f"光谱影响已应用: {spectrum_impact}")
+            # Phase 0C：原子化内化 — 光谱 + trait + graph edges 在同一事务中
+            # 先完成 LLM 处理后，再统一进入 DB 写入阶段。BEGIN 必须放在所有 DML 之前，
+            # 否则 isolation_level='' 下 conn.execute(UPDATE) 会隐式开启事务。
+            from ..models._conn import _get_conn as _get_db_conn
 
-            now = datetime.now()
-            trait_id = f"trait_{uuid.uuid4().hex[:8]}"
-            question = _compact_line(seed_info.get("event", ""), 140)
-            reason = _compact_line(seed_info.get("reasoning", ""), 140)
-            question_text = f"{seed_info.get('type', '思维')}: {question}" if question else f"{seed_info.get('type', '思维')}"
-            if reason:
-                question_text = f"{question_text}\n线索: {reason}"
-            seed_info["question"] = question_text
-            tags = result.get("tags") or []
-            seed_info["tags"] = normalize_tags(tags)
-            trait_confidence = max(seed_info["seed_confidence"], seed_info["intensity"], internalization_confidence)
-            trait_confidence = max(0.0, min(1.0, float(trait_confidence)))
-            evidence_entry = {
-                "seed_id": seed_info.get("id", ""),
-                "stream_id": seed_info.get("stream_id", ""),
-                "type": seed_info.get("type", ""),
-                "event": seed_info.get("event", ""),
-                "reasoning": seed_info.get("reasoning", ""),
-                "created_at": seed_info.get("created_at", None),
-                "intensity": seed_info.get("intensity", 0.0),
-                "seed_confidence": seed_info.get("seed_confidence", 0.0),
-                "internalization_confidence": internalization_confidence,
-                "evidence": seed_info.get("evidence", []) or [],
-            }
+            conn = _get_db_conn()
+            conn.execute("BEGIN")
+            try:
+                spectrum_impact = await self._apply_spectrum_impact(
+                    result.get("spectrum_deltas", result.get("spectrum_impact", {})),
+                    is_fermented=is_fermented,
+                    commit=False,
+                )
+                logger.debug(f"光谱影响已应用（暂未提交）: {spectrum_impact}")
 
-            stored = await self._upsert_crystallized_trait(
-                seed_info=seed_info,
-                result=result,
-                impact=spectrum_impact,
-                trait_id=trait_id,
-                now=now,
-                evidence_entry=evidence_entry,
-                confidence=int(round(trait_confidence * 100)),
-                dedup=dedup,
-            )
-            trait_id = stored.get("trait_id", trait_id)
+                now = datetime.now()
+                trait_id = f"trait_{uuid.uuid4().hex[:8]}"
+                question = _compact_line(seed_info.get("event", ""), 140)
+                reason = _compact_line(seed_info.get("reasoning", ""), 140)
+                question_text = f"{seed_info.get('type', '思维')}: {question}" if question else f"{seed_info.get('type', '思维')}"
+                if reason:
+                    question_text = f"{question_text}\n线索: {reason}"
+                seed_info["question"] = question_text
+                tags = result.get("tags") or []
+                seed_info["tags"] = normalize_tags(tags)
+                trait_confidence = max(seed_info["seed_confidence"], seed_info["intensity"], internalization_confidence)
+                trait_confidence = max(0.0, min(1.0, float(trait_confidence)))
+                evidence_entry = {
+                    "seed_id": seed_info.get("id", ""),
+                    "stream_id": seed_info.get("stream_id", ""),
+                    "type": seed_info.get("type", ""),
+                    "event": seed_info.get("event", ""),
+                    "reasoning": seed_info.get("reasoning", ""),
+                    "created_at": seed_info.get("created_at", None),
+                    "intensity": seed_info.get("intensity", 0.0),
+                    "seed_confidence": seed_info.get("seed_confidence", 0.0),
+                    "internalization_confidence": internalization_confidence,
+                    "evidence": seed_info.get("evidence", []) or [],
+                }
 
-            from ..worldview.service import WorldviewService, config_from_plugin
+                stored = await self._upsert_crystallized_trait(
+                    seed_info=seed_info,
+                    result=result,
+                    impact=spectrum_impact,
+                    trait_id=trait_id,
+                    now=now,
+                    evidence_entry=evidence_entry,
+                    confidence=int(round(trait_confidence * 100)),
+                    dedup=dedup,
+                    commit=False,
+                )
+                trait_id = stored.get("trait_id", trait_id)
 
-            wv = WorldviewService(config_from_plugin(self._plugin))
-            wv.register_trait_graph(
-                trait_id=trait_id,
-                seed_id=str(seed_info.get("id", "") or ""),
-                merged_into=stored.get("merged_into"),
-            )
+                from ..worldview.service import WorldviewService, config_from_plugin
+
+                wv = WorldviewService(config_from_plugin(self._plugin))
+                wv.register_trait_graph(
+                    trait_id=trait_id,
+                    seed_id=str(seed_info.get("id", "") or ""),
+                    merged_into=stored.get("merged_into"),
+                    commit=False,
+                )
+
+                conn.commit()
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
             logger.info(f"种子内化成功: {seed_info.get('id', '')}, 观点: {result['thought'][:50]}...")
             return {
@@ -229,7 +248,7 @@ class InternalizationEngine:
             logger.warning(f"无法解析内化响应: {response}")
             return None
 
-    async def _apply_spectrum_impact(self, impact: dict, is_fermented: bool = False) -> dict:
+    async def _apply_spectrum_impact(self, impact: dict, is_fermented: bool = False, commit: bool = True) -> dict:
         from ..models.ideology_model import apply_spectrum_deltas, get_or_create_spectrum
 
         spectrum = get_or_create_spectrum("global")
@@ -266,6 +285,7 @@ class InternalizationEngine:
             max_per_axis=max_delta,
             group_id="",
             reason="发酵后 trait 内化光谱影响" if is_fermented else "trait 内化光谱影响",
+            commit=commit,
         )
 
         logger.debug(f"应用光谱影响后: {applied}")
@@ -281,6 +301,7 @@ class InternalizationEngine:
         evidence_entry: dict,
         confidence: int,
         dedup: dict | None,
+        commit: bool = True,
     ) -> dict:
         import json
 
@@ -325,7 +346,7 @@ class InternalizationEngine:
                     trait.spectrum_impact_json = json.dumps(impact or {}, ensure_ascii=False)
                     trait.lifecycle_state = "strengthened"
                     trait.created_at = now
-                    trait.save()
+                    trait.save(commit=commit)
                     logger.info(f"已合并到已有 trait: {target_trait_id} (seed={seed_info.get('id', '')})")
                     return {"trait_id": target_trait_id, "merged": True, "merged_into": target_trait_id, "dedup_similarity": similarity}
 
@@ -372,15 +393,16 @@ class InternalizationEngine:
                         ideology_layer=layer,
                         lifecycle_state="active",
                         origin_stream_id=origin,  # 经历来源
+                        commit=commit,
                     )
 
                     # 2) 新 trait 创建成功后，再标记旧 trait（contradicted 同时禁用）
                     if relation == "contradicted":
-                        set_trait_lifecycle_state(target_trait_id, "contradicted", enabled=False)
+                        set_trait_lifecycle_state(target_trait_id, "contradicted", enabled=False, commit=commit)
                     elif relation == "weakened":
-                        set_trait_lifecycle_state(target_trait_id, "weakened")
+                        set_trait_lifecycle_state(target_trait_id, "weakened", commit=commit)
                     elif relation == "revised":
-                        set_trait_lifecycle_state(target_trait_id, "revised")
+                        set_trait_lifecycle_state(target_trait_id, "revised", commit=commit)
                     logger.info(f"旧 trait {target_trait_id} 被标记为 {relation} (seed={seed_info.get('id', '')})")
 
                     # 3) 写思想图谱边：旧 trait → 新 trait
@@ -391,6 +413,7 @@ class InternalizationEngine:
                         to_trait_id=trait_id,
                         relation_type=edge_type,
                         source_ref=seed_info.get("id", "") or "",
+                        commit=commit,
                     )
                     logger.info(f"已创建边 {edge_type}: {target_trait_id} → {trait_id} (seed={seed_info.get('id', '')})")
                     return {"trait_id": trait_id, "merged": False, "relation": relation, "related_to": target_trait_id}
@@ -423,6 +446,7 @@ class InternalizationEngine:
             ideology_layer=layer,
             lifecycle_state="active",
             origin_stream_id=origin,  # 经历来源
+            commit=commit,
         )
         logger.info(f"已创建 trait 记录: {trait_id} (seed={seed_info.get('id', '')})")
         return {"trait_id": trait_id, "merged": False}
