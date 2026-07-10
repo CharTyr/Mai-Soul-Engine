@@ -1,4 +1,5 @@
 """意识形态光谱注入提示词 — 群聊社交四维（v2.1.0 重构）。
+Prompt Version: v2.3.0
 
 四维从政治光谱（economic/social/diplomatic/progressive）换为群聊 AI 真实会经历的社交轴：
 - sincerity（真诚度）：真实自然、不表演 ↔ 重视场面与分寸、配合社交氛围
@@ -67,6 +68,19 @@ DIRECTNESS_PROMPTS = {
 
 
 def get_prompt_level(value: int, enable_extreme: bool = False) -> str:
+    """光谱值 → prompt 档位。
+
+    阈值设计意图：
+    - ≤5 neutral（45-55，11 个值）：宽中立带，避免微小波动触发注入
+    - ≤15 → 1 级（36-44/56-64，18 个值）：最常见档位
+    - ≤25 → 2 级（26-35/65-75，20 个值）
+    - ≤38 → 3 级（13-25/76-87，25 个值）
+    - >38 → 4 级（0-12/88-99，13 个值）：极端但非 extreme
+    - extreme：≤2 或 ≥98（仅 3 个值）：需 enable_extreme=True
+
+    注：4 级区间窄（13 个值）是有意设计——EMA 平滑 + resistance 使光谱
+    很难快速推到极端，4 级是"长期持续偏移"的信号。如需拓宽，调整 ≤38 阈值。
+    """
     if enable_extreme:
         if value <= 2:
             return "left_extreme"

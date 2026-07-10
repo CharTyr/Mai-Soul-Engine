@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import sqlite3
 from datetime import datetime
 from typing import Any
 
@@ -129,7 +130,7 @@ async def run_evolution_loop(plugin) -> None:
                 from ..models.ideology_model import count_pending_thought_seeds
 
                 seeds_before = int(count_pending_thought_seeds() or 0)
-            except Exception:
+            except (sqlite3.Error, ValueError, TypeError):
                 seeds_before = 0
 
             # 多群并行分析（Semaphore 限流防 LLM 限流）
@@ -153,7 +154,7 @@ async def run_evolution_loop(plugin) -> None:
                 from ..models.ideology_model import count_pending_thought_seeds
 
                 seeds_after = int(count_pending_thought_seeds() or 0)
-            except Exception:
+            except (sqlite3.Error, ValueError, TypeError):
                 pass
 
             await log_evolution_cycle(
@@ -174,7 +175,7 @@ async def run_evolution_loop(plugin) -> None:
             ):
                 try:
                     await _send_aggregated_seed_notification(plugin)
-                except Exception:
+                except (RuntimeError, ValueError, OSError):
                     logger.exception("[SeedNotify] 聚合通知发送失败")
                 finally:
                     _pending_seed_notifications.clear()
@@ -186,7 +187,7 @@ async def run_evolution_loop(plugin) -> None:
 
                     apply_self_reflection_spectrum_correction(plugin, evolution_rate)
                 except Exception:
-                    logger.exception("[SelfReflection] 光谱修正失败")
+                    logger.exception("[SelfReflection] 光谱修正失败（apply_self_reflection_spectrum_correction 内部异常类型不确定，保留兜底）")
 
         except asyncio.CancelledError:
             logger.info("灵魂光谱演化任务已停止")
@@ -215,7 +216,7 @@ async def run_evolution_loop(plugin) -> None:
                                     f"⚠️ 演化任务已连续失败 {_consecutive_evolution_failures} 次，请检查日志。",
                                     stream_id,
                                 )
-                except Exception:
+                except (RuntimeError, ValueError, OSError):
                     logger.exception("发送演化失败通知给管理员时出错")
                 _consecutive_evolution_failures = 0
             await asyncio.sleep(60)

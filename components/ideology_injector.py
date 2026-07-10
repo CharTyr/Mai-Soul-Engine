@@ -172,9 +172,12 @@ def _trait_quality_score(trait) -> float:
 _injection_log_lock = asyncio.Lock()
 
 # 注入日志采样：每 N 条实际写一次，避免高频 IO
-INJECTION_LOG_EVERY: int = 1  # 开发观察：全量记录（仍有 5MB 轮转）
+# 1=全量记录（开发观察），生产建议改为 10
+INJECTION_LOG_EVERY: int = 1
 _injection_log_counter: int = 0
-INJECTION_LOG_MAX_BYTES: int = 5 * 1024 * 1024  # 5 MB 轮转
+# 注入日志轮转阈值（MB）
+_INJECTION_LOG_MAX_SIZE_MB: int = 5
+INJECTION_LOG_MAX_BYTES: int = _INJECTION_LOG_MAX_SIZE_MB * 1024 * 1024
 
 
 async def _record_injection(entry: dict, plugin_dir: Path) -> None:
@@ -546,6 +549,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             "selection_mode": selection_mode,
             "cooldown_seconds": cooldown_seconds,
             "cooldown_skipped": cooldown_skipped[:20],
+            "prompt_version": "v2.3.0",
         },
         plugin_dir=plugin_dir,
     )
@@ -595,6 +599,7 @@ async def _skip_and_log(plugin_dir: Path, reason: str) -> dict:
             "skipped": True,
             "reason": reason,
             "policy": "disabled",
+            "prompt_version": "v2.3.0",
         },
         plugin_dir=plugin_dir,
     )

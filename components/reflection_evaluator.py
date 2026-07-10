@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import sqlite3
 from typing import Any
 
 from ..utils.runtime_resolution import generate_soul_text
@@ -24,8 +25,10 @@ from ..utils.runtime_resolution import generate_soul_text
 logger = logging.getLogger(__name__)
 
 # 自我观察种子生成门槛：一致性分低于此值且 LLM 给了 self_observation_trait 才生成种子
+# 70 分以下视为"显著偏离"，触发 self_observation 种子创建（走人工审批）
 _SEED_SCORE_THRESHOLD: int = 70
 # 单条回复文本截断（防 prompt 爆炸）
+# 500 字符上限：平衡上下文完整性与 token 消耗，覆盖 95% 以上群聊回复长度
 _RESPONSE_MAX_CHARS: int = 500
 
 
@@ -43,12 +46,16 @@ async def run_reflection_loop(plugin) -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("[SelfReflection] 评价周期异常")
+            logger.exception("[SelfReflection] 评价周期异常（run_reflection_loop 顶层兜底，保留 Exception 防止循环退出）")
         await asyncio.sleep(interval_hours * 3600)
 
 
 async def _evaluate_cycle(plugin) -> None:
-    """单次评价周期。"""
+    """单次评价周期。
+
+    分批处理：取 max_replies_per_cycle 条，分 3 批独立调 LLM + 解析 + 落库，
+    每批 batch_size = max(1, max_replies_per_cycle // 3) 条，批间无等待。
+    """
     cfg = plugin.config.self_reflection
     # 懒导入避免循环导入（见 reflection_capture 注释）
     from ..models.self_reflection import (
@@ -81,8 +88,9 @@ async def _evaluate_cycle(plugin) -> None:
         )
 
     # 2. 取待评队列
+    max_replies = int(cfg.max_replies_per_cycle)
     pendings = list_pending_reflections(
-        limit=int(cfg.max_replies_per_cycle),
+        limit=max_replies,
         max_age_hours=int(cfg.pending_max_age_hours),
     )
     if not pendings:
@@ -92,7 +100,8 @@ async def _evaluate_cycle(plugin) -> None:
         return
     logger.info("[SelfReflection] 本轮评价 %s 条待评回复", len(pendings))
 
-    # 3. 构建批量 prompt
+    # 3. 分 3 批处理
+    batch_size = max(1, max_replies // 3)
     spectrum = get_or_create_spectrum("global")
     tendency = build_abstract_tendency(
         {
@@ -103,7 +112,50 @@ async def _evaluate_cycle(plugin) -> None:
         }
     )
 
-    # 批量收集所有 pending 的 trait_ids（去重），一次查
+    total_evaluated = 0
+    total_skipped = 0
+    total_seeds = 0
+
+    for batch_start in range(0, len(pendings), batch_size):
+        batch_pendings = pendings[batch_start : batch_start + batch_size]
+        batch_ok = await _evaluate_batch(
+            plugin, cfg, batch_pendings, tendency,
+            get_injection_snapshot, get_crystallized_traits_by_ids,
+            build_reply_block, build_self_reflection_prompt,
+            create_self_reflection, update_pending_status,
+        )
+        if batch_ok:
+            total_evaluated += batch_ok["evaluated"]
+            total_skipped += batch_ok["skipped"]
+            total_seeds += batch_ok["seeds"]
+
+    logger.info(
+        "[SelfReflection] 评价完成：%s 条已评，%s 条跳过，%s 条生成自我观察种子",
+        total_evaluated,
+        total_skipped,
+        total_seeds,
+    )
+    from ..utils.audit_log import log_reflection_cycle
+
+    await log_reflection_cycle(
+        pending=len(pendings),
+        evaluated=total_evaluated,
+        skipped=total_skipped,
+        seeds=total_seeds,
+    )
+
+
+async def _evaluate_batch(
+    plugin, cfg, pendings, tendency,
+    get_injection_snapshot, get_crystallized_traits_by_ids,
+    build_reply_block, build_self_reflection_prompt,
+    create_self_reflection, update_pending_status,
+) -> dict | None:
+    """评价一批 pending 回复：构建 prompt → 调 LLM → 解析 → 落库。
+
+    返回 {"evaluated": int, "skipped": int, "seeds": int} 或 None（整批失败）。
+    """
+    # 收集本批 pending 的 trait_ids（去重），一次查
     all_trait_ids: set[str] = set()
     snap_cache: dict[str, Any] = {}
     for p in pendings:
@@ -150,22 +202,12 @@ async def _evaluate_cycle(plugin) -> None:
         replies_block="\n\n".join(reply_blocks),
     )
 
-    # 4. 调 LLM
+    # 调 LLM
     try:
         llm_result = await generate_soul_text(plugin, prompt)
     except (RuntimeError, ValueError, OSError) as exc:
         logger.exception("[SelfReflection] 评价 LLM 请求失败")
-        from ..utils.audit_log import log_reflection_cycle
-
-        await log_reflection_cycle(
-            pending=len(pendings),
-            evaluated=0,
-            skipped=0,
-            seeds=0,
-            llm_failed=True,
-            detail=str(exc),
-        )
-        return
+        return None
     response = ""
     if isinstance(llm_result, dict):
         response = str(llm_result.get("response", "") or "")
@@ -173,39 +215,19 @@ async def _evaluate_cycle(plugin) -> None:
         response = llm_result
     if not response:
         logger.warning("[SelfReflection] 评价 LLM 返回空")
-        from ..utils.audit_log import log_reflection_cycle
+        return None
 
-        await log_reflection_cycle(
-            pending=len(pendings),
-            evaluated=0,
-            skipped=0,
-            seeds=0,
-            llm_failed=True,
-            detail="empty_response",
-        )
-        return
-
-    # 5. 解析 JSON 数组
+    # 解析 JSON 数组
     results = _parse_evaluation_json(response)
     if not results:
         logger.warning("[SelfReflection] 无法解析评价结果: %s", response[:200])
-        from ..utils.audit_log import log_reflection_cycle
-
-        await log_reflection_cycle(
-            pending=len(pendings),
-            evaluated=0,
-            skipped=0,
-            seeds=0,
-            parse_failed=True,
-            detail=(response or "")[:200],
-        )
-        return
+        return None
 
     # 可选批次归一化（对冲系统性高估）
     if cfg.normalize_across_batch and len(results) > 1:
         results = _normalize_batch_scores(results)
 
-    # 6. 落库 + 更新 pending + 生成种子
+    # 落库 + 更新 pending + 生成种子
     seed_count = 0
     for item in results:
         idx = int(item.get("index", 0) or 0)
@@ -234,7 +256,7 @@ async def _evaluate_cycle(plugin) -> None:
                 reason=reason,
                 seed_id="",
             )
-        except Exception:
+        except sqlite3.Error:
             logger.exception("[SelfReflection] 写 self_reflection 失败 (pending=%s)", p.pending_id)
             reflection_id = 0
 
@@ -246,7 +268,7 @@ async def _evaluate_cycle(plugin) -> None:
         status = "done" if evaluated else "skipped"
         try:
             update_pending_status(p.pending_id, status)
-        except Exception:
+        except sqlite3.Error:
             logger.exception("[SelfReflection] 更新 pending 状态失败 (pending=%s)", p.pending_id)
 
         # 生成 self_observation 种子（仅 substantive + 显著偏离 + LLM 给了 trait）
@@ -266,20 +288,7 @@ async def _evaluate_cycle(plugin) -> None:
 
     evaluated_n = sum(1 for r in results if int(r.get("evaluated", 0) or 0))
     skipped_n = sum(1 for r in results if not int(r.get("evaluated", 0) or 0))
-    logger.info(
-        "[SelfReflection] 评价完成：%s 条已评，%s 条跳过，%s 条生成自我观察种子",
-        evaluated_n,
-        skipped_n,
-        seed_count,
-    )
-    from ..utils.audit_log import log_reflection_cycle
-
-    await log_reflection_cycle(
-        pending=len(pendings),
-        evaluated=evaluated_n,
-        skipped=skipped_n,
-        seeds=seed_count,
-    )
+    return {"evaluated": evaluated_n, "skipped": skipped_n, "seeds": seed_count}
 
 
 def _parse_evaluation_json(response: str) -> list[dict]:
@@ -349,9 +358,9 @@ async def _maybe_create_self_observation_seed(
                     from .evolution_task import notify_admin_seed
 
                     await notify_admin_seed(plugin, manager, seed_id)
-            except Exception:
+            except (RuntimeError, ValueError, OSError):
                 logger.exception("[SelfReflection] 发送自我观察种子通知失败 seed=%s", seed_id)
         return seed_id
     except Exception:
-        logger.exception("[SelfReflection] 创建自我观察种子失败")
+        logger.exception("[SelfReflection] 创建自我观察种子失败（_maybe_create_self_observation_seed 顶层兜底，保留 Exception）")
         return None

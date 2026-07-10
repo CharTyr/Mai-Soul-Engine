@@ -2,6 +2,8 @@
 
 maibot_sdk 生成的 Schema 中，Dashboard 只展示 ``hint`` 与 ``label``，
 不会渲染 ``description``。请通过 ``json_schema_extra`` 填写说明。
+
+i18n 状态：仅 zh-CN，所有用户可见文本硬编码中文。见 _locales/README.md。
 """
 
 from __future__ import annotations

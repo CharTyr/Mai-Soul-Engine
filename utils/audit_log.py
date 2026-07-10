@@ -18,7 +18,9 @@ from typing import Any
 _audit_lock = asyncio.Lock()
 _audit_file: Path | None = None
 _audit_enabled: bool = True
-AUDIT_MAX_BYTES = 8 * 1024 * 1024  # 8MB 轮转
+# 审计日志轮转阈值（MB）
+_AUDIT_MAX_SIZE_MB: int = 8
+AUDIT_MAX_BYTES: int = _AUDIT_MAX_SIZE_MB * 1024 * 1024
 
 
 def set_audit_enabled(enabled: bool) -> None:

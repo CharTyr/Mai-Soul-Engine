@@ -7,6 +7,7 @@ from ..utils.runtime_resolution import generate_soul_text
 
 logger = logging.getLogger(__name__)
 
+# Prompt Version: v2.3.0
 INTERNALIZATION_PROMPT = """基于以下思维种子，进行深层的哲学内化：
 
 种子类型: {type}

@@ -1,3 +1,4 @@
+# Prompt Version: v2.3.0
 ENHANCED_EVOLUTION_PROMPT = """分析以下群聊内容，完成两个任务：
 
 **任务1：人格倾向影响评估**
