@@ -351,7 +351,9 @@ cd /path/to/Maibot
 
 | 0C | 内化 `commit=False` + BEGIN/COMMIT 包裹光谱/trait/边 | `internalization_engine.py`、`spectrum.py`、`traits.py`、`p1.py` |
 
-**尚未做（后续）**：data_dir 迁移至宿主路径；v3 Thought 聚合根与 12 槽；宿主 H1 stream resolver / H2 persona capability / H3 结构化 persona extension。
+| 1.mix | `soul_schema_migrations` + `user_version`；`cabinet_slot_no` UNIQUE partial index | `_conn.py`、`traits.py` |
+
+**尚未做（后续）**：`set_trait_slot` / 注入 slot 优先；data_dir 迁移；完整 v3 Thought 表；宿主 H1–H3。
 
 本地会话进度（不入库）：`.slim/deepwork/production-polish.md` 与评估/蓝图文档。
 
