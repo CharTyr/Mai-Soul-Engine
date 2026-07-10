@@ -21,6 +21,17 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
     lines.append(f"自评任务: {'运行中' if plugin._self_reflection_task else '已停止'}")
     lines.append(f"发酵任务: {'运行中' if plugin._fermentation_task else '已停止'}")
     lines.append(f"数据目录: {plugin._data_dir}")
+    lines.append(f"数据来源: {'宿主' if plugin._data_dir_source == 'host' else '插件目录'}")
+
+    # schema user_version（可选）
+    try:
+        from ..models._conn import _get_conn
+        conn = _get_conn()
+        uv = conn.execute("PRAGMA user_version").fetchone()
+        if uv:
+            lines.append(f"Schema版本: {uv[0]}")
+    except Exception:
+        pass
 
     # DB 大小
     try:
@@ -37,6 +48,27 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
 
         pending = count_pending_thought_seeds()
         lines.append(f"待审种子: {pending}")
+    except Exception:
+        pass
+
+    # 发酵中种子（可选）
+    try:
+        from ..models.seeds import count_fermenting_seeds
+
+        fermenting = count_fermenting_seeds()
+        if fermenting > 0:
+            lines.append(f"发酵中种子: {fermenting}")
+    except Exception:
+        pass
+
+    # 槽位占用（可选简短）
+    try:
+        from ..models.traits import query_crystallized_traits
+
+        all_traits = query_crystallized_traits(deleted=False, limit=200)
+        slotted = sum(1 for t in all_traits if t.cabinet_slot_no is not None)
+        if slotted > 0:
+            lines.append(f"槽位占用: {slotted}/12")
     except Exception:
         pass
 

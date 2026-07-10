@@ -774,3 +774,83 @@ async def handle_seed_reject_all(plugin: Any, stream_id: str, **kwargs: Any) -> 
     msg = f"✅ 已批量拒绝 {count} 个待审核种子"
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True
+
+
+# ===== Trait 槽位管理 =====
+
+
+async def handle_trait_slot(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """设置/清空 trait 思维阁槽位 1-12（管理员）。
+
+    用法：
+        /soul_slot <trait_id> <1-12>   — 占槽
+        /soul_slot <trait_id> clear    — 清空槽
+        /soul_slot                      — 显示用法
+    """
+    from ..utils.spectrum_utils import check_admin_permission
+    from ..models.traits import get_crystallized_trait_by_id, set_trait_slot
+
+    ok, err = check_admin_permission(plugin, kwargs, "管理思维阁槽位")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    message = kwargs.get("message") or {}
+    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    match = re.match(r"^/soul_slot\s+([\w-]{8,})\s+(\d+|clear)\s*$", str(text))
+    if not match:
+        msg = (
+            "用法:\n"
+            "  /soul_slot <trait_id> <1-12>   — 将 trait 放入指定思维阁槽位\n"
+            "  /soul_slot <trait_id> clear    — 清空该 trait 的槽位\n\n"
+            "槽位 1-12，同槽换位会自动释放原占槽 trait。"
+        )
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_id = match.group(1)
+    slot_arg = match.group(2)
+
+    # 检查 trait 存在
+    trait = get_crystallized_trait_by_id(trait_id)
+    if not trait:
+        msg = f"未找到 trait {trait_id}"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_name = trait.name or trait_id
+
+    if slot_arg == "clear":
+        ok = set_trait_slot(trait_id, None)
+        if ok:
+            msg = f"✅ {trait_name}({trait_id}) 槽位已清空"
+        else:
+            msg = f"❌ 清空槽位失败"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    # slot_arg is a number string
+    try:
+        slot_no = int(slot_arg)
+    except (ValueError, TypeError):
+        msg = f"❌ 无效槽位号: {slot_arg}，允许 1-12 或 clear"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    if slot_no < 1 or slot_no > 12:
+        msg = f"❌ 槽位号 {slot_no} 超出范围，允许 1-12"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    ok = set_trait_slot(trait_id, slot_no)
+    if ok:
+        msg = f"✅ {trait_name}({trait_id}) 已放入槽位 {slot_no}"
+    else:
+        msg = f"❌ 设置槽位失败（trait 不存在或已删除）"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True

@@ -353,9 +353,16 @@ cd /path/to/Maibot
 
 | 1.mix | `soul_schema_migrations` + `user_version`；`cabinet_slot_no` UNIQUE partial index | `_conn.py`、`traits.py` |
 
-| 1.slot | `set_trait_slot`；注入 has_slot 优先；dashboard/trait 展示 | `traits.py`、`ideology_injector.py`、dashboard_* |
+| 1.slot | `set_trait_slot`；注入 has_slot 优先；dashboard/trait 展示；`/soul_slot` 管理命令 | `traits.py`、`ideology_injector.py`、dashboard_*、`thought_commands.py` |
 
-**尚未做（后续）**：data_dir 迁移；完整 v3 Thought 表；宿主 H1–H3；`/soul_slot` 管理命令（可选）。
+**已做（2 项补充）**：
+
+| 切片 | 要点 | 关键路径 |
+|------|------|----------|
+| slot.cmd | `/soul_slot` 命令（set/clear/用法） | `thought_commands.py`、`plugin.py`、`help_command.py` |
+| data.dir | `resolve_and_prepare_data_dir`：解析宿主 ctx + backup 迁移 + 回退 | `utils/data_dir.py`、`plugin.py`、`health_command.py` |
+
+**尚未做（后续）**：完整 v3 Thought 表；宿主 H1–H3；`/soul_slot` 管理命令（可选）。
 
 本地会话进度（不入库）：`.slim/deepwork/production-polish.md` 与评估/蓝图文档。
 

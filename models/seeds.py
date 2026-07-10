@@ -14,6 +14,7 @@ from ._conn import _dt_to_str, _get_conn, _str_to_dt
 __all__ = [
     "ThoughtSeed",
     "FermentationInput",
+    "count_fermenting_seeds",
     "count_pending_thought_seeds",
     "count_reviewed_seeds",
     "count_seeds_created_today",
@@ -142,6 +143,15 @@ def count_pending_thought_seeds() -> int:
     conn = _get_conn()
     row = conn.execute(
         "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE status = 'pending'"
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def count_fermenting_seeds() -> int:
+    """统计发酵中种子数量（status='fermenting'）。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE status = 'fermenting'"
     ).fetchone()
     return int(row["cnt"]) if row else 0
 

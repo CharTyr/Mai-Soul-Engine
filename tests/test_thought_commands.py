@@ -194,3 +194,204 @@ async def test_traits_list_empty(soul_db: Any) -> None:
     sent = _get_sent(plugin)
     assert len(sent) == 1
     assert "没有" in sent[0] or "空" in sent[0]
+
+
+# ─── handle_trait_slot ───────────────────────────────────────────────
+
+
+class TestHandleTraitSlot:
+    """测试 handle_trait_slot 的授权、用法、边界值。
+
+    需要 soul_db fixture（traits 表已存在）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_admin_rejected(self) -> None:
+        """非管理员调用 → 拒绝。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        plugin = _make_plugin(admin_user_id="qq:real_admin")
+        kwargs = {
+            "platform": "qq",
+            "user_id": "not_admin",
+            "text": "/soul_slot t_id_12345 1",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "not_admin"},
+                "processed_plain_text": "/soul_slot t_id_12345 1",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "管理员" in sent[0]
+
+    @pytest.mark.asyncio
+    async def test_thought_cabinet_disabled(self) -> None:
+        """思维阁未启用 → 提示。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        plugin = _make_plugin(thought_cabinet_enabled=False)
+        kwargs = {
+            "platform": "qq",
+            "user_id": "admin123",
+            "text": "/soul_slot t_id_12345 1",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "admin123"},
+                "processed_plain_text": "/soul_slot t_id_12345 1",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "思维阁" in sent[0] or "未启用" in sent[0]
+
+    @pytest.mark.asyncio
+    async def test_no_args_shows_usage(self) -> None:
+        """无参数 → 用法说明。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        plugin = _make_plugin()
+        kwargs = {
+            "platform": "qq",
+            "user_id": "admin123",
+            "text": "/soul_slot",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "admin123"},
+                "processed_plain_text": "/soul_slot",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "用法" in sent[0] or "用法:" in sent[0]
+        assert "1-12" in sent[0]
+
+    @pytest.mark.asyncio
+    async def test_set_slot_1_success(self, soul_db: Any) -> None:
+        """管理员设置 slot=1 → 成功。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        # 先创建 trait
+        soul_db.create_crystallized_trait(
+            trait_id="slot_test_t1",
+            stream_id="global",
+            seed_id="",
+            name="测试槽位特质",
+            question="测试问题",
+            thought="测试观点",
+            tags_json="[]",
+            confidence=80,
+            evidence_json="[]",
+            spectrum_impact_json="{}",
+            ideology_layer="conduct",
+            lifecycle_state="active",
+        )
+        plugin = _make_plugin()
+        kwargs = {
+            "platform": "qq",
+            "user_id": "admin123",
+            "text": "/soul_slot slot_test_t1 1",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "admin123"},
+                "processed_plain_text": "/soul_slot slot_test_t1 1",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "槽位" in sent[0] or "1" in sent[0]
+        # 验证 DB 已写入
+        t = soul_db.get_crystallized_trait_by_id("slot_test_t1")
+        assert t is not None and t.cabinet_slot_no == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_slot(self, soul_db: Any) -> None:
+        """clear 参数 → 清空槽位。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        soul_db.create_crystallized_trait(
+            trait_id="slot_clear_t1",
+            stream_id="global",
+            seed_id="",
+            name="清空测试",
+            question="?",
+            thought=".",
+            tags_json="[]",
+            confidence=50,
+            evidence_json="[]",
+            spectrum_impact_json="{}",
+            ideology_layer="conduct",
+            lifecycle_state="active",
+        )
+        soul_db.set_trait_slot("slot_clear_t1", 5)
+
+        plugin = _make_plugin()
+        kwargs = {
+            "platform": "qq",
+            "user_id": "admin123",
+            "text": "/soul_slot slot_clear_t1 clear",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "admin123"},
+                "processed_plain_text": "/soul_slot slot_clear_t1 clear",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "清空" in sent[0]
+        t = soul_db.get_crystallized_trait_by_id("slot_clear_t1")
+        assert t is not None and t.cabinet_slot_no is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_slot_13(self, soul_db: Any) -> None:
+        """slot=13 超出范围 → 错误。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        plugin = _make_plugin()
+        kwargs = {
+            "platform": "qq",
+            "user_id": "admin123",
+            "text": "/soul_slot dummy_trait_123 13",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "admin123"},
+                "processed_plain_text": "/soul_slot dummy_trait_123 13",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "未找到" in sent[0] or "超出范围" in sent[0] or "无效" in sent[0]
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_trait(self, soul_db: Any) -> None:
+        """不存在的 trait → 错误。"""
+        tc = _import_soul_submodule("components.thought_commands")
+        plugin = _make_plugin()
+        kwargs = {
+            "platform": "qq",
+            "user_id": "admin123",
+            "text": "/soul_slot nonexistent_id 1",
+            "message": {
+                "platform": "qq",
+                "user_info": {"user_id": "admin123"},
+                "processed_plain_text": "/soul_slot nonexistent_id 1",
+            },
+        }
+
+        result = await tc.handle_trait_slot(plugin, "g", **kwargs)
+        assert result[0] is True
+        sent = _get_sent(plugin)
+        assert len(sent) == 1
+        assert "未找到" in sent[0]

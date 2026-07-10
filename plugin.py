@@ -63,6 +63,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         super().__init__()
         self._plugin_dir: Path = Path(__file__).parent
         self._data_dir: Path = self._plugin_dir / "data"
+        self._data_dir_source: str = "plugin_dir"  # 或 "host"
         self._evolution_task: asyncio.Task | None = None
         self._notion_sync_task: asyncio.Task | None = None
         self._self_reflection_task: asyncio.Task | None = None
@@ -126,6 +127,19 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .models.ideology_model import init_db
         from .utils.audit_log import init_audit_log
         from .migration.legacy_import import run_legacy_import
+
+        # ── 数据目录解析与迁移（在 init_db 之前，此时 soul.db 未打开）─
+        from .utils.data_dir import resolve_and_prepare_data_dir
+
+        dir_info = resolve_and_prepare_data_dir(self)
+        self._data_dir = dir_info["data_dir"]
+        self._data_dir_source = dir_info.get("source", "plugin_dir")
+        logger.info(
+            "[Mai-Soul-Engine] 数据目录: %s (source=%s migrated=%s)",
+            self._data_dir,
+            self._data_dir_source,
+            dir_info.get("migrated", False),
+        )
 
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -427,6 +441,16 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.thought_commands import handle_trait_delete
 
         return await handle_trait_delete(self, stream_id, **kwargs)
+
+    # ===== Command：trait 槽位管理 =====
+
+    @Command("soul_slot", description="设置 trait 思维阁槽位 1-12（管理员）",
+             pattern=r"^/soul_slot(?:\s+([\w-]{8,})\s+(\d+|clear))?\s*$")
+    async def cmd_soul_slot(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """管理 trait 槽位。"""
+        from .components.thought_commands import handle_trait_slot
+
+        return await handle_trait_slot(self, stream_id, **kwargs)
 
     # ===== Command：自我评价 =====
 

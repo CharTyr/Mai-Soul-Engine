@@ -35,6 +35,7 @@ async def handle_help(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, str,
         lines.append("/soul_trait_disable <ID> — 禁用 trait")
         lines.append("/soul_trait_enable <ID> — 启用 trait")
         lines.append("/soul_trait_delete <ID> — 删除 trait")
+        lines.append("/soul_slot <ID> <1-12|clear> — 设置/清空 trait 思维阁槽位")
         lines.append("/soul_inspect <文本> — 注入命中预览")
         lines.append("/soul_reflect [N] — 查看自评记录")
         lines.append("/soul_observe — 运维状态摘要")

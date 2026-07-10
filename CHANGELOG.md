@@ -14,6 +14,12 @@
 - `set_trait_slot(trait_id, slot_no|None)` 原子事务。
 - 测试约 **251** 项。
 
+### 补充（同阶段收尾）
+
+- **`/soul_slot <trait_id> <1-12|clear>`**：管理员管理思维阁槽位。
+- **数据目录**：优先宿主 `ctx.paths.data_dir/mai_soul_engine`；首次用 SQLite backup 安全迁移，失败回退插件 `data/`；`/soul_health` 展示来源与 schema 版本。
+
+
 ## [2.4.0+] — dev 分支 Phase 0 正确性打磨（v2.4.0 基线之上）
 
 在 v2.4.0 发酵/自评能力之上修复线上假闭环，**不建 v3 表、不改宿主**。测试约 **222** 项。
