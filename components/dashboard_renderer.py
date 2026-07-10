@@ -104,9 +104,10 @@ h1 {
 .title-trait { font-size: 20px; }
 .meta {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--mute);
   word-break: break-all;
+  line-height: 1.4;
 }
 .badge {
   display: inline-flex;
@@ -216,14 +217,16 @@ h1 {
 .bipolar-fill {
   position: absolute;
   top: 50%;
+  left: 50%;
   width: 14px;
   height: 14px;
-  margin-left: -7px;
   margin-top: -7px;
+  margin-left: -7px;
   border-radius: 50%;
   background: #2563eb;
   border: 2px solid #fff;
   box-shadow: 0 0 0 1px rgba(37,99,235,0.35);
+  transform: none;
 }
 .stat-grid {
   display: grid;
@@ -361,13 +364,14 @@ h1 {
   color: var(--mute);
 }
 .flag.on {
-  background: var(--accent-green-soft);
-  color: var(--accent-green);
-  border-color: transparent;
+  background: #d1fae5;
+  color: #047857;
+  border-color: #a7f3d0;
 }
 .flag.off {
   background: #eef1f5;
-  color: #7b8494;
+  color: #6b7280;
+  border-color: #e5e7eb;
 }
 .flag-name { opacity: 0.95; }
 .flag-state { font-weight: 700; }
@@ -943,7 +947,7 @@ class DashboardRenderer:
                   <span class="bar-name">{escape(label)}</span>
                   <div class="bipolar-track">
                     <div class="bipolar-mid"></div>
-                    <div class="bipolar-fill" style="left:0;transform:translateX(calc({pct}% - 7px));"></div>
+                    <div class="bipolar-fill" style="left:{pct}%;margin-left:-7px;transform:none;"></div>
                   </div>
                   <span class="bar-val">{val}</span>
                 </div>
