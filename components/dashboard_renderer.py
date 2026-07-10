@@ -207,6 +207,74 @@ h1 {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
+
+.axes { display: grid; gap: 12px; }
+.axis-row { display: grid; gap: 6px; }
+.axis-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.axis-left {
+  font-size: 12px;
+  color: var(--mute);
+  text-align: left;
+  line-height: 1.3;
+}
+.axis-right {
+  font-size: 12px;
+  color: var(--mute);
+  text-align: right;
+  line-height: 1.3;
+}
+.axis-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  min-width: 2.2em;
+  text-align: center;
+}
+.axis-track {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  background: #e8eef6;
+  border: 1px solid var(--hairline);
+  overflow: visible;
+}
+.axis-mid {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: 2px;
+  height: 18px;
+  background: var(--hairline-strong);
+  transform: translateX(-50%);
+  opacity: 0.7;
+}
+.axis-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #93c5fd, #2563eb);
+  min-width: 0;
+}
+.axis-knob {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: #2563eb;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(37,99,235,0.35);
+}
 .bipolar-track { overflow: visible; }
 .bipolar-mid {
   position: absolute;
@@ -584,6 +652,14 @@ _SPECTRUM_LABELS: dict[str, str] = {
     "engagement": "投入",
     "closeness": "亲近",
     "directness": "直率",
+}
+
+# 0 = left pole, 100 = right pole. Matches spectrum model + /soul_status text.
+_SPECTRUM_POLES: dict[str, tuple[str, str]] = {
+    "sincerity": ("场面分寸", "真诚直率"),
+    "engagement": ("克制怕耗", "热情投入"),
+    "closeness": ("保持距离", "容易亲近"),
+    "directness": ("含蓄绕弯", "有话直说"),
 }
 
 _LAYER_LABELS: dict[str, str] = {
@@ -1023,17 +1099,24 @@ class DashboardRenderer:
         rows: list[str] = []
         for key in ("sincerity", "engagement", "closeness", "directness"):
             val = _clamp(_as_int(spectrum.get(key)), 0, 100)
-            label = _SPECTRUM_LABELS[key]
+            left_pole, right_pole = _SPECTRUM_POLES[key]
             rows.append(
                 f"""
-                <div class="bar-row">
-                  <span class="bar-name">{escape(label)}</span>
-                  <div class="bar-track" style="background-image:linear-gradient(90deg,#3b82f6,#2563eb);background-size:{val}% 100%;background-repeat:no-repeat;background-color:#e8eef6;"></div>
-                  <span class="bar-val">{val}</span>
+                <div class="axis-row">
+                  <div class="axis-head">
+                    <span class="axis-left">{escape(left_pole)}</span>
+                    <span class="axis-val">{val}</span>
+                    <span class="axis-right">{escape(right_pole)}</span>
+                  </div>
+                  <div class="axis-track">
+                    <div class="axis-mid" aria-hidden="true"></div>
+                    <div class="axis-fill" style="width:{val}%"></div>
+                    <div class="axis-knob" style="left:{val}%"></div>
+                  </div>
                 </div>
                 """
             )
-        return '<div class="bars">' + "".join(rows) + "</div>"
+        return '<div class="axes">' + "".join(rows) + "</div>"
 
     def _render_layer_counts(self, layers: dict[str, Any]) -> str:
         cards: list[str] = []
@@ -1496,7 +1579,9 @@ def build_dashboard_text(data: dict) -> str:
 
     spectrum = _as_dict(data.get("spectrum"))
     for key in ("sincerity", "engagement", "closeness", "directness"):
-        lines.append(f"  {_SPECTRUM_LABELS[key]} {_as_int(spectrum.get(key))}")
+        left_p, right_p = _SPECTRUM_POLES[key]
+        val = _as_int(spectrum.get(key))
+        lines.append(f"  {left_p} <- {val} -> {right_p}")
     lines.append(
         f"  更新 {_dash_or(spectrum.get('updated_at'))} · 演化 {_dash_or(spectrum.get('last_evolution'))}"
     )
