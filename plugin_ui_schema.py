@@ -381,7 +381,7 @@ class ThoughtCabinetConfig(PluginConfigBase):
         default=3,
         ge=0,
         description="最小发酵输入数",
-        json_schema_extra=_ui("最小发酵输入数", "发酵窗口到期时若输入不足此数，自动延长窗口。0=不延长。"),
+        json_schema_extra=_ui("最小发酵输入数", "发酵窗口到期时若输入不足此数，自动延长窗口。0=关闭最少证据门槛（到期将直接内化，等同弱化发酵，不推荐）。"),
     )
     fermentation_max_extensions: int = Field(
         default=2,

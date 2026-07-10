@@ -25,6 +25,13 @@
 - **H2 插件侧**：`config.get` 读 personality/reply_style → 内化 prompt 基底。
 - `CONFIG_VERSION` / manifest → **2.5.0**。
 
+### 2.5.0 补丁（产品半闭环）
+
+- 内化成功建议 `/soul_slot`（推荐空槽号）；发酵完成通知管理员含槽位建议。
+- Dashboard 思维阁 **12 格一览**（空/占用）。
+- 群锁 trait 列表标 `[仅群]`；`/soul_promote_global <id>` 提升为全局（保留 origin）。
+- `fermentation_min_inputs=0` 配置警告；data_dir 迁移失败时 `/soul_health` 标 degraded。
+
 ### 已知债务（非阻塞）
 
 - 存量群锁 trait 跨群不可见，需管理员知悉或手动处理。

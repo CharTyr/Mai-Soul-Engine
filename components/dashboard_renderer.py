@@ -443,7 +443,7 @@ class DashboardRenderer:
         slice_block = self._render_group_slice(group_slice) if stream_id and isinstance(group_slice, dict) else ""
         thought_block = self._render_thought_cabinet(thought)
         cabinet_data = _as_dict(data.get("cabinet"))
-        cabinet_block = self._render_cabinet(cabinet_data) if cabinet_data.get("slots_used", 0) > 0 else ""
+        cabinet_block = self._render_cabinet(cabinet_data)
         evolution_block = self._render_evolutions(evolutions[:5])
         flags_block = self._render_feature_flags(flags)
         graph_total = _as_int(data.get("graph_edge_total"))
@@ -636,25 +636,27 @@ class DashboardRenderer:
         """
 
     def _render_cabinet(self, cabinet: dict[str, Any]) -> str:
-        """渲染思维阁槽位占用条。"""
+        """渲染思维阁槽位 12 格网格。"""
         used = _as_int(cabinet.get("slots_used"))
         total = _as_int(cabinet.get("slots_total", 12))
-        occ = cabinet.get("occupancy", [])
-        if not isinstance(occ, list):
-            occ = []
-        slots_html = ""
-        for slot in occ[:6]:  # 最多显示 6 个
-            slot_no = slot.get("slot_no", "?")
-            name = escape(str(slot.get("name", "")) or "—")
-            slots_html += f'<div class="slot-item">#{slot_no} {name}</div>'
-        if len(occ) > 6:
-            slots_html += f'<div class="slot-item muted">… 还有 {len(occ) - 6} 个</div>'
+        grid = cabinet.get("grid", [])
+        if not isinstance(grid, list):
+            grid = []
+        cells = ""
+        for cell in grid:
+            slot_no = cell.get("slot_no", "?")
+            if cell.get("empty"):
+                cells += f'<div class="slot-cell slot-empty">#{slot_no:02d} 空</div>'
+            else:
+                name = escape(str(cell.get("name", "")) or "—")
+                tid = escape(str(cell.get("trait_id", ""))[:10])
+                cells += f'<div class="slot-cell slot-occ"><span class="slot-no">#{slot_no:02d}</span><span class="slot-name">{name}</span><span class="slot-tid">{tid}</span></div>'
         return f"""
         <div class="panel">
           <div class="label">思维阁槽位</div>
           <div class="big-num">{used}</div>
           <span class="big-label">/ {total}</span>
-          {slots_html}
+          <div class="slot-grid">{cells}</div>
         </div>
         """
 
@@ -725,7 +727,7 @@ class DashboardRenderer:
 
         confidence = _clamp(int(round(_as_float(data.get("confidence")) * 100)), 0, 100)
         stream_raw = str(data.get("stream_id") or "").strip()
-        stream_display = "全局" if stream_raw == "global" or not stream_raw else stream_raw
+        stream_display = data.get("scope_label", "全局" if stream_raw == "global" or not stream_raw else stream_raw)
 
         slot_no = data.get("cabinet_slot_no")
         slot_badge = f'<span class="badge badge-slot">槽位 #{slot_no}</span>' if slot_no is not None else ""
@@ -1060,10 +1062,16 @@ def build_dashboard_text(data: dict) -> str:
         used = _as_int(cabinet_data.get("slots_used"))
         lines.append("")
         lines.append(f"【思维阁槽位】{used}/12")
-        occ = cabinet_data.get("occupancy", [])
-        if isinstance(occ, list):
-            for slot in occ:
-                lines.append(f"  槽{slot.get('slot_no')}: {slot.get('name', '—')} ({slot.get('trait_id', '')[:10]}...)")
+        grid = cabinet_data.get("grid", [])
+        if isinstance(grid, list):
+            for cell in grid:
+                slot_no = cell.get("slot_no", "?")
+                if cell.get("empty"):
+                    lines.append(f"  #[{slot_no:02d}] 空")
+                else:
+                    name = cell.get("name", "—")
+                    tid = str(cell.get("trait_id", ""))[:10]
+                    lines.append(f"  #[{slot_no:02d}] {name} ({tid})")
 
     evolutions = data.get("recent_evolutions")
     if not isinstance(evolutions, list):
@@ -1106,7 +1114,7 @@ def build_trait_text(data: dict) -> str:
     lifecycle = _dash_or(data.get("lifecycle_label"), empty="—")
     conf = int(round(_as_float(data.get("confidence")) * 100))
     stream_raw = str(data.get("stream_id") or "").strip()
-    stream_display = "全局" if stream_raw == "global" or not stream_raw else stream_raw
+    stream_display = data.get("scope_label", "全局" if stream_raw == "global" or not stream_raw else stream_raw)
 
     lines: list[str] = [
         f"◇ Trait · {name}",

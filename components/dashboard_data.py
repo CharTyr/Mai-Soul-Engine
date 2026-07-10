@@ -146,10 +146,19 @@ def collect_dashboard_data(plugin: Any, stream_id: str = "") -> dict[str, Any]:
                 "name": t.name or "",
             })
     cabinet_slots.sort(key=lambda x: x["slot_no"])
+    cabinet_grid: list[dict[str, Any]] = []
+    slot_map = {s["slot_no"]: s for s in cabinet_slots}
+    for i in range(1, 13):
+        if i in slot_map:
+            s = slot_map[i]
+            cabinet_grid.append({"slot_no": i, "empty": False, "trait_id": s["trait_id"], "name": s["name"]})
+        else:
+            cabinet_grid.append({"slot_no": i, "empty": True})
     cabinet_data: dict[str, Any] = {
         "slots_used": len(cabinet_slots),
         "slots_total": 12,
         "occupancy": cabinet_slots,
+        "grid": cabinet_grid,
     }
 
     return {

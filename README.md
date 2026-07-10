@@ -8,6 +8,17 @@
 
 ## 版本说明
 
+**v2.5.0 — 产品半闭环补全**
+
+- **全局思想（Phase 0B.1）**：内化 trait 默认 `stream_id=global`（属于 Bot 全局身份），来源群记入 `origin_stream_id`；A 群形成的思想可在 B 群被召回。
+- **关键词召回（Phase 0B.2）**：注入选择增加关键词子串匹配补位 + `activation_reason` 字段标记命中原因。
+- **System 追加（Phase 0B.3）**：动态层追加到宿主首条 system 末尾（`[Mai-Soul 动态层 | …]`），不再 prepend 竞争性 system；无 system 时 fail-open 跳过注入。
+- **12 槽位（Phase 1.slot）**：`/soul_slot <trait_id> <1-12|clear>` 管理槽位、同槽自动换位；`/soul_promote_global <trait_id>` 将群锁 trait 提升为全局；Dashboard 展示 12 格占用网格。
+- **群 Stream 降级（Phase H1）**：`resolve_monitored_group_stream` 降级 `open_session` 创建/恢复流。
+- **宿主人设基底（Phase H2）**：`fetch_host_persona` 经 `config.get` 读取人设，内化 prompt 追加基底提示。
+- **data_dir 迁移**：优先使用宿主 `ctx.paths.data_dir`，自动迁移旧 `plugin_dir/data` 数据；迁移失败回退到 plugin_dir 并在健康命令中提示。
+- **发酵劝槽**：内化/发酵成功后提示管理员放入槽位以提升注入优先级。
+
 **v2.1.0（dev 分支）— P1 三观生长 + 光谱重构**
 
 **光谱四维重构（最重要）**：从政治光谱（economic/social/diplomatic/progressive）换为群聊 AI 真实会经历的社交轴：
@@ -131,6 +142,7 @@ p1_enabled = true   # 关闭后行为与 main/v2.0 一致
 - `/soul_inspect <文本>` — 注入命中预览卡片（模拟"这段文本会命中哪些 trait、优先级排序"，不实际注入；渲染不可用降级文本）
 - `/soul_trait_set_tags` / `_merge` / `_disable` / `_enable` / `_delete` — trait 管理
 - `/soul_slot <trait_id> <1-12|clear>` — 设置/清空 trait 思维阁槽位
+- `/soul_promote_global <trait_id>` — 将群锁 trait 提升为全局作用域
 
 ## 可选功能
 

@@ -341,6 +341,54 @@ async def _try_notify_admin_insufficient(plugin: Any, seed: Any, input_count: in
         logger.debug("[Fermentation] 发送管理员通知失败 seed=%s", seed.seed_id)
 
 
+async def _try_notify_admin_fermented(plugin: Any, seed: Any, trait_id: str) -> None:
+    """发酵内化成功后通知管理员，含槽位建议。失败仅记日志，不抛出。"""
+    from ..utils.spectrum_utils import parse_user_id
+    from ..models.traits import query_crystallized_traits
+
+    admin_config_id = plugin.config.admin.admin_user_id
+    if not admin_config_id:
+        logger.info("[Fermentation] 种子 %s 发酵内化: trait=%s（admin_user_id 未配置）", seed.seed_id, trait_id)
+        return
+
+    platform, user_id = parse_user_id(admin_config_id)
+    if not platform or not user_id:
+        logger.info("[Fermentation] 种子 %s 发酵内化: trait=%s", seed.seed_id, trait_id)
+        return
+
+    # 计算可用空槽
+    _all_t = query_crystallized_traits(deleted=False, enabled=True, limit=200)
+    used = {t.cabinet_slot_no for t in _all_t if t.cabinet_slot_no is not None}
+    free = [i for i in range(1, 13) if i not in used]
+    if free:
+        slot_hint = f"建议：/soul_slot {trait_id} {free[0]}  将观点放入思维阁槽位（推荐空槽 {free[0]}）"
+    else:
+        slot_hint = f"12 槽已满，可用 /soul_slot {trait_id} <1-12> 替换已有"
+
+    text = (
+        f"🧬 发酵种子 {seed.seed_id} 已内化完成\n"
+        f"trait_id: {trait_id}\n"
+        f"{slot_hint}"
+    )
+
+    try:
+        admin_stream_id = await plugin.ctx.chat.get_stream_by_user_id(
+            platform=platform, user_id=user_id
+        )
+    except (RuntimeError, ValueError, OSError):
+        logger.info("[Fermentation] 种子 %s 发酵内化: trait=%s（获取管理员流失败，仅日志）", seed.seed_id, trait_id)
+        return
+
+    if not admin_stream_id:
+        logger.info("[Fermentation] 种子 %s 发酵内化: trait=%s（未找到管理员流，仅日志）", seed.seed_id, trait_id)
+        return
+
+    try:
+        await plugin.ctx.send.text(text=text, stream_id=admin_stream_id)
+    except (RuntimeError, ValueError, OSError):
+        logger.debug("[Fermentation] 发送管理发酵成功通知失败 seed=%s", seed.seed_id)
+
+
 async def _check_completion(plugin: Any, seed: Any) -> None:
     """检查种子是否发酵到期，触发最终内化或延长窗口。"""
     from ..models.seeds import (
@@ -434,10 +482,14 @@ async def _finalize_fermentation(plugin: Any, seed: Any) -> None:
 
     if result.get("success"):
         mark_seed_internalized(seed.seed_id)
+        trait_id = result.get("trait_id", "")
         logger.info(
             "[Fermentation] 种子 %s 发酵内化完成: trait=%s, thought=%s...",
-            seed.seed_id, result.get("trait_id", ""), str(result.get("thought", ""))[:50],
+            seed.seed_id, trait_id, str(result.get("thought", ""))[:50],
         )
+        # P1.1: 发酵成功后尽量通知管理员含槽位建议
+        if trait_id:
+            await _try_notify_admin_fermented(plugin, seed, trait_id)
     else:
         logger.warning(
             "[Fermentation] 种子 %s 发酵内化失败: %s（保持 fermenting，下轮重试）",

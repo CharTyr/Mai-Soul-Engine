@@ -23,6 +23,25 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
     lines.append(f"数据目录: {plugin._data_dir}")
     lines.append(f"数据来源: {'宿主' if plugin._data_dir_source == 'host' else '插件目录'}")
 
+    # P1.4: data_dir 迁移错误提示
+    data_dir_info = getattr(plugin, '_data_dir_info', None) or {}
+    mig_detail = data_dir_info.get("migration_detail") or {}
+    if mig_detail.get("error"):
+        lines.append(f"⚠️ 数据迁移失败: {mig_detail['error']}，当前使用 plugin_dir/data")
+        lines.append("状态: degraded")
+    else:
+        lines.append("状态: ok")
+
+    # P1.4: 当使用 plugin_dir 时提示宿主 data_dir 可用性
+    if plugin._data_dir_source == 'plugin_dir':
+        try:
+            from ..utils.data_dir import _try_get_host_data_dir
+            host_path = _try_get_host_data_dir(plugin)
+            if host_path is not None:
+                lines.append("提示: 宿主 data_dir 可用但未使用（见日志），可通过删除 plugin_dir/data 重启触发迁移")
+        except Exception:
+            pass
+
     # schema user_version（可选）
     try:
         from ..models._conn import _get_conn

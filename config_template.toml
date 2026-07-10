@@ -150,6 +150,7 @@ fermentation_relevance_threshold = 0.5
 # 最大发酵输入数：单种子最多收集多少条
 fermentation_max_inputs = 20
 # 最小发酵输入数：窗口到期时若不足此数自动延长，0=不延长
+# ⚠️ 0=关闭最少证据门槛（到期将直接内化，等同弱化发酵，不推荐）
 fermentation_min_inputs = 3
 # 最大延长次数：输入不足时最多延长几次
 fermentation_max_extensions = 2

@@ -195,6 +195,7 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 - 只读详情：`/soul_trait <id>`（trait 详情卡片）、`/soul_inspect <文本>`（注入命中预览）、`/soul_dashboard`（全状态总览）。
 - 批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**）。
 - 误判 trait 回滚：`/soul_trait_enable <id>`。
+- 群锁提升全局：`/soul_promote_global <id>`（保留 origin_stream_id）。
 
 ### 全局作用域标记（`GLOBAL_STREAM`）与来源溯源
 

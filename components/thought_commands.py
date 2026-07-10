@@ -216,6 +216,16 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
             f"固化观点: {result['thought'][:100]}...\n\n"
             f"光谱影响: {impact_str or '无'}"
         )
+        # P1.1: 建议入槽（非 merged 且有 trait_id 时）
+        if trait_id and not merged:
+            from ..models.traits import query_crystallized_traits
+            _all_t = query_crystallized_traits(deleted=False, enabled=True, limit=200)
+            used = {t.cabinet_slot_no for t in _all_t if t.cabinet_slot_no is not None}
+            free = [i for i in range(1, 13) if i not in used]
+            if free:
+                msg += f"\n\n建议：/soul_slot {trait_id} {free[0]}  将观点放入思维阁槽位（推荐空槽 {free[0]}）"
+            else:
+                msg += f"\n\n12 槽已满，可用 /soul_slot {trait_id} <1-12> 替换已有"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
     else:
@@ -322,7 +332,11 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     for t in traits:
         status = "enabled" if t.enabled else "disabled"
         slot_tag = f" #slot{t.cabinet_slot_no}" if t.cabinet_slot_no is not None else ""
-        lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}{slot_tag}")
+        scope_tag = ""
+        sid = (t.stream_id or "").strip()
+        if sid and sid != "global":
+            scope_tag = " [仅群]"
+        lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}{slot_tag}{scope_tag}")
         try:
             from ..utils.trait_tags import parse_tags_json
 
@@ -440,6 +454,11 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
             target = (e.to_trait_id or "")[:12]
         edges_list.append({"relation_type": e.relation_type, "label": label, "target": target})
 
+    stream_raw = (trait.stream_id or "").strip()
+    scope_label = "全局"
+    if stream_raw and stream_raw != "global":
+        scope_label = f"仅群:{stream_raw[:12]}"
+
     data = {
         "trait_id": trait.trait_id,
         "name": trait.name,
@@ -450,6 +469,7 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         "lifecycle_label": lifecycle_label,
         "confidence": float(trait.confidence or 0) / 100.0,
         "stream_id": trait.stream_id,
+        "scope_label": scope_label,
         "created_at": trait.created_at.strftime("%Y-%m-%d %H:%M:%S") if trait.created_at else None,
         "tags": parse_tags_json(trait.tags_json or "[]"),
         "question": trait.question or "",
@@ -852,5 +872,53 @@ async def handle_trait_slot(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
         msg = f"✅ {trait_name}({trait_id}) 已放入槽位 {slot_no}"
     else:
         msg = f"❌ 设置槽位失败（trait 不存在或已删除）"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== Trait 全局化 =====
+
+
+async def handle_promote_global(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """将群锁 trait 提升为全局作用域（管理员）。"""
+    from ..utils.spectrum_utils import check_admin_permission
+    from ..models.traits import get_crystallized_trait_by_id, promote_trait_to_global
+
+    ok, err = check_admin_permission(plugin, kwargs, "提升 trait 作用域")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    message = kwargs.get("message") or {}
+    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    match = re.match(r"^/soul_promote_global\s+([\w-]{8,})\s*$", str(text))
+    if not match:
+        msg = "用法: /soul_promote_global <trait_id>"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_id = match.group(1)
+    trait = get_crystallized_trait_by_id(trait_id)
+    if not trait:
+        msg = f"未找到 trait {trait_id}"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    stream_raw = (trait.stream_id or "").strip()
+    if not stream_raw or stream_raw == "global":
+        msg = f"trait {trait_id} 已是全局作用域，无需提升"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    ok = promote_trait_to_global(trait_id)
+    if ok:
+        msg = f"✅ trait {trait_id}（{trait.name}）已提升为全局作用域\n来源群 {stream_raw} 已记录为 origin_stream_id"
+    else:
+        msg = f"❌ 提升失败（trait 不存在或已删除）"
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True

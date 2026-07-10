@@ -318,6 +318,20 @@ class TestDashboardOccupancy:
         slots = {o["slot_no"]: o["trait_id"] for o in occ}
         assert slots[1] == "dash_t1"
         assert slots[5] == "dash_t2"
+        # P1.1: grid 长度 12，占 2 格
+        grid = cabinet.get("grid", [])
+        assert len(grid) == 12
+        occupied_slots = {c["slot_no"] for c in grid if not c["empty"]}
+        assert occupied_slots == {1, 5}
+        for c in grid:
+            if c["slot_no"] == 1:
+                assert c["empty"] is False
+                assert c["trait_id"] == "dash_t1"
+            elif c["slot_no"] == 5:
+                assert c["empty"] is False
+                assert c["trait_id"] == "dash_t2"
+            else:
+                assert c["empty"] is True
 
     def test_trait_detail_includes_slot(self, soul_db: Any) -> None:
         """handle_trait_detail 数据包含 cabinet_slot_no。"""

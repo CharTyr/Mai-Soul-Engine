@@ -19,6 +19,7 @@ __all__ = [
     "expire_old_traits",
     "get_crystallized_trait_by_id",
     "get_crystallized_traits_by_ids",
+    "promote_trait_to_global",
     "query_active_traits_for_injection",
     "query_crystallized_traits",
     "save_crystallized_trait",
@@ -372,6 +373,53 @@ def set_trait_slot(trait_id: str, slot_no: int | None, *, commit: bool = True) -
         conn.execute(
             "UPDATE soul_crystallized_traits SET cabinet_slot_no = ? WHERE trait_id = ?",
             (slot_no, trait_id),
+        )
+
+        if commit:
+            conn.execute("COMMIT")
+        return True
+
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def promote_trait_to_global(trait_id: str, *, commit: bool = True) -> bool:
+    """将群锁 trait 提升为全局（stream_id → GLOBAL_STREAM），保留 origin_stream_id。
+
+    Args:
+        trait_id: 目标 trait ID。
+        commit: 是否立即提交。
+
+    Returns:
+        成功 True，trait 不存在或已删除返回 False。
+    """
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN")
+        row = conn.execute(
+            "SELECT stream_id, origin_stream_id FROM soul_crystallized_traits WHERE trait_id = ? AND deleted = 0",
+            (trait_id,),
+        ).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            return False
+
+        current_stream = row["stream_id"] or ""
+        current_origin = row["origin_stream_id"] or ""
+
+        if current_stream == GLOBAL_STREAM:
+            # 已经是全局
+            if commit:
+                conn.execute("COMMIT")
+            return True
+
+        # 若 origin_stream_id 为空则写入旧 stream_id 作为溯源
+        new_origin = current_origin or current_stream
+
+        conn.execute(
+            "UPDATE soul_crystallized_traits SET stream_id = ?, origin_stream_id = ? WHERE trait_id = ?",
+            (GLOBAL_STREAM, new_origin, trait_id),
         )
 
         if commit:

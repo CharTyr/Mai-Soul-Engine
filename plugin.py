@@ -63,7 +63,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         super().__init__()
         self._plugin_dir: Path = Path(__file__).parent
         self._data_dir: Path = self._plugin_dir / "data"
-        self._data_dir_source: str = "plugin_dir"  # 或 "host"
+        self._data_dir_source: str = "plugin_dir"
+        self._data_dir_info: dict | None = None  # P1.4: 数据目录解析/迁移详情
         self._evolution_task: asyncio.Task | None = None
         self._notion_sync_task: asyncio.Task | None = None
         self._self_reflection_task: asyncio.Task | None = None
@@ -134,6 +135,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         dir_info = resolve_and_prepare_data_dir(self)
         self._data_dir = dir_info["data_dir"]
         self._data_dir_source = dir_info.get("source", "plugin_dir")
+        self._data_dir_info = dir_info  # P1.4: 整包存，供健康命令读取
         logger.info(
             "[Mai-Soul-Engine] 数据目录: %s (source=%s migrated=%s)",
             self._data_dir,
@@ -451,6 +453,14 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.thought_commands import handle_trait_slot
 
         return await handle_trait_slot(self, stream_id, **kwargs)
+
+    @Command("soul_promote_global", description="将群锁 trait 提升为全局作用域（管理员）",
+             pattern=r"^/soul_promote_global\s+([\w-]{8,})\s*$")
+    async def cmd_soul_promote_global(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """提升 trait 为全局作用域。"""
+        from .components.thought_commands import handle_promote_global
+
+        return await handle_promote_global(self, stream_id, **kwargs)
 
     # ===== Command：自我评价 =====
 
