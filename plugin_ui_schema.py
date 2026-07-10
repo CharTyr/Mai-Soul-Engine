@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
+from pydantic import model_validator
 
 CONFIG_VERSION = "2.3.0"
 
@@ -311,6 +312,12 @@ class ThoughtCabinetConfig(PluginConfigBase):
         le=1.0,
         description="种子去重阈值",
         json_schema_extra=_ui("种子去重相似度阈值", "0–1，新种子与已有待审种子相似度超过此值则跳过，0=不去重。", step=0.02),
+    )
+    admin_notification_cooldown_minutes: int = Field(
+        default=30,
+        ge=0,
+        description="通知冷却",
+        json_schema_extra=_ui("聚合通知冷却（分钟）", "两次聚合种子通知的最小间隔，0=不冷却。", step=5),
     )
 
 
@@ -643,3 +650,14 @@ class MaiSoulEngineConfig(PluginConfigBase):
     notion: NotionConfig = Field(default_factory=NotionConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     self_reflection: SelfReflectionConfig = Field(default_factory=SelfReflectionConfig)
+
+    @model_validator(mode="after")
+    def _cross_section_validate(self) -> "MaiSoulEngineConfig":
+        """跨段校验：self_reflection 依赖 thought_cabinet（自评产生种子需思维阁审批）。"""
+        if self.self_reflection.enabled and not self.thought_cabinet.enabled:
+            import logging
+            logging.getLogger("MaiSoulEngine").warning(
+                "[配置] self_reflection.enabled=True 但 thought_cabinet.enabled=False——"
+                "自评产生的 self_observation 种子无法被审批内化"
+            )
+        return self

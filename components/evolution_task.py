@@ -34,6 +34,17 @@ from ..utils.spectrum_utils import (
 logger = logging.getLogger(__name__)
 
 _bot_filter_warned: set[str] = set()
+# 聚合种子通知冷却：记录上次通知时间戳（秒），用于 cooldown 检查
+_last_aggregated_notification_ts: float = 0.0
+# 本轮演化产生的种子通知收集列表（每轮开始时清空）
+_pending_seed_notifications: list[tuple[str, str, str]] = []
+
+
+def reset_aggregation_state() -> None:
+    """重置聚合通知的模块级状态，供 on_unload 调用防插件重载间泄漏。"""
+    global _last_aggregated_notification_ts
+    _last_aggregated_notification_ts = 0.0
+    _pending_seed_notifications.clear()
 
 
 def _warn_no_bot_filter(stream_id: str) -> None:
@@ -136,6 +147,18 @@ async def run_evolution_loop(plugin) -> None:
                 seeds_created=max(0, seeds_after - seeds_before),
                 interval_hours=float(getattr(plugin.config.evolution, "evolution_interval_hours", 0) or 0),
             )
+
+            # U-UX-6: 聚合种子通知 — 本轮所有新种子合并为一条通知发送给管理员
+            if (
+                plugin.config.thought_cabinet.admin_notification_enabled
+                and _pending_seed_notifications
+            ):
+                try:
+                    await _send_aggregated_seed_notification(plugin)
+                except Exception:
+                    logger.exception("[SeedNotify] 聚合通知发送失败")
+                finally:
+                    _pending_seed_notifications.clear()
 
             # P1.5：自评反馈 → 光谱修正（仅 self_reflection.enabled）
             if plugin.config.self_reflection.enabled:
@@ -254,7 +277,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.debug("发送LLM请求，prompt长度: %s", len(prompt))
         try:
             llm_result = await generate_soul_text(plugin, prompt)
-        except (RuntimeError, ValueError, OSError) as exc:
+        except (RuntimeError, ValueError, OSError, asyncio.TimeoutError) as exc:
             logger.exception("LLM 请求失败")
             await log_evolution_skip(
                 stream_id, "llm_failed", message_count=len(messages), detail=str(exc)
@@ -350,6 +373,16 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         wv.record_local_slice(stream_id, smoothed_deltas, len(messages))
         wv.nudge_mood_from_deltas(smoothed_deltas)
 
+        # P-EVO-1b: 极值告警 — 光谱任一轴在极区间时 log.warning
+        spectrum = get_or_create_spectrum("global")
+        for dim in ("sincerity", "engagement", "closeness", "directness"):
+            val = int(getattr(spectrum, dim))
+            if val <= 10 or val >= 90:
+                logger.warning(
+                    "[SpectrumGuard] %s 极值告警: %s=%d（可能跑偏）",
+                    stream_id, dim, val,
+                )
+
         record.last_analyzed = now
         record.save()
 
@@ -367,26 +400,36 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.error("分析群%s时出错: %s", group_config_id, e, exc_info=True)
 
 
-async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines: list[str]) -> None:
+async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines: list[str]) -> list[str]:
     """处理 LLM 返回的思维种子。
 
     Args:
         msg_lines: 发送给 LLM 的原始消息行列表，用于提取上下文窗口。
+
+    Returns:
+        本轮创建的种子 ID 列表。
     """
     from ..thought.seed_manager import ThoughtSeedManager
 
     logger.debug("处理思维种子: 收到 %s 个", len(seeds))
     if not seeds:
-        return
+        return []
 
     manager = ThoughtSeedManager.from_plugin_config(plugin)
+    created_ids: list[str] = []
 
     for seed_data in seeds[:2]:
         seed_id = await manager.create_seed(seed_data, stream_id=stream_id, context_messages=msg_lines)
         if seed_id:
             logger.info("群%s创建思维种子: %s", stream_id, seed_id)
+            created_ids.append(seed_id)
+            # 收集到聚合通知列表（不再单独通知）
             if plugin.config.thought_cabinet.admin_notification_enabled:
-                await _notify_admin_seed(plugin, manager, seed_id)
+                _pending_seed_notifications.append(
+                    (seed_id, seed_data.get("type", "未知"), seed_data.get("event", "")[:80])
+                )
+
+    return created_ids
 
 
 async def notify_admin_seed(plugin, manager, seed_id: str) -> bool:
@@ -445,3 +488,72 @@ async def notify_admin_seed(plugin, manager, seed_id: str) -> bool:
 # Backward-compatible private alias used by this module.
 async def _notify_admin_seed(plugin, manager, seed_id: str) -> bool:
     return await notify_admin_seed(plugin, manager, seed_id)
+
+
+async def _send_aggregated_seed_notification(plugin) -> bool:
+    """向管理员发送本轮聚合种子通知。
+
+    将 _pending_seed_notifications 中收集的种子合并为一条通知，
+    受 admin_notification_cooldown_minutes 冷却控制。
+    """
+    import time as _time
+
+    from ..utils.spectrum_utils import parse_user_id
+
+    global _last_aggregated_notification_ts
+
+    cooldown = plugin.config.thought_cabinet.admin_notification_cooldown_minutes
+    now = _time.time()
+    if cooldown > 0 and _last_aggregated_notification_ts > 0:
+        elapsed = (now - _last_aggregated_notification_ts) / 60.0
+        if elapsed < cooldown:
+            logger.debug(
+                "聚合种子通知冷却中（已过 %.1f / %s 分钟），跳过本轮",
+                elapsed, cooldown,
+            )
+            return False
+
+    admin_config_id = plugin.config.admin.admin_user_id
+    if not admin_config_id:
+        logger.warning("admin_user_id 未配置，跳过聚合种子通知")
+        return False
+
+    platform, user_id = parse_user_id(admin_config_id)
+    if not platform or not user_id:
+        logger.warning("admin_user_id 无法解析，跳过聚合种子通知 raw=%s", admin_config_id)
+        return False
+
+    try:
+        admin_stream_id = await plugin.ctx.chat.get_stream_by_user_id(
+            platform=platform, user_id=user_id
+        )
+    except (RuntimeError, ValueError, OSError):
+        logger.exception("获取管理员 stream_id 失败，跳过聚合种子通知")
+        return False
+
+    if not admin_stream_id:
+        logger.warning("未找到管理员聊天流，跳过聚合种子通知 admin=%s:%s", platform, user_id)
+        return False
+
+    total = len(_pending_seed_notifications)
+    display = _pending_seed_notifications[:10]
+    lines: list[str] = []
+    for sid, stype, sevent in display:
+        lines.append(f"• {stype}：{sevent}（/soul_seed {sid}）")
+    if total > 10:
+        lines.append(f"…等共 {total} 个")
+
+    text = (
+        f"🧠 本轮演化产生 {total} 个新思维种子：\n"
+        + "\n".join(lines)
+        + "\n\n用 /soul_seed <ID> 查看详情，/soul_approve <ID> 批准内化。"
+    )
+
+    try:
+        await plugin.ctx.send.text(text=text, stream_id=admin_stream_id)
+        _last_aggregated_notification_ts = now
+        logger.info("已发送聚合种子通知（%s 个） admin_stream=%s", total, admin_stream_id)
+        return True
+    except (RuntimeError, ValueError, OSError):
+        logger.exception("发送聚合种子通知失败（%s 个）", total)
+        return False

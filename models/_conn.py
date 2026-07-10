@@ -44,8 +44,14 @@ def init_db(db_path: Path) -> None:
     _conn = sqlite3.connect(str(db_path), check_same_thread=False)
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
+    _conn.execute("PRAGMA busy_timeout=5000")      # 5s 等锁而非立即抛
+    _conn.execute("PRAGMA synchronous=NORMAL")     # WAL 下 NORMAL 足够安全且更快
+    _conn.execute("PRAGMA cache_size=-8000")       # 8MB 页缓存
+    _conn.execute("PRAGMA temp_store=MEMORY")      # 临时表/排序在内存
+    _conn.execute("PRAGMA foreign_keys=ON")        # 为未来建外键做准备
     _create_tables()
     _run_migrations()
+    _create_indexes()
     logger.debug("Soul 数据库已初始化: %s", db_path)
 
 
@@ -214,6 +220,25 @@ def _create_tables() -> None:
     conn.commit()
 
 
+def _create_indexes() -> None:
+    """幂等建索引（在迁移之后执行，确保所有列已存在）。"""
+    conn = _get_conn()
+    index_sqls = [
+        "CREATE INDEX IF NOT EXISTS idx_traits_stream_enabled ON soul_crystallized_traits(stream_id, enabled, deleted)",
+        "CREATE INDEX IF NOT EXISTS idx_traits_lifecycle ON soul_crystallized_traits(lifecycle_state, enabled, deleted)",
+        "CREATE INDEX IF NOT EXISTS idx_seeds_status_stream ON soul_thought_seeds(status, stream_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_edges_from ON soul_thought_edges(from_trait_id)",
+        "CREATE INDEX IF NOT EXISTS idx_edges_to ON soul_thought_edges(to_trait_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pending_status ON soul_pending_reflections(status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_snapshot_session ON soul_injection_snapshots(session_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_pending_reply_msg ON soul_pending_reflections(reply_message_id, source)",
+        "CREATE INDEX IF NOT EXISTS idx_history_group ON soul_evolution_history(group_id, id)",
+    ]
+    for sql in index_sqls:
+        conn.execute(sql)
+    conn.commit()
+
+
 # ─── 迁移工具 ─────────────────────────────────────────────────────
 
 
@@ -327,11 +352,16 @@ def _dt_to_str(dt: datetime) -> str:
     return dt.isoformat() if dt else ""
 
 
-def _str_to_dt(s: str) -> datetime:
-    """ISO 字符串 → datetime，失败时返回当前时间。"""
+def _str_to_dt(s: str) -> datetime | None:
+    """ISO 字符串 → datetime，失败或空串时返回 None。
+
+    调用方必须处理 None：通常跳过 TTL 判定或使用默认时间。
+    不要用 datetime.now() 兜底——会导致坏数据漂移到当前时间，
+    TTL 判定误把刚导入的旧记录判为过期。
+    """
     if not s:
-        return datetime.now()
+        return None
     try:
         return datetime.fromisoformat(s)
     except Exception:
-        return datetime.now()
+        return None

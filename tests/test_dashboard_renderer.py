@@ -210,7 +210,7 @@ async def test_render_ctx_none_returns_empty() -> None:
     mod = _import_soul_submodule("components.dashboard_renderer")
     renderer = mod.DashboardRenderer(None, 1100, 2.0, 60000)
     result = await renderer.render(SAMPLE_FULL)
-    assert result == ""
+    assert result == ("", "卡片渲染失败")
 
 
 # ─── 4. _build_html 不报错 ──────────────────────────────────────────

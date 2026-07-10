@@ -191,6 +191,6 @@ def _row_to_seed(row: sqlite3.Row) -> ThoughtSeed:
         reasoning=row["reasoning"],
         potential_impact_json=row["potential_impact_json"],
         context_json=row["context_json"] if "context_json" in row.keys() else "[]",
-        created_at=_str_to_dt(row["created_at"]),
+        created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         status=row["status"],
     )

@@ -117,7 +117,7 @@ def get_context_slice(scope_type: str, scope_key: str) -> ContextSlice | None:
         closeness_offset=int(row["closeness_offset"]),
         directness_offset=int(row["directness_offset"]),
         sample_count=int(row["sample_count"]),
-        updated_at=_str_to_dt(row["updated_at"]),
+        updated_at=_str_to_dt(row["updated_at"]) or datetime.now(),
     )
 
 
@@ -133,7 +133,7 @@ def get_or_create_mood(scope_id: str = "global") -> MoodState:
             valence=int(row["valence"]),
             arousal=int(row["arousal"]),
             energy=int(row["energy"]),
-            updated_at=_str_to_dt(row["updated_at"]),
+            updated_at=_str_to_dt(row["updated_at"]) or datetime.now(),
         )
     now = datetime.now()
     conn.execute(
@@ -188,7 +188,7 @@ def list_thought_edges_for_trait(trait_id: str, limit: int = 20) -> list[Thought
             to_trait_id=row["to_trait_id"],
             relation_type=row["relation_type"],
             source_ref=row["source_ref"],
-            created_at=_str_to_dt(row["created_at"]),
+            created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         )
         for row in rows
     ]
@@ -223,7 +223,7 @@ def list_thought_edges_for_traits(trait_ids: list[str]) -> dict[str, list[Though
             to_trait_id=row["to_trait_id"],
             relation_type=row["relation_type"],
             source_ref=row["source_ref"],
-            created_at=_str_to_dt(row["created_at"]),
+            created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         )
         if edge.from_trait_id in trait_set:
             result[edge.from_trait_id].append(edge)

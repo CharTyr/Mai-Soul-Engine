@@ -34,28 +34,29 @@ async def handle_reflect(
         stream_id: 回复目标流。
         **kwargs: 含 message（鉴权）与可选 count（命名捕获组）。
     """
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    from ..utils.spectrum_utils import extract_command_actor
-    platform, user_id = extract_command_actor(kwargs)
-
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以查看自我评价"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    ok, err = check_admin_permission(plugin, kwargs, "查看自我评价")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
     if not plugin.config.self_reflection.enabled:
         msg = "自我评价反馈回路未启用（[self_reflection].enabled=false）"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    # 解析可选 N
+    # 解析可选 N（上限 20，超过提示缩小范围）
     count = 10
     raw_count = kwargs.get("count")
     if raw_count:
         try:
-            count = max(1, min(50, int(raw_count)))
+            parsed = int(raw_count)
+            if parsed > 20:
+                msg = "最多显示 20 条，请缩小范围（/soul_reflect <N>）"
+                await plugin.ctx.send.text(msg, stream_id)
+                return True, msg, True
+            count = max(1, parsed)
         except (TypeError, ValueError):
             count = 10
 

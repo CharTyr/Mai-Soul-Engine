@@ -8,6 +8,8 @@ from typing import Any
 
 _logger = logging.getLogger(__name__)
 
+_DEBUG_DUMP_HTML = False  # 生产环境不写调试 HTML；调试时改为 True
+
 _ROOT_ID = "soul-dashboard"
 
 
@@ -772,32 +774,32 @@ class DashboardRenderer:
         self.device_scale_factor = device_scale_factor
         self.render_timeout_ms = render_timeout_ms
 
-    async def render(self, data: dict) -> str:
-        """把 dashboard 数据渲染为 PNG base64；失败返回空串。"""
+    async def render(self, data: dict) -> tuple[str, str | None]:
+        """把 dashboard 数据渲染为 PNG base64；失败返回 (空串, 错误原因)。"""
         try:
             html = self._build_html(data)
             return await self._render_html(html, root_id=_ROOT_ID)
         except Exception:
             self._log_exception("Soul dashboard 渲染失败")
-            return ""
+            return ("", "卡片渲染失败")
 
-    async def render_trait(self, data: dict) -> str:
-        """渲染单个 trait 详情卡片为 PNG base64；失败返回空串。"""
+    async def render_trait(self, data: dict) -> tuple[str, str | None]:
+        """渲染单个 trait 详情卡片为 PNG base64；失败返回 (空串, 错误原因)。"""
         try:
             html = self._build_trait_html(data)
             return await self._render_html(html, root_id=_TRAIT_ROOT_ID, viewport_height=1800)
         except Exception:
             self._log_exception("Soul trait 详情渲染失败")
-            return ""
+            return ("", "卡片渲染失败")
 
-    async def render_inspect(self, data: dict) -> str:
-        """渲染 inspect 命中预览卡片为 PNG base64；失败返回空串。"""
+    async def render_inspect(self, data: dict) -> tuple[str, str | None]:
+        """渲染 inspect 命中预览卡片为 PNG base64；失败返回 (空串, 错误原因)。"""
         try:
             html = self._build_inspect_html(data)
             return await self._render_html(html, root_id=_INSPECT_ROOT_ID, viewport_height=1800)
         except Exception:
             self._log_exception("Soul inspect 预览渲染失败")
-            return ""
+            return ("", "卡片渲染失败")
 
 
 
@@ -807,32 +809,34 @@ class DashboardRenderer:
         *,
         root_id: str,
         viewport_height: int = 1600,
-    ) -> str:
+    ) -> tuple[str, str | None]:
+        """返回 (base64, error_reason)。成功时 error_reason=None。"""
         if self._ctx is None:
-            return ""
+            return ("", "卡片渲染失败")
 
-        try:
-            from datetime import datetime
-            from pathlib import Path as _Path
+        if _DEBUG_DUMP_HTML:
+            try:
+                from datetime import datetime
+                from pathlib import Path as _Path
 
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            dump_dir = _Path("/tmp/soul-dash-live")
-            dump_dir.mkdir(parents=True, exist_ok=True)
-            (dump_dir / f"{stamp}-{root_id}.html").write_text(html, encoding="utf-8")
-            body_part = html.split("<body", 1)[-1]
-            meta = {
-                "root_id": root_id,
-                "viewport_width": self.viewport_width,
-                "viewport_height": viewport_height,
-                "device_scale_factor": self.device_scale_factor,
-                "html_len": len(html),
-                "style_open": html.count("<style"),
-                "style_close": html.count("</style>"),
-                "css_in_body": ("justify-content" in body_part) or (".skip-row" in body_part),
-            }
-            (dump_dir / f"{stamp}-{root_id}.meta.txt").write_text(repr(meta), encoding="utf-8")
-        except Exception:
-            pass
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                dump_dir = _Path("/tmp/soul-dash-live")
+                dump_dir.mkdir(parents=True, exist_ok=True)
+                (dump_dir / f"{stamp}-{root_id}.html").write_text(html, encoding="utf-8")
+                body_part = html.split("<body", 1)[-1]
+                meta = {
+                    "root_id": root_id,
+                    "viewport_width": self.viewport_width,
+                    "viewport_height": viewport_height,
+                    "device_scale_factor": self.device_scale_factor,
+                    "html_len": len(html),
+                    "style_open": html.count("<style"),
+                    "style_close": html.count("</style>"),
+                    "css_in_body": ("justify-content" in body_part) or (".skip-row" in body_part),
+                }
+                (dump_dir / f"{stamp}-{root_id}.meta.txt").write_text(repr(meta), encoding="utf-8")
+            except Exception:
+                pass
 
         def _png_size(blob: bytes) -> tuple[int | None, int | None]:
             if blob[:8] == b"\x89PNG\r\n\x1a\n" and len(blob) >= 24:
@@ -900,6 +904,8 @@ class DashboardRenderer:
                 return False
 
         def _dump(name: str, blob: bytes | None, meta: dict) -> None:
+            if not _DEBUG_DUMP_HTML:
+                return
             try:
                 from datetime import datetime
                 from pathlib import Path as _Path
@@ -943,6 +949,7 @@ class DashboardRenderer:
             width, height = _png_size(blob)
             return image_base64, blob, width, height
 
+        import asyncio as _asyncio
         import base64 as _b64
 
         # Prefer body viewport first: live element screenshots are the unstable path.
@@ -952,7 +959,7 @@ class DashboardRenderer:
             {"name": "a3-full-crop", "selector": "body", "full_page": True, "wait_ms": 250, "crop": True},
         ]
 
-        for attempt in attempts:
+        for idx, attempt in enumerate(attempts):
             try:
                 image_base64, blob, width, height = await _once(
                     selector=attempt["selector"],
@@ -961,8 +968,12 @@ class DashboardRenderer:
                 )
             except Exception:
                 self._log_exception(f"html2png failed ({attempt['name']})")
+                # 指数 backoff：重试间递增等待，避免压垮宿主无头浏览器
+                await _asyncio.sleep(0.2 * (2 ** idx))
                 continue
             if not image_base64 or blob is None:
+                # 指数 backoff：重试间递增等待，避免压垮宿主无头浏览器
+                await _asyncio.sleep(0.2 * (2 ** idx))
                 continue
 
             if attempt.get("crop"):
@@ -991,19 +1002,21 @@ class DashboardRenderer:
                     width,
                     height,
                 )
+                # 指数 backoff：重试间递增等待，避免压垮宿主无头浏览器
+                await _asyncio.sleep(0.2 * (2 ** idx))
                 continue
             if root_id == _ROOT_ID and (height is None or height < 980 or height > 2300):
                 _logger.warning(
-                    "Soul dashboard rejected size frame %s: %sx%s",
+                    "Soul dashboard size outside recommended range %s: %sx%s — passing through",
                     attempt["name"],
                     width,
                     height,
                 )
-                continue
-            return image_base64
+                # 高度超区间只 log warning 不 reject，让渲染结果通过（可能需要裁剪）
+            return (image_base64, None)
 
         _logger.error("Soul dashboard render failed after all attempts")
-        return ""
+        return ("", "卡片渲染失败")
 
     def _log_exception(self, message: str) -> None:
         ctx = self._ctx
@@ -1538,7 +1551,6 @@ class DashboardRenderer:
             )
         return '<div class="skip-stack">' + "".join(rows) + "</div>"
 
-    @staticmethod
     @staticmethod
     def _wrap_html(body: str) -> str:
         """Assemble a full HTML document for html2png.

@@ -35,6 +35,14 @@ def _compact_one_line(text: str, limit: int) -> str:
     return s
 
 
+# ── 注入指标计数器（可观测性）──────────────────────────────────────
+_injection_metrics = {
+    "total": 0,           # 总注入次数
+    "traits_hit": 0,      # 命中 trait 的注入次数
+    "skipped_cooldown": 0,  # 因冷却跳过的次数
+    "skipped_no_traits": 0,  # 无可用 trait 跳过的次数
+}
+
 # ─── 冷却逻辑 ───────────────────────────────────────────────────────
 
 _RECENT_TRAIT_INJECTION: dict[str, dict[str, float]] = {}
@@ -66,6 +74,38 @@ async def _in_cooldown(stream_id: str | None, trait_id: str, now: float, cooldow
     if not ts:
         return False
     return (now - float(ts)) < float(cooldown_seconds)
+
+
+async def _batch_cooldown_filter(
+    stream_id: str | None,
+    traits: list,
+    now: float,
+    cooldown_seconds: int,
+) -> tuple[list, list[str]]:
+    """批量冷却筛选：一次性获取锁 copy snapshot，锁外批查。
+
+    返回 (filtered_traits, cooldown_skipped_ids)。
+    替代循环调用 _in_cooldown 的 80 次锁获取。
+
+    软竞态：snapshot 是锁内拷贝的，锁外批查期间其他协程可能已通过 _mark_injected
+    标记了新 trait。本协程的 snapshot 看不到该标记，可能导致 trait 被重复注入一次。
+    冷却机制是"尽力而为"的软约束，重复注入一次无功能影响，可接受。
+    """
+    if cooldown_seconds <= 0 or not traits:
+        return traits, []
+    sid = _stream_key(stream_id)
+    async with _injection_cache_lock:
+        snapshot = dict(_RECENT_TRAIT_INJECTION.get(sid, {}))
+    # 锁外批查
+    filtered: list = []
+    skipped: list[str] = []
+    for t in traits:
+        ts = snapshot.get(t.trait_id)
+        if ts and (now - float(ts)) < float(cooldown_seconds):
+            skipped.append(t.trait_id)
+        else:
+            filtered.append(t)
+    return filtered, skipped
 
 
 async def _mark_injected(stream_id: str | None, trait_ids: list[str], now: float) -> None:
@@ -298,7 +338,22 @@ def _build_injection_block(
     自评摘要按是否有 trait 分场景插入（oracle 修订点 5）：
     - 有 trait：放 trait 块下方，语态"低优先级自查，以固化观点为准"
     - 无 trait：放光谱提示后、收束指令前，语态"无特定观点时的补充参考"
+
+    注入块体积控制：trait 行总字符超过 1500 时从尾部裁剪。
     """
+    # 体积控制：trait 行总字符上限 1500
+    MAX_TRAIT_CHARS = 1500
+    total_trait_chars = sum(len(line) for line in trait_lines)
+    if total_trait_chars > MAX_TRAIT_CHARS:
+        trimmed: list[str] = []
+        acc = 0
+        for line in trait_lines:
+            acc += len(line)
+            if acc > MAX_TRAIT_CHARS:
+                break
+            trimmed.append(line)
+        trait_lines = trimmed
+
     has_traits = bool(trait_lines)
     reflection_block = ""
     if reflection_summary:
@@ -359,6 +414,9 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     if skip_check is not None:
         return skip_check
 
+    # 进入注入流程 → 计数
+    _injection_metrics["total"] += 1
+
     session_id: str = kwargs.get("session_id", "") or ""
     stream_id = session_id
     is_private = ":private" in stream_id or "private" in stream_id.lower()
@@ -402,27 +460,34 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         return {"success": True, "action": "continue"}
 
     # ── 4. 查询活跃 traits + 选择 ───────────────────────────────────
-    traits = query_active_traits_for_injection(stream_id=stream_id, limit=80)
+    traits = query_active_traits_for_injection(stream_id=stream_id, limit=40)
     text = _extract_user_text(messages)
     now_ts = time.time()
     await _prune_recent_injection(now_ts)
 
-    # 应用冷却筛选
-    cooldown_skipped: list[str] = []
+    # 应用冷却筛选（批量查，单次锁获取）
     if cooldown_seconds > 0 and max_traits > 0:
-        filtered_traits: list = []
-        for t in traits:
-            if await _in_cooldown(stream_id, t.trait_id, now_ts, cooldown_seconds):
-                cooldown_skipped.append(t.trait_id)
-            else:
-                filtered_traits.append(t)
+        filtered_traits, cooldown_skipped = await _batch_cooldown_filter(
+            stream_id, traits, now_ts, cooldown_seconds
+        )
     else:
         filtered_traits = traits
+        cooldown_skipped = []
+
+    # 冷却跳过计数
+    if cooldown_skipped:
+        _injection_metrics["skipped_cooldown"] += len(cooldown_skipped)
 
     selected, selection_mode, picked = _select_traits(
         filtered_traits, text, stream_id,
         max_traits, fallback_recent_impact, now_ts,
     )
+
+    # 命中/无 trait 计数
+    if selected:
+        _injection_metrics["traits_hit"] += 1
+    else:
+        _injection_metrics["skipped_no_traits"] += 1
 
     # ── 5. 构建 P1 块（复用缓存 service + 传入已查 traits）─────────
     wv = plugin._wv_service

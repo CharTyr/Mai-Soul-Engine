@@ -60,7 +60,7 @@ def _normalize_evidence_entry(entry: Any) -> dict[str, Any] | None:
     return out
 
 
-def parse_evidence_json(raw: str) -> list[dict[str, Any]]:
+def parse_trait_evidence_json(raw: str) -> list[dict[str, Any]]:
     try:
         data = json.loads(raw or "[]")
     except Exception:
@@ -77,7 +77,7 @@ def parse_evidence_json(raw: str) -> list[dict[str, Any]]:
     return result
 
 
-def dumps_evidence_json(entries: Any) -> str:
+def dumps_trait_evidence_json(entries: Any) -> str:
     if not isinstance(entries, list):
         entries = []
     normalized: list[dict[str, Any]] = []
@@ -90,8 +90,8 @@ def dumps_evidence_json(entries: Any) -> str:
     return json.dumps(normalized, ensure_ascii=False)
 
 
-def append_evidence_json(raw: str, entry: Any) -> str:
-    current = parse_evidence_json(raw or "[]")
+def append_trait_evidence_json(raw: str, entry: Any) -> str:
+    current = parse_trait_evidence_json(raw or "[]")
     norm = _normalize_evidence_entry(entry)
     if norm:
         current.append(norm)

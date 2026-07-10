@@ -18,6 +18,7 @@ __all__ = [
     "create_crystallized_trait",
     "expire_old_traits",
     "get_crystallized_trait_by_id",
+    "get_crystallized_traits_by_ids",
     "query_active_traits_for_injection",
     "query_crystallized_traits",
     "save_crystallized_trait",
@@ -157,13 +158,19 @@ def query_active_traits_for_injection(
     stream_id: str = "",
     limit: int = 80,
 ) -> list[CrystallizedTrait]:
-    """查询用于注入的活跃 trait（按 stream_id 匹配或全局）。"""
+    """查询用于注入的活跃 trait（按 stream_id 匹配或全局）。
+
+    使用 UNION ALL 拆分为两条查询，确保 idx_traits_stream_enabled 索引对两条子查询都有效
+    （SQLite 对 OR 条件通常退化为全表扫描，UNION ALL 各自走索引）。
+    """
     conn = _get_conn()
-    if stream_id:
+    if stream_id and stream_id != GLOBAL_STREAM:
         rows = conn.execute(
             """SELECT * FROM soul_crystallized_traits
-               WHERE deleted = 0 AND enabled = 1
-               AND (stream_id = ? OR stream_id = ?)
+               WHERE deleted = 0 AND enabled = 1 AND stream_id = ?
+               UNION ALL
+               SELECT * FROM soul_crystallized_traits
+               WHERE deleted = 0 AND enabled = 1 AND stream_id = ?
                ORDER BY created_at DESC LIMIT ?""",
             (stream_id, GLOBAL_STREAM, limit),
         ).fetchall()
@@ -175,6 +182,24 @@ def query_active_traits_for_injection(
             (GLOBAL_STREAM, limit),
         ).fetchall()
     return [_row_to_trait(row) for row in rows]
+
+
+def get_crystallized_traits_by_ids(trait_ids: list[str]) -> dict[str, CrystallizedTrait]:
+    """批量按 ID 查 trait，返回 {trait_id: trait}。
+
+    用于替代 N+1 场景中循环调用 get_crystallized_trait_by_id。
+    单次 SQL IN 查询，空列表返回空 dict。
+    """
+    if not trait_ids:
+        return {}
+    conn = _get_conn()
+    placeholders = ",".join("?" * len(trait_ids))
+    rows = conn.execute(
+        f"""SELECT * FROM soul_crystallized_traits
+            WHERE trait_id IN ({placeholders}) AND deleted = 0""",
+        trait_ids,
+    ).fetchall()
+    return {row["trait_id"]: _row_to_trait(row) for row in rows}
 
 
 def _row_to_trait(row: sqlite3.Row) -> CrystallizedTrait:
@@ -190,7 +215,7 @@ def _row_to_trait(row: sqlite3.Row) -> CrystallizedTrait:
         confidence=row["confidence"],
         evidence_json=row["evidence_json"],
         spectrum_impact_json=row["spectrum_impact_json"],
-        created_at=_str_to_dt(row["created_at"]),
+        created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         enabled=bool(row["enabled"]),
         deleted=bool(row["deleted"]),
         ideology_layer=row["ideology_layer"] if "ideology_layer" in row.keys() else "conduct",

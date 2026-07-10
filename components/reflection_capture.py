@@ -1,8 +1,9 @@
 """自我评价捕获层：after_response hook 委托 + before_request 上下文缓存/快照。
 
-两个 OBSERVE 模式 HookHandler（不改写输出，零干扰宿主主流程）：
-- ``maisaka.planner.after_response`` → 拿 planner LLM 决策输出
+一个 OBSERVE 模式 HookHandler（不改写输出，零干扰宿主主流程）：
 - ``maisaka.replyer.after_response`` → 拿最终回复文本
+
+planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
 
 before_request 侧（由 ``ideology_injector.inject_ideology`` 调用）：
 - ``cache_session_context``：缓存触发上文（session_id 作 key，TTL bound）
@@ -23,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json as _json
 import logging
+import threading as _threading
 import time
 from typing import Any
 
@@ -45,6 +47,9 @@ _CONTEXT_LINE_MAX_CHARS: int = 200
 
 # session_id -> (context_lines, timestamp)
 _context_cache: dict[str, tuple[list[str], float]] = {}
+# 用 threading.Lock 而非 asyncio.Lock：临界区只有 O(1) dict 操作（微秒级），
+# 不跨 await 点，threading.Lock 更轻量且不会阻塞事件循环。
+_context_cache_lock = _threading.Lock()
 
 
 def cache_session_context(session_id: str, messages: list[dict]) -> None:
@@ -54,29 +59,31 @@ def cache_session_context(session_id: str, messages: list[dict]) -> None:
     """
     if not session_id:
         return
-    lines: list[str] = []
-    for msg in reversed(messages):
-        if len(lines) >= _CONTEXT_MAX_LINES:
-            break
-        if msg.get("role") == "user":
-            content = str(msg.get("content", "") or "")
-            sanitized = sanitize_text(content, max_chars=_CONTEXT_LINE_MAX_CHARS)
-            if sanitized:
-                lines.append(sanitized)
-    lines.reverse()
-    # 容量控制：超上限删最旧一半
-    if len(_context_cache) > _CONTEXT_MAX_ENTRIES:
-        sorted_items = sorted(_context_cache.items(), key=lambda x: x[1][1])
-        for k, _ in sorted_items[: len(sorted_items) // 2]:
-            _context_cache.pop(k, None)
-    _context_cache[session_id] = (lines, time.time())
+    with _context_cache_lock:
+        lines: list[str] = []
+        for msg in reversed(messages):
+            if len(lines) >= _CONTEXT_MAX_LINES:
+                break
+            if msg.get("role") == "user":
+                content = str(msg.get("content", "") or "")
+                sanitized = sanitize_text(content, max_chars=_CONTEXT_LINE_MAX_CHARS)
+                if sanitized:
+                    lines.append(sanitized)
+        lines.reverse()
+        # 容量控制：超上限删最旧一半
+        if len(_context_cache) > _CONTEXT_MAX_ENTRIES:
+            sorted_items = sorted(_context_cache.items(), key=lambda x: x[1][1])
+            for k, _ in sorted_items[: len(sorted_items) // 2]:
+                _context_cache.pop(k, None)
+        _context_cache[session_id] = (lines, time.time())
 
 
 def take_cached_context(session_id: str) -> list[str]:
     """取并清除缓存（一次性）。超龄或缺失返回空列表（合法降级）。"""
     if not session_id:
         return []
-    entry = _context_cache.pop(session_id, None)
+    with _context_cache_lock:
+        entry = _context_cache.pop(session_id, None)
     if not entry:
         return []
     lines, ts = entry
@@ -135,7 +142,7 @@ async def capture_after_response(plugin, source: str, **kwargs: Any) -> dict[str
 
     Args:
         plugin: 插件实例。
-        source: ``"planner"`` 或 ``"replyer"``，区分决策输出与最终回复。
+        source: 保留参数，当前只处理 ``"replyer"``（``"planner"`` 被跳过——planner 决策不进入自评）。
         **kwargs: hook payload（response / session_id / reply_message_id 等）。
     """
     if not plugin.config.self_reflection.enabled:

@@ -65,7 +65,7 @@ def get_evolution_history(limit: int = 50) -> list[EvolutionHistory]:
     return [
         EvolutionHistory(
             id=row["id"],
-            timestamp=_str_to_dt(row["timestamp"]),
+            timestamp=_str_to_dt(row["timestamp"]) or datetime.now(),
             group_id=row["group_id"],
             sincerity_delta=row["sincerity_delta"],
             engagement_delta=row["engagement_delta"],

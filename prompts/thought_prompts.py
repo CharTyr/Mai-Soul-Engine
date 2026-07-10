@@ -8,6 +8,7 @@ ENHANCED_EVOLUTION_PROMPT = """分析以下群聊内容，完成两个任务：
 4. directness: 负数=更含蓄、绕弯；正数=更直来直去
 
 注意：这些是群聊社交中真实会变化的倾向，不是政治立场。根据对话氛围、互动方式、情感基调来判断。
+sincerity 与 directness 相互独立，不要同向联动：sincerity 看"是否违心/配合表演"，directness 看"信息是否绕弯/留余地"。可存在"高sincerity+低directness"（真诚但委婉）或"低sincerity+高directness"（嘴直但爱演）的人。
 
 **任务2：思维种子识别**
 只有当对话涉及深层价值观冲突或重要立场表达时才提取思维种子。

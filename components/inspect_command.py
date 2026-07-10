@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from ..models.ideology_model import query_active_traits_for_injection
-from ..utils.spectrum_utils import match_user
+
 from ..utils.trait_tags import parse_tags_json
 from ..worldview.constants import LAYER_LABEL_ZH, LIFECYCLE_LABEL_ZH
 from .dashboard_renderer import DashboardRenderer, build_inspect_text
@@ -46,14 +46,12 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
         return True, msg, True
 
     # ── 2. 管理员鉴权 ────────────────────────────────────────────────
-    from ..utils.spectrum_utils import extract_command_actor
-    platform, user_id = extract_command_actor(kwargs)
-    admin_user_id = plugin.config.admin.admin_user_id
+    from ..utils.spectrum_utils import check_admin_permission
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以执行此命令"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    ok, err = check_admin_permission(plugin, kwargs, "执行注入命中预览")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
     # ── 3. 取活跃 trait 池 ──────────────────────────────────────────
     traits = query_active_traits_for_injection(stream_id=stream_id, limit=80)
@@ -155,20 +153,27 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
             plugin.config.render.device_scale_factor,
             plugin.config.render.render_timeout_ms,
         )
-        image_base64 = await renderer.render_inspect(data)
+        image_base64, error_reason = await renderer.render_inspect(data)
 
         if image_base64:
             try:
                 await plugin.ctx.send.image(image_base64, stream_id)
             except (OSError, RuntimeError) as exc:
                 logger.exception("发送注入命中预览卡片图片失败: %s", exc)
-                fallback_text = f"卡片渲染失败，以下为文本状态：\n{build_inspect_text(data)}"
+                fallback_text = (
+                    f"卡片渲染失败，以下为文本状态：\n{build_inspect_text(data)}\n"
+                    "可尝试 /soul_status 查看文本状态"
+                )
                 await plugin.ctx.send.text(fallback_text, stream_id)
                 return True, "注入命中预览(文本降级)", True
             return True, "已生成注入命中预览卡片", True
 
         # 渲染返回空串——渲染失败，降级文本
-        fallback_text = f"卡片渲染失败，以下为文本状态：\n{build_inspect_text(data)}"
+        reason = error_reason or "卡片渲染失败"
+        fallback_text = (
+            f"{reason}，以下为文本状态：\n{build_inspect_text(data)}\n"
+            "可尝试 /soul_status 查看文本状态"
+        )
         await plugin.ctx.send.text(fallback_text, stream_id)
         return True, "注入命中预览(文本降级)", True
 

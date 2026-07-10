@@ -27,5 +27,17 @@ def soul_db(tmp_path: Path) -> Any:
     """共享的 soul.db fixture：init_db → yield model shim → close_db。"""
     im = _import_soul_submodule("models.ideology_model")
     im.init_db(tmp_path / "soul.db")
+    # 清理跨测试共享的模块级缓存（reflection_feedback._summary_cache 等）
+    _clear_module_caches()
     yield im
     im.close_db()
+
+
+def _clear_module_caches() -> None:
+    """清理可能跨测试污染的模块级缓存。"""
+    try:
+        fb = _import_soul_submodule("components.reflection_feedback")
+        if hasattr(fb, "invalidate_reflection_summary_cache"):
+            fb.invalidate_reflection_summary_cache()
+    except Exception:
+        pass

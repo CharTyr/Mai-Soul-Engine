@@ -4,7 +4,7 @@
 
 ### 用户可感知
 
-- **自我评价反馈回路**（`[self_reflection].enabled`，默认关）：补上插件最大的缺口——此前只单向"告诉 bot 是谁"（注入），从不检查"bot 表现得像不像自己"。开启后：planner/replyer 每次决策/回复后捕获输出，定期让 LLM 评价"这次回复是否符合人设"，评价结果两路反馈——①校准光谱（自评偏离 ×权重，gentle：weight=0.5→每周期±1，1.0→±2，需净偏离≥3 次才触发）②下次注入时提醒 bot"你近期在 X 场景偏 Y"。
+- **自我评价反馈回路**（`[self_reflection].enabled`，默认关）：补上插件最大的缺口——此前只单向"告诉 bot 是谁"（注入），从不检查"bot 表现得像不像自己"。开启后：replyer 每次回复后捕获输出，定期让 LLM 评价"这次回复是否符合人设"，评价结果两路反馈——①校准光谱（自评偏离 ×权重，gentle：weight=0.5→每周期±1，1.0→±2，需净偏离≥3 次才触发）②下次注入时提醒 bot"你近期在 X 场景偏 Y"。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
 - **`/soul_reflect [N]`**（管理员）：查看近期自我评价记录——待评队列、评价统计（已评/跳过/偏离轴分布）、最近 N 条自评详情（一致性分/偏离轴/原因）。
 - **`/soul_dashboard`** 新增"自我评价"块：待评计数、评价统计、近期偏离摘要。
 - **相关性门槛**（`relevance_gate_enabled`，默认开）：纯闲聊社交回复（哈哈/表情/附和）跳过不打分，只有表态/决策的回复才完整评价——避免"哈哈"被误判成"你不够真诚"。
@@ -14,7 +14,7 @@
 
 - **P0 泄漏修复**：`utils/spectrum_utils.py` 新增 `is_bot_self_message` + `filter_messages_for_evolution`（bot 自身短路优先于 `monitored_users` 白名单）；`evolution_task` 改用该函数 + 每群一次告警；`[monitor].bot_self_id` 配置 + `excluded_users` hint 升级。单独提交 `f58b41b`。
 - **数据模型**：`models/self_reflection.py` 新增 3 表——`soul_injection_snapshots`（before_request 注入快照，配对用）、`soul_pending_reflections`（待评队列，TTL+上限+expired 状态防堆积）、`soul_self_reflections`（评价结果）；`_conn.py` 建表 + `idx_pending_created` 索引；shim 重导出。
-- **捕获层**：`components/reflection_capture.py` 两个 `@HookHandler(mode=OBSERVE, error_policy=SKIP)`——`maisaka.planner.after_response` + `maisaka.replyer.after_response`，零干扰不改写输出；before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回配对（1:N）；snapshot 仅 `enabled` 时写防膨胀；context 缓存缺失=合法降级。**懒导入 models 避开预存循环导入**（`_conn→worldview→service→ideology_model→history→_conn`）。
+- **捕获层**：`components/reflection_capture.py` 一个 `@HookHandler(mode=OBSERVE, error_policy=SKIP)`——`maisaka.replyer.after_response`，零干扰不改写输出；before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回配对（1:N）；snapshot 仅 `enabled` 时写防膨胀；context 缓存缺失=合法降级。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。**懒导入 models 避开预存循环导入**（`_conn→worldview→service→ideology_model→history→_conn`）。
 - **评价层**：`components/reflection_evaluator.py` 独立异步消费协程（`plugin._self_reflection_task`，`on_unload` cancel）；`prompts/self_reflection_prompts.py` 批量评价 prompt——**不给完整光谱+trait"标准答案"**（防评估与注入共享判断框架→系统性高分），只给抽象倾向 + **对立视角**（挑剔外部观察者）+ 相关性门槛三档**具体判例**；可选批次归一化（`normalize_across_batch`，自评分减本批均值对冲高估）；显著偏离的 substantive 回复生成 `self_observation` 种子走 `/soul_approve` 人工审批（默认全人工审批，防自指跑偏）。
 - **双路反馈**：`components/reflection_feedback.py`——①演化路 `apply_self_reflection_spectrum_correction`：自评偏离折算光谱 delta，dead zone（净偏离≥3 才修正）+ magnitude 受 `self_reflection_weight` 缩放（0.5→±1，1.0→±2）防自指闭环，直接应用原始 delta（经 EMA smooth_delta 会被归零）；②planner 反馈路 `build_recent_reflection_summary`：聚合近期自评为一行，`ideology_injector._build_injection_block` 按 selection_mode 分场景注入（有 trait→trait 块下方"低优先级自查"；无 trait→光谱后"补充参考"）。
 - **统一光谱写入闸门**：`models/spectrum.py::apply_spectrum_deltas(source, deltas, ...)` 收口三回路（群演化/内化/自评）的散装光谱写入，clamp→resistance→smooth→update→save→history 一条链，演化历史 reason 现统一带 `[evolution]`/`[internalize]`/`[self_reflection]` 标记可区分来源；内化现也写历史（此前不写，可观测性增量）。

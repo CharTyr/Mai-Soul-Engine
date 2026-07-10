@@ -221,6 +221,10 @@ async def _evaluate_cycle(plugin) -> None:
             logger.exception("[SelfReflection] 写 self_reflection 失败 (pending=%s)", p.pending_id)
             reflection_id = 0
 
+        # 主动失效自评摘要缓存（新自评写入后，下次热路径重新查 DB）
+        from .reflection_feedback import invalidate_reflection_summary_cache
+        invalidate_reflection_summary_cache(p.stream_id or "global")
+
         # 更新 pending 状态
         status = "done" if evaluated else "skipped"
         try:

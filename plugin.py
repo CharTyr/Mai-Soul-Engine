@@ -71,6 +71,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         # P1 缓存：避免每条消息重建 WorldviewConfigView 和 WorldviewService
         self._wv_config_view: WorldviewConfigView | None = None
         self._wv_service: WorldviewService | None = None
+        # /soul_reset 二次确认：{session_id: timestamp}
+        self._reset_confirm_ts: dict[str, float] = {}
 
     # ===== 生命周期 =====
 
@@ -84,16 +86,28 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         # 初始化插件自有 SQLite
         soul_db_path = self._data_dir / "soul.db"
-        init_db(soul_db_path)
-        logger.info("[Mai-Soul-Engine] 数据库已初始化: %s", soul_db_path)
+        try:
+            init_db(soul_db_path)
+            logger.info("[Mai-Soul-Engine] 数据库已初始化: %s", soul_db_path)
+        except Exception as e:
+            logger.error("[Mai-Soul-Engine] 数据库初始化失败，插件将以降级模式运行: %s", e, exc_info=True)
+            return  # 不启动后台任务，但不让 SDK 崩
 
         # 初始化审计日志
-        init_audit_log(self._plugin_dir)
+        try:
+            init_audit_log(self._plugin_dir)
+        except Exception as e:
+            logger.error("[Mai-Soul-Engine] 审计日志初始化失败: %s", e, exc_info=True)
 
-        # 旧版数据迁移
+        # 旧版数据迁移（带超时，防宿主 DB 锁住时卡 on_load）
         project_root = self._plugin_dir.parent.parent
         try:
-            run_legacy_import(self._data_dir, project_root)
+            await asyncio.wait_for(
+                asyncio.to_thread(run_legacy_import, self._data_dir, project_root),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error("[Mai-Soul-Engine] 旧版数据迁移超时（30s），跳过")
         except Exception as e:
             logger.error("[Mai-Soul-Engine] 旧版数据迁移失败: %s", e, exc_info=True)
 
@@ -144,6 +158,15 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
                 pass
             self._self_reflection_task = None
 
+        # 清模块级可变状态，防插件重载间泄漏
+        from .components.ideology_injector import _RECENT_TRAIT_INJECTION
+        _RECENT_TRAIT_INJECTION.clear()
+        from .components.reflection_capture import _context_cache
+        _context_cache.clear()
+        from .components.evolution_task import _bot_filter_warned, reset_aggregation_state
+        _bot_filter_warned.clear()
+        reset_aggregation_state()
+
         close_db()
         logger.info("[Mai-Soul-Engine] 插件已卸载")
 
@@ -155,23 +178,38 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             # 刷新 P1 缓存
             self._wv_config_view = config_from_plugin(self)
             self._wv_service = WorldviewService(self._wv_config_view)
+            # 清注入冷却表（配置热更后旧冷却状态可能与新 max_traits/cooldown_seconds 不匹配）
+            from .components.ideology_injector import _RECENT_TRAIT_INJECTION
+            _RECENT_TRAIT_INJECTION.clear()
             # 演化任务启停
             if self.config.evolution.evolution_enabled and self._evolution_task is None:
                 self._evolution_task = asyncio.create_task(self._evolution_loop())
             elif not self.config.evolution.evolution_enabled and self._evolution_task is not None:
                 self._evolution_task.cancel()
+                try:
+                    await self._evolution_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 self._evolution_task = None
             # Notion 同步任务启停
             if self.config.notion.enabled and self._notion_sync_task is None:
                 self._notion_sync_task = asyncio.create_task(self._notion_sync_loop())
             elif not self.config.notion.enabled and self._notion_sync_task is not None:
                 self._notion_sync_task.cancel()
+                try:
+                    await self._notion_sync_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 self._notion_sync_task = None
             # 自我评价任务启停
             if self.config.self_reflection.enabled and self._self_reflection_task is None:
                 self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
             elif not self.config.self_reflection.enabled and self._self_reflection_task is not None:
                 self._self_reflection_task.cancel()
+                try:
+                    await self._self_reflection_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 self._self_reflection_task = None
 
     # ===== 周期任务 =====
@@ -229,7 +267,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
     # ===== Command：问卷初始化 =====
 
-    @Command("soul_setup", description="初始化灵魂光谱问卷（管理员私聊）", pattern=r"^/soul_setup\s*$")
+    @Command("soul_setup", description="初始化灵魂光谱问卷（管理员私聊）", pattern=r"^/soul_setup(?:\s+(?P<flags>--\w+(?:\s+--\w+)*))?\s*$")
     async def cmd_soul_setup(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """初始化灵魂光谱问卷。"""
         from .components.setup_command import handle_setup
@@ -268,7 +306,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
     # ===== Command：重置 =====
 
-    @Command("soul_reset", description="重置意识形态光谱", pattern=r"^/soul_reset\s*$")
+    @Command("soul_reset", description="重置意识形态光谱（需二次确认）", pattern=r"^/soul_reset(?:\s+confirm)?\s*$")
     async def cmd_soul_reset(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """重置灵魂光谱。"""
         from .components.reset_command import handle_reset
@@ -284,21 +322,21 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_seeds_list(self, stream_id, **kwargs)
 
-    @Command("soul_seed", description="查看单个思维种子详情（管理员）", pattern=r"^/soul_seed\s+(\w+)\s*$")
+    @Command("soul_seed", description="查看单个思维种子详情（管理员）", pattern=r"^/soul_seed\s+([\w-]{8,})\s*$")
     async def cmd_soul_seed(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """查看单个种子详情。"""
         from .components.thought_commands import handle_seed_detail
 
         return await handle_seed_detail(self, stream_id, **kwargs)
 
-    @Command("soul_approve", description="批准思维种子内化（管理员）", pattern=r"^/soul_approve\s+(\w+)\s*$")
+    @Command("soul_approve", description="批准思维种子内化（管理员）", pattern=r"^/soul_approve\s+([\w-]{8,})\s*$")
     async def cmd_soul_approve(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """批准种子内化。"""
         from .components.thought_commands import handle_seed_approve
 
         return await handle_seed_approve(self, stream_id, **kwargs)
 
-    @Command("soul_reject", description="拒绝并删除思维种子（管理员）", pattern=r"^/soul_reject\s+(\w+)\s*$")
+    @Command("soul_reject", description="拒绝并删除思维种子（管理员）", pattern=r"^/soul_reject\s+([\w-]{8,})\s*$")
     async def cmd_soul_reject(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """拒绝种子。"""
         from .components.thought_commands import handle_seed_reject
@@ -321,42 +359,42 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_traits_list(self, stream_id, **kwargs)
 
-    @Command("soul_trait", description="查看单个 trait 详情（管理员）", pattern=r"^/soul_trait\s+(\w+)\s*$")
+    @Command("soul_trait", description="查看单个 trait 详情（管理员）", pattern=r"^/soul_trait\s+([\w-]{8,})\s*$")
     async def cmd_soul_trait(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """查看单个 trait 详情。"""
         from .components.thought_commands import handle_trait_detail
 
         return await handle_trait_detail(self, stream_id, **kwargs)
 
-    @Command("soul_trait_set_tags", description="设置 trait 的 tags（管理员）", pattern=r"^/soul_trait_set_tags\s+(\w+)\s+(.+?)\s*$")
+    @Command("soul_trait_set_tags", description="设置 trait 的 tags（管理员）", pattern=r"^/soul_trait_set_tags\s+([\w-]{8,})\s+(.+?)\s*$")
     async def cmd_soul_trait_set_tags(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """设置 trait tags。"""
         from .components.thought_commands import handle_trait_set_tags
 
         return await handle_trait_set_tags(self, stream_id, **kwargs)
 
-    @Command("soul_trait_merge", description="合并两个 trait（管理员）", pattern=r"^/soul_trait_merge\s+(\w+)\s+(\w+)\s*$")
+    @Command("soul_trait_merge", description="合并两个 trait（管理员）", pattern=r"^/soul_trait_merge\s+([\w-]{8,})\s+([\w-]{8,})\s*$")
     async def cmd_soul_trait_merge(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """合并 traits。"""
         from .components.thought_commands import handle_trait_merge
 
         return await handle_trait_merge(self, stream_id, **kwargs)
 
-    @Command("soul_trait_disable", description="禁用指定 trait（管理员）", pattern=r"^/soul_trait_disable\s+(\w+)\s*$")
+    @Command("soul_trait_disable", description="禁用指定 trait（管理员）", pattern=r"^/soul_trait_disable\s+([\w-]{8,})\s*$")
     async def cmd_soul_trait_disable(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """禁用 trait。"""
         from .components.thought_commands import handle_trait_disable
 
         return await handle_trait_disable(self, stream_id, **kwargs)
 
-    @Command("soul_trait_enable", description="启用指定 trait（管理员）", pattern=r"^/soul_trait_enable\s+(\w+)\s*$")
+    @Command("soul_trait_enable", description="启用指定 trait（管理员）", pattern=r"^/soul_trait_enable\s+([\w-]{8,})\s*$")
     async def cmd_soul_trait_enable(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """启用 trait。"""
         from .components.thought_commands import handle_trait_enable
 
         return await handle_trait_enable(self, stream_id, **kwargs)
 
-    @Command("soul_trait_delete", description="删除指定 trait（管理员，软删除）", pattern=r"^/soul_trait_delete\s+(\w+)\s*$")
+    @Command("soul_trait_delete", description="删除指定 trait（管理员，软删除）", pattern=r"^/soul_trait_delete\s+([\w-]{8,})\s*$")
     async def cmd_soul_trait_delete(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
         """删除 trait。"""
         from .components.thought_commands import handle_trait_delete
@@ -443,7 +481,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             return {"success": False, "error": "Soul API 未启用（api.enabled=false）"}
         from .models.ideology_model import query_crystallized_traits
         from .utils.trait_tags import parse_tags_json
-        from .utils.trait_evidence import parse_evidence_json
+        from .utils.trait_evidence import parse_trait_evidence_json
 
         traits = query_crystallized_traits(
             deleted=False,
@@ -461,7 +499,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
                     "thought": t.thought,
                     "tags": parse_tags_json(t.tags_json),
                     "confidence": t.confidence,
-                    "evidence_count": len(parse_evidence_json(t.evidence_json)),
+                    "evidence_count": len(parse_trait_evidence_json(t.evidence_json)),
                     "enabled": t.enabled,
                     "ideology_layer": getattr(t, "ideology_layer", "conduct"),
                     "lifecycle_state": getattr(t, "lifecycle_state", "active"),
@@ -520,7 +558,16 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         progressive: int | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """手动设置光谱数值。"""
+        """手动设置光谱数值。
+
+        参数名映射（向后兼容别名 → 实际社交轴）：
+        - ``economic`` → ``sincerity``（真诚）
+        - ``social`` → ``engagement``（投入）
+        - ``diplomatic`` → ``closeness``（亲近）
+        - ``progressive`` → ``directness``（直率）
+
+        新调用方建议直接使用新轴名（暂未开放，仍用旧别名）。
+        """
         if not self.config.api.enabled:
             return {"success": False, "error": "Soul API 未启用（api.enabled=false）"}
         from .models.ideology_model import get_or_create_spectrum
@@ -563,15 +610,47 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         if not self.config.api.enabled:
             return {"success": False, "error": "Soul API 未启用（api.enabled=false）"}
         from .models.ideology_model import get_or_create_spectrum, count_pending_thought_seeds
+        from .components.ideology_injector import _injection_metrics
+        from .utils.audit_log import read_recent_audit
 
         spectrum = get_or_create_spectrum("global")
+
+        # ── 补充指标（try/except 包裹，失败返回 None） ──────────────
+        pending_seeds_count: int | None = None
+        try:
+            pending_seeds_count = count_pending_thought_seeds()
+        except Exception:
+            pass
+
+        db_size_bytes: int | None = None
+        try:
+            db_path = self._data_dir / "soul.db"
+            if db_path.exists():
+                db_size_bytes = db_path.stat().st_size
+        except Exception:
+            pass
+
+        evolution_last_run: str | None = None
+        try:
+            recent = read_recent_audit(limit=50)
+            for entry in recent:
+                if entry.get("type") == "evolution_cycle":
+                    evolution_last_run = entry.get("ts")
+                    break
+        except Exception:
+            pass
+
         return {
             "success": True,
             "status": "ok",
             "spectrum_initialized": spectrum.initialized,
-            "pending_seeds": count_pending_thought_seeds(),
+            "pending_seeds": pending_seeds_count,
+            "db_size_bytes": db_size_bytes,
+            "evolution_last_run": evolution_last_run,
+            "injection_metrics": dict(_injection_metrics),
             "evolution_running": self._evolution_task is not None and not self._evolution_task.done(),
             "notion_sync_running": self._notion_sync_task is not None and not self._notion_sync_task.done(),
+            "self_reflection_running": self._self_reflection_task is not None and not self._self_reflection_task.done(),
         }
 
 

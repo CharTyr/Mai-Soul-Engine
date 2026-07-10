@@ -37,7 +37,7 @@ async def handle_dashboard(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[
             plugin.config.render.device_scale_factor,
             plugin.config.render.render_timeout_ms,
         )
-        image_base64 = await renderer.render(data)
+        image_base64, error_reason = await renderer.render(data)
 
         if image_base64:
             # 渲染成功，发送图片
@@ -48,7 +48,10 @@ async def handle_dashboard(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[
                 # 降级文本
                 from .dashboard_renderer import build_dashboard_text
 
-                fallback_text = f"卡片渲染失败，以下为文本状态：\n{build_dashboard_text(data)}"
+                fallback_text = (
+                    f"卡片渲染失败，以下为文本状态：\n{build_dashboard_text(data)}\n"
+                    "可尝试 /soul_status 查看文本状态"
+                )
                 await plugin.ctx.send.text(fallback_text, stream_id)
                 return (True, "Soul 引擎状态(文本)", True)
             return (True, "已生成 Soul 引擎状态卡片", True)
@@ -56,7 +59,11 @@ async def handle_dashboard(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[
         # 渲染返回空串——渲染失败，降级文本
         from .dashboard_renderer import build_dashboard_text
 
-        fallback_text = f"卡片渲染失败，以下为文本状态：\n{build_dashboard_text(data)}"
+        reason = error_reason or "卡片渲染失败"
+        fallback_text = (
+            f"{reason}，以下为文本状态：\n{build_dashboard_text(data)}\n"
+            "可尝试 /soul_status 查看文本状态"
+        )
         await plugin.ctx.send.text(fallback_text, stream_id)
         return (True, "Soul 引擎状态(文本)", True)
 

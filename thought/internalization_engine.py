@@ -33,11 +33,14 @@ INTERNALIZATION_PROMPT = """基于以下思维种子，进行深层的哲学内�
 
 **任务2：评估光谱影响**
 这个观点会如何影响我的群聊社交人格倾向？
-- sincerity: 对真诚直率vs重视场面分寸的看法 (-10到+10)
+- sincerity: 对真实自然vs配合社交表演的看法 (-10到+10)
 - engagement: 对克制怕消耗vs热情投入的看法 (-10到+10)
 - closeness: 对保持距离vs容易亲近的看法 (-10到+10)
 - directness: 对含蓄绕弯vs有话直说的看法 (-10到+10)
+sincerity 与 directness 相互独立：sincerity 看"是否违心/配合表演"，directness 看"信息是否绕弯/留余地"，不要把两轴同向联动。
 参考上方"预期光谱影响"但不必完全一致——你基于完整上下文的判断更准确。
+
+tags：打 1-3 个能描述"在什么场景下会用到这个观点"的标签，优先用场景词（如接梗、阴阳、劝架、短回复、技术向、拒绝、冷场救、玩梗、吐槽、边界），也可用话题词（如游戏、感情、职场）。
 
 请以JSON格式返回:
 {{"thought": "我形成的深层观点...", "ideology_layer": "values|worldview|conduct", "spectrum_impact": {{"sincerity": 0, "engagement": 0, "closeness": 0, "directness": 0}}, "reasoning": "为什么会产生这样的光谱影响", "confidence": 0.85, "tags": ["关键词1", "关键词2"]}}"""
@@ -247,7 +250,7 @@ class InternalizationEngine:
 
         from ..models.ideology_model import create_crystallized_trait, get_crystallized_trait_by_id, set_trait_lifecycle_state, create_thought_edge
         from ..utils.trait_tags import dumps_tags_json, parse_tags_json
-        from ..utils.trait_evidence import append_evidence_json, dumps_evidence_json
+        from ..utils.trait_evidence import append_trait_evidence_json, dumps_trait_evidence_json
 
         dedup_enabled = bool((dedup or {}).get("enabled", True))
         try:
@@ -281,7 +284,7 @@ class InternalizationEngine:
                     merged_tags = list(dict.fromkeys([*existing_tags, *(seed_info.get("tags") or [])]))
 
                     trait.tags_json = dumps_tags_json(merged_tags)
-                    trait.evidence_json = append_evidence_json(trait.evidence_json or "[]", evidence_entry)
+                    trait.evidence_json = append_trait_evidence_json(trait.evidence_json or "[]", evidence_entry)
                     trait.confidence = max(int(trait.confidence or 0), int(confidence), int(round((similarity or 0.0) * 100)))
                     trait.spectrum_impact_json = json.dumps(impact or {}, ensure_ascii=False)
                     trait.lifecycle_state = "strengthened"
@@ -322,7 +325,7 @@ class InternalizationEngine:
                         thought=result.get("thought", "") or "",
                         tags_json=dumps_tags_json(seed_info.get("tags")),
                         confidence=int(confidence),
-                        evidence_json=dumps_evidence_json([evidence_entry]),
+                        evidence_json=dumps_trait_evidence_json([evidence_entry]),
                         spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
                         created_at=now,
                         enabled=True,
@@ -371,7 +374,7 @@ class InternalizationEngine:
             thought=result.get("thought", "") or "",
             tags_json=dumps_tags_json(seed_info.get("tags")),
             confidence=int(confidence),
-            evidence_json=dumps_evidence_json([evidence_entry]),
+            evidence_json=dumps_trait_evidence_json([evidence_entry]),
             spectrum_impact_json=json.dumps(impact or {}, ensure_ascii=False),
             created_at=now,
             enabled=True,

@@ -128,22 +128,29 @@ def test_cleanup_orphan_snapshots(soul_db: Any) -> None:
 
 
 def test_cleanup_pending_cap_deletes_oldest(soul_db: Any) -> None:
-    """pending 总数超上限时物理删最旧（oracle 补的溢出测试）。"""
+    """pending 总数超上限时物理删最旧非 pending 记录（D-DATA-3：保留 pending 业务记录）。"""
     conn_mod = _import_soul_submodule("models._conn")
 
-    # 写 6 条，上限设 3，应删最旧 3 条
+    # 写 6 条，前 3 条标记为 done，后 3 条保持 pending
     for i in range(6):
         pid = soul_db.create_pending_reflection("g", "s", f"r{i}", "snap", "planner", f"m{i}")
-        # 让 created_at 递增，确保删除顺序确定
         ts = conn_mod._dt_to_str(datetime.now() + timedelta(seconds=i))
         conn_mod._get_conn().execute(
             "UPDATE soul_pending_reflections SET created_at = ? WHERE pending_id = ?",
             (ts, pid),
         )
+        if i < 3:
+            soul_db.update_pending_status(pid, "done")
     conn_mod._get_conn().commit()
+    # 上限设 3，当前 6 条（3 done + 3 pending），应删最旧 3 条 done
     soul_db.cleanup_expired_pending(max_age_hours=9999, max_rows=3)
     total = conn_mod._get_conn().execute("SELECT COUNT(*) FROM soul_pending_reflections").fetchone()[0]
     assert int(total) == 3
+    # 验证剩下的是 3 条 pending
+    remaining = conn_mod._get_conn().execute(
+        "SELECT status FROM soul_pending_reflections ORDER BY created_at ASC"
+    ).fetchall()
+    assert all(r["status"] == "pending" for r in remaining)
 
 
 # ─── self_reflections ─────────────────────────────────────────────

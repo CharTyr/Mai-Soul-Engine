@@ -174,32 +174,32 @@ def create_pending_reflection(
     """入队一条待评价回复，返回 pending_id。"""
     conn = _get_conn()
     normalized_reply_message_id = str(reply_message_id or "").strip()
-    if normalized_reply_message_id:
-        existing = conn.execute(
-            """SELECT pending_id FROM soul_pending_reflections
-               WHERE source = ? AND reply_message_id = ?
-               ORDER BY pending_id DESC LIMIT 1""",
-            (source, normalized_reply_message_id),
-        ).fetchone()
-        if existing:
-            return int(existing[0])
-    cursor = conn.execute(
-        """INSERT INTO soul_pending_reflections
-           (stream_id, session_id, reply_message_id, created_at, snapshot_id,
-            source, response_text, context_json, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
-        (
-            stream_id,
-            session_id,
-            normalized_reply_message_id,
-            _dt_to_str(datetime.now()),
-            snapshot_id,
-            source,
-            response_text,
-            context_json,
-        ),
-    )
-    conn.commit()
+    with conn:
+        if normalized_reply_message_id:
+            existing = conn.execute(
+                """SELECT pending_id FROM soul_pending_reflections
+                   WHERE source = ? AND reply_message_id = ?
+                   ORDER BY pending_id DESC LIMIT 1""",
+                (source, normalized_reply_message_id),
+            ).fetchone()
+            if existing:
+                return int(existing[0])
+        cursor = conn.execute(
+            """INSERT INTO soul_pending_reflections
+               (stream_id, session_id, reply_message_id, created_at, snapshot_id,
+                source, response_text, context_json, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (
+                stream_id,
+                session_id,
+                normalized_reply_message_id,
+                _dt_to_str(datetime.now()),
+                snapshot_id,
+                source,
+                response_text,
+                context_json,
+            ),
+        )
     return int(cursor.lastrowid) if cursor.lastrowid is not None else 0
 
 
@@ -247,6 +247,7 @@ def cleanup_expired_pending(max_age_hours: int = 48, max_rows: int = 5000) -> in
         del_cur = conn.execute(
             """DELETE FROM soul_pending_reflections WHERE pending_id IN (
                    SELECT pending_id FROM soul_pending_reflections
+                   WHERE status != 'pending'
                    ORDER BY created_at ASC LIMIT ?
                )""",
             (total - max_rows,),
@@ -373,7 +374,7 @@ def _row_to_snapshot(row) -> InjectionSnapshot:
         snapshot_id=row["snapshot_id"],
         stream_id=row["stream_id"],
         session_id=row["session_id"],
-        created_at=_str_to_dt(row["created_at"]),
+        created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         trait_ids_json=row["trait_ids_json"],
         spectrum_json=row["spectrum_json"],
         mood_json=row["mood_json"],
@@ -388,7 +389,7 @@ def _row_to_pending(row) -> PendingReflection:
         stream_id=row["stream_id"],
         session_id=row["session_id"],
         reply_message_id=row["reply_message_id"],
-        created_at=_str_to_dt(row["created_at"]),
+        created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         snapshot_id=row["snapshot_id"],
         source=row["source"],
         response_text=row["response_text"],
@@ -401,7 +402,7 @@ def _row_to_reflection(row) -> SelfReflection:
     return SelfReflection(
         reflection_id=int(row["reflection_id"]),
         stream_id=row["stream_id"],
-        created_at=_str_to_dt(row["created_at"]),
+        created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         pending_id=int(row["pending_id"]),
         snapshot_id=row["snapshot_id"],
         reply_type=row["reply_type"],

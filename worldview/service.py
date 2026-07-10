@@ -112,9 +112,10 @@ class WorldviewService:
             return mood
         hours = max(0.1, float(self.cfg.mood_decay_hours))
         if mood.updated_at and datetime.now() - mood.updated_at > timedelta(hours=hours):
-            mood.valence = 0
-            mood.arousal = 0
-            mood.energy = 0
+            # 渐变衰减：减半而非归零，避免情绪突变
+            mood.valence = mood.valence // 2
+            mood.arousal = mood.arousal // 2
+            mood.energy = mood.energy // 2
             mood.updated_at = datetime.now()
             im.save_mood(mood)
         return mood

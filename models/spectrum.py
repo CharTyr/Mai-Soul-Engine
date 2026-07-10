@@ -70,25 +70,29 @@ class GroupEvolutionRecord:
 
 
 def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:
-    """获取或创建光谱记录。"""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT * FROM soul_ideology_spectrum WHERE scope_id = ?", (scope_id,)
-    ).fetchone()
-    if row:
-        return _row_to_spectrum(row)
-    # 不存在则创建
-    now = datetime.now()
-    conn.execute(
-        """INSERT INTO soul_ideology_spectrum
-           (scope_id, sincerity, engagement, closeness, directness,
-            last_sincerity_dir, last_engagement_dir, last_closeness_dir, last_directness_dir,
-            initialized, last_evolution, updated_at)
-           VALUES (?, 50, 50, 50, 50, 0, 0, 0, 0, 0, ?, ?)""",
-        (scope_id, _dt_to_str(now), _dt_to_str(now)),
-    )
-    conn.commit()
-    return IdeologySpectrum(scope_id=scope_id, last_evolution=now, updated_at=now)
+    """获取或创建光谱记录。DB 异常时返回默认中性光谱（降级不崩）。"""
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT * FROM soul_ideology_spectrum WHERE scope_id = ?", (scope_id,)
+        ).fetchone()
+        if row:
+            return _row_to_spectrum(row)
+        # 不存在则创建
+        now = datetime.now()
+        conn.execute(
+            """INSERT INTO soul_ideology_spectrum
+               (scope_id, sincerity, engagement, closeness, directness,
+                last_sincerity_dir, last_engagement_dir, last_closeness_dir, last_directness_dir,
+                initialized, last_evolution, updated_at)
+               VALUES (?, 50, 50, 50, 50, 0, 0, 0, 0, 0, ?, ?)""",
+            (scope_id, _dt_to_str(now), _dt_to_str(now)),
+        )
+        conn.commit()
+        return IdeologySpectrum(scope_id=scope_id, last_evolution=now, updated_at=now)
+    except Exception as e:
+        logger.warning("[Spectrum] get_or_create_spectrum 降级: %s", e)
+        return IdeologySpectrum(scope_id=scope_id)
 
 
 def save_spectrum(s: IdeologySpectrum) -> None:
@@ -123,8 +127,8 @@ def _row_to_spectrum(row: sqlite3.Row) -> IdeologySpectrum:
         last_closeness_dir=row["last_closeness_dir"],
         last_directness_dir=row["last_directness_dir"],
         initialized=bool(row["initialized"]),
-        last_evolution=_str_to_dt(row["last_evolution"]),
-        updated_at=_str_to_dt(row["updated_at"]),
+        last_evolution=_str_to_dt(row["last_evolution"]) or datetime.now(),
+        updated_at=_str_to_dt(row["updated_at"]) or datetime.now(),
     )
 
 
@@ -186,6 +190,14 @@ def apply_spectrum_deltas(
             new_dir = 1 if delta > 0 else -1
         if smooth_alpha > 0:
             delta = smooth_delta(int(getattr(spectrum, dim)), delta, smooth_alpha)
+            # 回归均值力：超 80 或低 20 时微弱向 50 回归（每轮 ±1），防极值卡死。
+            # 仅演化回路触发（smooth_alpha > 0）；内化/自评回路 smooth_alpha=0 不触发。
+            # 阈值 20/80 比极值告警阈值 10/90 更宽松，是有意设计：回归更早介入，告警更极端才响。
+            current_val = int(getattr(spectrum, dim))
+            if current_val > 80:
+                delta -= 1
+            elif current_val < 20:
+                delta += 1
         current = int(getattr(spectrum, dim))
         setattr(spectrum, dim, update_spectrum_value(current, delta))
         setattr(spectrum, f"last_{dim}_dir", new_dir)
@@ -194,19 +206,38 @@ def apply_spectrum_deltas(
 
     spectrum.last_evolution = now
     spectrum.updated_at = now
-    spectrum.save()
 
-    if write_history:
-        tagged_reason = f"[{source}] {reason}" if reason else f"[{source}]"
-        create_evolution_history(
-            timestamp=now,
-            group_id=group_id,
-            sincerity_delta=applied.get("sincerity", 0),
-            engagement_delta=applied.get("engagement", 0),
-            closeness_delta=applied.get("closeness", 0),
-            directness_delta=applied.get("directness", 0),
-            reason=tagged_reason,
+    # 事务原子化：直接内联 SQL，绕过 save_spectrum/create_evolution_history 各自的 commit，
+    # 确保 UPDATE 光谱 + INSERT 历史在同一事务内（with conn: 退出时统一 commit/rollback）。
+    conn = _get_conn()
+    with conn:
+        conn.execute(
+            """UPDATE soul_ideology_spectrum SET
+               sincerity = ?, engagement = ?, closeness = ?, directness = ?,
+               last_sincerity_dir = ?, last_engagement_dir = ?, last_closeness_dir = ?, last_directness_dir = ?,
+               initialized = ?, last_evolution = ?, updated_at = ?
+               WHERE scope_id = ?""",
+            (
+                spectrum.sincerity, spectrum.engagement, spectrum.closeness, spectrum.directness,
+                spectrum.last_sincerity_dir, spectrum.last_engagement_dir,
+                spectrum.last_closeness_dir, spectrum.last_directness_dir,
+                int(spectrum.initialized), _dt_to_str(now), _dt_to_str(now),
+                spectrum.scope_id,
+            ),
         )
+        if write_history:
+            tagged_reason = f"[{source}] {reason}" if reason else f"[{source}]"
+            conn.execute(
+                """INSERT INTO soul_evolution_history
+                   (timestamp, group_id, sincerity_delta, engagement_delta, closeness_delta, directness_delta, reason)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    _dt_to_str(now), group_id,
+                    applied.get("sincerity", 0), applied.get("engagement", 0),
+                    applied.get("closeness", 0), applied.get("directness", 0),
+                    tagged_reason,
+                ),
+            )
     logger.info("[SpectrumGate] %s applied: %s", source, applied)
     return applied
 
@@ -221,7 +252,7 @@ def get_or_create_group_evolution(group_id: str) -> GroupEvolutionRecord:
         "SELECT * FROM soul_group_evolution WHERE group_id = ?", (group_id,)
     ).fetchone()
     if row:
-        return GroupEvolutionRecord(group_id=row["group_id"], last_analyzed=_str_to_dt(row["last_analyzed"]))
+        return GroupEvolutionRecord(group_id=row["group_id"], last_analyzed=_str_to_dt(row["last_analyzed"]) or datetime.now())
     now = datetime.now()
     conn.execute(
         "INSERT INTO soul_group_evolution (group_id, last_analyzed) VALUES (?, ?)",

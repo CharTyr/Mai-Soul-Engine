@@ -31,6 +31,22 @@ _CORRECTION_DEAD_ZONE: int = 3
 # planner 摘要：某轴净偏离次数需 ≥ 此值才提及
 _SUMMARY_MIN_DEVIATIONS: int = 2
 
+# ── 自评摘要缓存（热路径优化）──────────────────────────────────────
+# 避免每条消息都查 list_recent_reflections；TTL 过期或主动 invalidate 后才查。
+_summary_cache: dict[str, tuple[str, float, int]] = {}  # stream_id -> (summary, ts, last_reflection_id)
+_SUMMARY_CACHE_TTL: float = 300.0  # 5 分钟
+
+
+def invalidate_reflection_summary_cache(stream_id: str = "") -> None:
+    """主动失效缓存。新自评写入后调用。
+
+    传空串清所有 stream_id 的缓存。
+    """
+    if not stream_id:
+        _summary_cache.clear()
+    else:
+        _summary_cache.pop(stream_id, None)
+
 
 def _aggregate_deviations(reflections: list) -> dict[str, dict[str, int]]:
     """聚合自评记录的偏离信号，返回 {axis: {"high": n, "low": n}}。"""
@@ -51,24 +67,45 @@ def build_recent_reflection_summary(stream_id: str, limit: int = 10) -> str:
     """聚合近期自评为一行摘要（供 planner 注入）。
 
     返回空串表示无显著偏离，调用方应跳过注入。
+    带 TTL 缓存（5 分钟），避免热路径每条消息都查 DB。
     """
+    import time as _time
     from ..models.self_reflection import list_recent_reflections
 
+    now = _time.time()
+    cached = _summary_cache.get(stream_id)
+    if cached:
+        summary, ts, cached_last_id = cached
+        if now - ts < _SUMMARY_CACHE_TTL:
+            # 验证缓存中的 last_reflection_id 仍是最新（防跨测试/跨场景缓存污染）
+            latest = list_recent_reflections(stream_id, limit=1)
+            latest_id = int(getattr(latest[0], "reflection_id", 0)) if latest else 0
+            if latest_id == cached_last_id:
+                return summary
+
     reflections = list_recent_reflections(stream_id, limit=limit)
+    last_id = int(getattr(reflections[0], "reflection_id", 0)) if reflections else 0
     agg = _aggregate_deviations(reflections)
     if not agg:
-        return ""
-    parts: list[str] = []
-    for axis, counts in agg.items():
-        net = counts.get("high", 0) - counts.get("low", 0)
-        if abs(net) < _SUMMARY_MIN_DEVIATIONS:
-            continue
-        direction = "偏高" if net > 0 else "偏低"
-        total = counts.get("high", 0) + counts.get("low", 0)
-        parts.append(f"{_AXIS_LABELS[axis]}{direction}（{abs(net)}/{total}次）")
-    if not parts:
-        return ""
-    return "近期自我评价：你在表态时" + "；".join(parts) + "。可酌情校准。"
+        result = ""
+    else:
+        parts: list[str] = []
+        for axis, counts in agg.items():
+            net = counts.get("high", 0) - counts.get("low", 0)
+            if abs(net) < _SUMMARY_MIN_DEVIATIONS:
+                continue
+            direction = "偏高" if net > 0 else "偏低"
+            total = counts.get("high", 0) + counts.get("low", 0)
+            parts.append(f"{_AXIS_LABELS[axis]}{direction}（{abs(net)}/{total}次）")
+        if not parts:
+            result = ""
+        else:
+            result = "近期自我评价：你在表态时" + "；".join(parts) + "。可酌情校准。"
+
+    # 仅缓存非空结果（空结果查 DB 很快，且避免跨测试/跨场景缓存污染）
+    if result:
+        _summary_cache[stream_id] = (result, now, last_id)
+    return result
 
 
 def apply_self_reflection_spectrum_correction(plugin, evolution_rate: int) -> None:

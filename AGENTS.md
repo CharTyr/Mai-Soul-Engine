@@ -13,7 +13,7 @@
 |----|------|
 | 运行时 | **maibot-plugin-sdk 2.x**，独立 Runner；入口 `plugin.py` + `create_plugin()` |
 | 禁止 | `import src.*`、写宿主 `data/MaiBot.db`、恢复 POST_LLM 注入 |
-| 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有两个 `@HookHandler(mode=OBSERVE)`（`planner.after_response` + `replyer.after_response`，见"自我评价反馈回路"） |
+| 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有一个 `@HookHandler(mode=OBSERVE)`（`replyer.after_response`，见"自我评价反馈回路"） |
 | 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 7 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
@@ -155,8 +155,8 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 
 ### 接线（唯一新增 hook 点）
 
-- **捕获**：`@HookHandler("maisaka.planner.after_response")` + `@HookHandler("maisaka.replyer.after_response")`，均 `mode=HookMode.OBSERVE` + `error_policy=ErrorPolicy.SKIP`（**零干扰不改写输出**，失败不影响 bot 回复）。宿主触发点（**只读引用，不改**）：`src/maisaka/chat_loop_service.py:992` / `src/chat/replyer/maisaka_generator_base.py:1182`，payload 含 `response`/`session_id`/`reply_message_id`/token 统计。
-- **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode）；`after_response` 用 session_id 取最近 snapshot 配对（**1:N**，一个 snapshot 可配多条 pending：planner + replyer 或 replyer 多次重试）。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
+- **捕获**：`@HookHandler("maisaka.replyer.after_response")`，`mode=HookMode.OBSERVE` + `error_policy=ErrorPolicy.SKIP`（**零干扰不改写输出**，失败不影响 bot 回复）。宿主触发点（**只读引用，不改**）：`src/chat/replyer/maisaka_generator_base.py:1182`，payload 含 `response`/`session_id`/`reply_message_id`/token 统计。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
+- **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode）；`after_response` 用 session_id 取最近 snapshot 配对（**1:N**，一个 snapshot 可配多条 pending：replyer 多次重试）。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
 - **context 来源**：`after_response` payload **不含触发消息**，故 `reflection_capture.cache_session_context` 在 before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回（一次性）。**缓存缺失/超龄 = context_json 空 = 合法降级**（评估只基于 response 文本判语气）。
 
 ### 数据（3 表，`models/self_reflection.py`）
@@ -198,7 +198,7 @@ OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened tr
 | `components/reflection_command.py` | `/soul_reflect [N]` 管理员查看 |
 | `prompts/self_reflection_prompts.py` | 评价 prompt（抽象倾向+对立视角+门槛判例） |
 | `plugin_ui_schema.py` | `SelfReflectionConfig` 段；`CONFIG_VERSION=2.3.0` |
-| `plugin.py` | 两个 after_response HookHandler + `_self_reflection_task` 生命周期 + `/soul_reflect` 命令 |
+| `plugin.py` | 一个 after_response HookHandler（replyer）+ `_self_reflection_task` 生命周期 + `/soul_reflect` 命令 |
 
 ## 迁移注意（重要）
 

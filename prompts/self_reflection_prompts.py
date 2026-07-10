@@ -23,7 +23,7 @@ def _axis_label(value: int, low: str, high: str) -> str:
 def build_abstract_tendency(spectrum_dict: dict) -> str:
     """光谱值 → 抽象倾向短描述（给评估 LLM 的人设方向，非"标准答案"）。"""
     parts = [
-        f"真诚度{_axis_label(int(spectrum_dict.get('sincerity', 50)), '偏重视场面', '偏真诚直率')}",
+        f"真诚度{_axis_label(int(spectrum_dict.get('sincerity', 50)), '偏真实自然', '偏重视场面')}",
         f"投入度{_axis_label(int(spectrum_dict.get('engagement', 50)), '偏克制', '偏热情投入')}",
         f"亲密度{_axis_label(int(spectrum_dict.get('closeness', 50)), '偏保持距离', '偏容易亲近')}",
         f"直率度{_axis_label(int(spectrum_dict.get('directness', 50)), '偏含蓄绕弯', '偏有话直说')}",

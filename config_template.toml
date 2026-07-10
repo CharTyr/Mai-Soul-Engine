@@ -1,5 +1,10 @@
 # Mai-Soul-Engine 配置模板
 # 复制为 config.toml 后按需修改。config.toml 已加入 .gitignore。
+#
+# ── 配置预设推荐 ──────────────────────────────────────────
+# 轻量（仅光谱注入）：plugin.enabled=true, evolution.enabled=true, thought_cabinet.enabled=false, self_reflection.enabled=false
+# 标准（含思维阁）：   在轻量基础上 thought_cabinet.enabled=true
+# 完整（含自评回路）：  在标准基础上 self_reflection.enabled=true, worldview.p1_enabled=true
 
 # ─── 插件元数据（Runner 必填）────────────────────────────────────────
 [plugin]

@@ -6,17 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..utils.spectrum_utils import extract_command_actor, match_user
+from ..utils.spectrum_utils import check_admin_permission
 
 
 async def handle_observe(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """汇总光谱 / 队列 / 最近 audit / 最近注入。"""
-    admin_user_id = plugin.config.admin.admin_user_id
-    platform, user_id = extract_command_actor(kwargs)
-    if not admin_user_id or not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以查看运行观察"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    ok, err = check_admin_permission(plugin, kwargs, "查看运行观察")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
     from ..models.ideology_model import (
         count_pending_thought_seeds,

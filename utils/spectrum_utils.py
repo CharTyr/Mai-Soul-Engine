@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 
 def update_spectrum_value(current: int, delta: int) -> int:
@@ -150,6 +151,24 @@ def is_user_monitored(platform: str, user_id: str, config: dict) -> bool:
     return False
 
 
+def check_admin_permission(plugin: Any, kwargs: dict | None, action_desc: str = "执行此操作") -> tuple[bool, str]:
+    """统一管理员鉴权。返回 (passed, error_msg)。
+
+    passed=False 时 error_msg 是给用户的拒绝消息；
+    passed=True 时 error_msg 为空串。
+    用法：
+        ok, err = check_admin_permission(plugin, kwargs, "查看思维种子")
+        if not ok:
+            await plugin.ctx.send.text(err, stream_id)
+            return True, err, True
+    """
+    admin_user_id = plugin.config.admin.admin_user_id
+    actor = extract_command_actor(kwargs)
+    if not match_user(actor[0], actor[1], admin_user_id):
+        return False, f"只有管理员可以{action_desc}"
+    return True, ""
+
+
 def is_bot_self_message(platform: str, user_id: str, bot_self_ids: list[str]) -> bool:
     """判断某条消息是否来自 bot 自身（演化分析时排除自消息，防自指泄漏）。
 
@@ -181,6 +200,19 @@ def filter_messages_for_evolution(messages: list[dict], monitor_config: dict) ->
             continue
         filtered.append(m)
     return filtered
+
+
+# ─── 命令反馈 helper ────────────────────────────────────────────────
+
+
+def _ok(msg: str) -> tuple[bool, str, bool]:
+    """命令成功返回。"""
+    return True, msg, True
+
+
+def _err(msg: str) -> tuple[bool, str, bool]:
+    """命令错误返回（前缀 ❌）。"""
+    return True, f"❌ {msg}", True
 
 
 # EMA平滑
