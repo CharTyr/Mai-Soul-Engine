@@ -2,7 +2,7 @@
 
 独立仓库：https://github.com/CharTyr/Mai-Soul-Engine。分支：
 - `main` = v2.0.0 稳定（SDK 2.x 基线）
-- `dev` = v2.4.0（**思维阁发酵重构 + 自我评价反馈回路 + P1 三观生长 + 光谱轴重构**，本文档对应此分支）
+- `dev` = v2.4.0 基线 + **Phase 0A/0B 正确性打磨**（思想全局归属、可追踪召回、宿主 system 追加注入、自评/发酵假闭环修复；本文档对应此分支）
 - 旧版归档：`archive/legacy-sdk1-v1`
 
 在 Maibot 宿主中路径：`plugins/CharTyr_Mai-Soul-Engine/`，**自带 `.git`**，勿把 `config.toml` / `data/` / `config_back/` 提交进插件仓。
@@ -14,12 +14,13 @@
 | 运行时 | **maibot-plugin-sdk 2.x**，独立 Runner；入口 `plugin.py` + `create_plugin()` |
 | 禁止 | `import src.*`、写宿主 `data/MaiBot.db`、恢复 POST_LLM 注入 |
 | 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有一个 `@HookHandler(mode=OBSERVE)`（`replyer.after_response`，见"自我评价反馈回路"） |
+| 注入合并 | **追加到宿主首条 system**（`_apply_soul_injection_to_messages`），不得 prepend 竞争性 system；找不到 system → fail-open 跳过注入 |
 | 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 7 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
 | Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.4.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
-| 功能总开关 | `plugin.enabled`（注入等）；`admin_user_id` 仅标识管理员 QQ |
+| 功能总开关 | `plugin.enabled` 管**注入 + 四后台任务**（演化/Notion/自评/发酵）；`on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`admin_user_id` 仅标识管理员 QQ |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
 
 ## 光谱轴（v2.1.0 重构，关键）
@@ -82,8 +83,8 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 | `thought/internalization_engine.py` | 层推断、生命周期（merge→`strengthened`、矛盾→`contradicted`/`weakened`/`revised`）、`_classify_trait_relation` 关系判定、create 时写图谱边 |
 | `components/status_command.py` | P1 扩展（切片偏移、情绪、层计数） |
 | `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.4.0"` |
-| `plugin.py` | `soul.get_worldview` API；`soul.get_traits` 返回 layer/lifecycle；@API 双层访问控制（`public=False` + `api.enabled`）+ `api_set_spectrum` 审计 |
-| `tests/` | 插件内测试（28 项）：原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/发酵 CRUD/发酵状态机/日上限/关键词过滤 |
+| `plugin.py` | 生命周期 `_compute_desired_tasks` + `_reconcile_background_tasks`；`soul.get_worldview` API；`soul.get_traits` 返回 layer/lifecycle；@API 双层访问控制（`public=False` + `api.enabled`）+ `api_set_spectrum` 审计 |
+| `tests/` | 插件内测试见下方「开发与验证」（约 220 项） |
 
 ## 思维阁（v2.4.0 发酵重构，关键）
 
@@ -126,17 +127,18 @@ v2.4.0（fermentation_enabled）：`pending → fermenting → internalized`（�
 3. **L1 关键词子串预筛**：从种子 `type+event+reasoning` 提取关键词，用子串匹配过滤 80% 无关消息（零 LLM 成本）
 4. **L3 LLM 批量关联度判断**：`FERMENTATION_RELEVANCE_PROMPT` 一次处理多条候选消息，输出每条 0-1 关联度
 5. 关联度 ≥ `fermentation_relevance_threshold`（默认 0.5）的消息存入 `soul_fermentation_inputs` 表
-6. 更新 `fermentation_checked_at`
+6. 更新 `fermentation_checked_at`（**仅 L3 成功时**；LLM 失败返回空列表时**不推进**）
 7. 检查 `fermentation_started_at + fermentation_window_hours` 是否到期
 8. 到期 + 输入 ≥ `fermentation_min_inputs` → 触发最终内化
 9. 到期但输入不足 → `extend_fermentation_window`（最多 `fermentation_max_extensions` 次）
+10. 达最大延长次数仍不足 → **不强制内化**，保持 `fermenting` + warning + 尽量通知管理员（无证据不得成熟）
 
 **失败恢复**：
-- 关联度判断 LLM 失败 → 跳过本轮（不更新 `fermentation_checked_at`），下轮重试
+- 关联度判断 LLM 失败 → 返回 `[]`，**不更新 `fermentation_checked_at`**，下轮重试同窗口（与代码一致；勿再写成「返回全 0 分仍推进游标」）
 - 最终内化 LLM 失败 → 保持 `fermenting` 状态，下轮重试
 - 插件重启 → 从 DB 的 `fermentation_checked_at` 继续，不丢状态
 - 单种子异常 → try/except per-seed，不阻断其他种子
-
+- 配置热更 → `on_config_update` 经 `_reconcile_background_tasks` **可启停发酵任务**（不再要求整插件重载）
 ### 发酵后内化（v2.4.0 改进）
 
 `InternalizationEngine.internalize_seed(seed, dedup, fermentation_inputs)` 新增 `fermentation_inputs` 参数：
@@ -162,10 +164,12 @@ v2.4.0（fermentation_enabled）：`pending → fermenting → internalized`（�
 
 ### 注入选择（`ideology_injector`）
 
-- 选择顺序：tag 命中 → 无 tag 按影响分**补位**填满 `max_traits` → 仍空才 `fallback_recent_impact`。
+- 选择顺序（冷却硬过滤后）：**tag 命中** → **关键词相关补位**（name/question/thought/tags 术语子串）→ 无 tag 按影响分补位 → 仍空才 `fallback_recent_impact`。
 - 二级排序用 `_trait_quality_score`（confidence + 生命周期加权：strengthened +0.3 / weakened -0.3）。
-- `selection_mode`：`tag_hit` / `tag_hit+tagless` / `tagless_fill` / `fallback_recent_impact` / `spectrum_only`。
+- `selection_mode`：`tag_hit` / `tag_hit+keyword` / `keyword_fill` / `tag_hit+tagless` / `keyword+tagless` / `tagless_fill` / `fallback_recent_impact` / `spectrum_only`（及组合）。
+- `picked[].activation_reason`：`tag_hit:…` / `keyword:…` / `tagless_impact` / `fallback_recent_impact`；`/soul_inspect` 与 dashboard 可展示。
 - 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids, traits=已查列表)` 排除已在详细块的 trait，避免重复。
+- **合并策略**：`_apply_soul_injection_to_messages` 把动态层追加到宿主首条 system 末尾（标记 `[Mai-Soul 动态层 | …]`）；**禁止**再 prepend 新 system。
 - **热路径优化**：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`；锁用 `asyncio.Lock`；注入日志采样 + 5MB 轮转 + `asyncio.to_thread` 异步写。
 
 ### 种子去重
@@ -190,14 +194,15 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 - 批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**）。
 - 误判 trait 回滚：`/soul_trait_enable <id>`。
 
-### 全局作用域标记（`GLOBAL_STREAM`）
+### 全局作用域标记（`GLOBAL_STREAM`）与来源溯源
 
-`worldview/constants.py` 定义 `GLOBAL_STREAM = "global"`。trait/光谱以此值表示"不绑定特定群、对所有聊天流生效"的全局作用域。**历史上 trait 曾用空串 `""` 表全局**（与"未设置/异常"无法区分，误写空 stream_id 的群 trait 会泄漏到所有群注入），现统一用显式 `"global"`：`""` = 未设置/异常（不应匹配任何注入），`"global"` = 有意的全局作用域。`init_db` 迁移自动把存量 `""` trait 归一为 `"global"`（幂等）。`create_crystallized_trait`/`query_crystallized_traits` 传入空串时自动归一为 `GLOBAL_STREAM`。注入查询 `query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配。
+`worldview/constants.py` 定义 `GLOBAL_STREAM = "global"`。trait/光谱以此值表示"不绑定特定群、对所有聊天流生效"的全局作用域。**历史上 trait 曾用空串 `""` 表全局**（与"未设置/异常"无法区分，误写空 stream_id 的群 trait 会泄漏到所有群注入），现统一用显式 `"global"`：`""` = 未设置/异常（不应匹配任何注入），`"global"` = 有意的全局作用域。`init_db` 迁移自动把存量 `""` trait 归一为 `"global"`（幂等）。
+
+**Phase 0B.1（关键）**：内化新建 trait 时 **`stream_id` 固定写 `GLOBAL_STREAM`**（思想属于 Bot 全局身份）；来源群写入 **`origin_stream_id`**（仅溯源/展示，不参与注入 scope）。`create_crystallized_trait` 接受 `origin_stream_id`；空 `stream_id` 仍归一 global。注入查询 `query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配——因此 A 群形成的思想可在 B 群相关话题被召回。存量群锁 trait 不会被自动改写，仅新内化走全局。
 
 ### @API 访问控制
 
-7 个 `@API` 均为 SDK 级组件（`public=False`），**无网络暴露面**（插件无 HTTP server/路由/监听）。双层访问控制：`public=False`（SDK 层，仅 Runner 内可信组件可调）+ `api.enabled` 配置守卫（默认关，7 个 API 入口全检查）。唯一写接口 `api_set_spectrum` 有审计日志（`data/audit.jsonl`，`type=api_set_spectrum`，记录社交轴 before/after）。**插件层不自行实现网络级认证**（无网络面，加 token 不适用且需改 SDK/宿主）。
-
+7 个 `@API` 均为 SDK 级组件（`public=False`），**无网络暴露面**（插件无 HTTP server/路由/监听）。双层访问控制：`public=False`（SDK 层，仅 Runner 内可信组件可调）+ `api.enabled` 配置守卫（**schema 默认 `False`**，7 个 API 入口全检查）。唯一写接口 `api_set_spectrum` 有审计日志（`data/audit.jsonl`，`type=api_set_spectrum`，记录社交轴 before/after）。**插件层不自行实现网络级认证**（无网络面，加 token 不适用且需改 SDK/宿主）。`token`/`public_mode` 仍为配置位，当前无网络面时勿当作安全边界。
 ### 状态卡片可视化（`/soul_dashboard` + `/soul_trait` + `/soul_inspect`，v2.2.0）
 
 三个命令把 Soul 引擎状态渲染成图片卡片发到聊天（非 Web 页面——SDK 无插件前端注册机制，WebUI 只能生成配置表单；此处用 `ctx.render.html2png` 把内联 HTML/CSS 经宿主无头浏览器渲染成 PNG，再 `ctx.send.image` 发图，零宿主改动）。三个卡片**共用 `dashboard_renderer.py` 的 `_wrap_html` CSS 底座**（Raycast 暗色开发工具风格：四级表面梯 + hairline 边框 + 无 drop-shadow + Inter ss03 + 生命周期语义色 chip + 顶部红色 hero stripe），各自根容器 id：`#soul-dashboard`/`#soul-trait`/`#soul-inspect`。视觉规范见 `DESIGN-raycast.md`。
@@ -225,25 +230,27 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 - `soul_injection_snapshots`：注入快照（仅 enabled 时写，防膨胀）。
 - `soul_pending_reflections`：待评队列，**TTL + 上限 + `expired` 状态**防堆积（`cleanup_expired_pending` 每轮清超龄 + 超量删最旧）。
 - `soul_self_reflections`：评价结果（reply_type/evaluated/consistency_score/deviating_axis/deviating_direction/reason/seed_id）。
+  - **Phase 0A**：另有 `raw_consistency_score` / `normalized_consistency_score` / `correction_consumed_at`。
+  - **主列 `consistency_score` = raw**（兼容旧读路径）；归一化分单独存。
 
 ### 评价层（`components/reflection_evaluator.py`）
 
 独立异步协程（`plugin._self_reflection_task`，`on_unload` cancel，**不复用演化循环**）。每周期：清理 pending → 取队列 → 批量送 LLM → 落 self_reflections + 更新 pending 状态 → 显著偏离生成 `self_observation` 种子。
 
 - **prompt（`prompts/self_reflection_prompts.py`）**：**不给完整光谱+trait"标准答案"**（评估 LLM 与注入 LLM 同模型，共享判断框架→系统性高分），只给**抽象倾向** + **对立视角**（挑剔外部观察者，倾向于找不一致）+ 相关性门槛三档**具体判例**。
-- **相关性门槛三档**（`relevance_gate_enabled` 默认开）：`social_glue`（哈哈/表情/附和）跳过不打分 → `reactive`（接话无表态）只评语气 → `substantive`（表态/决策/信息性回答）完整评。**群聊大量回复是闲聊，不该带观点，门槛防"哈哈"被误判"不够真诚"**。
-- **批次归一化**（`normalize_across_batch` 可选）：自评分减本批均值，对冲系统性高估。
-- **self_observation 种子**：仅 substantive + 一致性分<70 + LLM 给了 trait 时生成，走现有 `/soul_approve` 人工审批（默认全人工审批，防自指跑偏）。
+- **相关性门槛三档**（`relevance_gate_enabled` 默认开，**运行时已接线**）：`false` 时 prompt 去掉三档判例；`true` 时 `social_glue` 跳过 → `reactive` 只评语气 → `substantive` 完整评。
+- **批次归一化**（`normalize_across_batch` 可选）：自评分减本批均值，对冲系统性高估；**种子门槛始终用 raw**，禁止用归一化后分数判定。
+- **self_observation 种子**：仅 substantive + **raw** 一致性分<70 + LLM 给了 trait 时生成，走 `/soul_approve` 人工审批。
+- **独立日上限**：`self_observation_daily_cap`（默认 2，`0`=不限制），`count_self_observation_seeds_created_today()` 跨群统计；**不与**群聊 `seed_daily_cap_per_group` 共用配额。
 
 ### 双路反馈（`components/reflection_feedback.py`）
 
-- **演化路**：`apply_self_reflection_spectrum_correction` 在演化循环末尾调用（仅 enabled）。自评偏离 ×`self_reflection_weight`(0.5) 折算光谱 delta，**dead zone**（净偏离≥3 才修正）+ weight<1 防自指闭环。方向：bot 偏低→人设向下校准（向可兑现的现实靠拢，非拔高要求）。**直接应用原始 delta（±1 经 EMA smooth_delta 会被归零）**。写演化历史 reason 标注"自评修正"。
-- **planner 反馈路**：`build_recent_reflection_summary` 聚合近期自评为一行，`ideology_injector._build_injection_block` 按 selection_mode 分场景注入：**有 trait**（tag_hit 等）→ trait 块下方"低优先级自查，以固化观点为准"；**无 trait**（spectrum_only）→ 光谱后"无特定观点时的补充参考"。
+- **演化路**：`apply_self_reflection_spectrum_correction` 在演化循环末尾调用（仅 enabled）。用 `list_unconsumed_reflections_for_correction`（**跨 session**，不按 `GLOBAL_STREAM` 过滤丢群记录）。自评偏离 ×`self_reflection_weight`(0.5) 折算光谱 delta，**dead zone**（净偏离≥3 才修正）+ weight<1 防自指闭环。参与聚合的记录写 `correction_consumed_at`（含 dead zone 未改光谱时，避免永久重试）。**直接应用原始 delta（±1 经 EMA smooth_delta 会被归零）**。
+- **planner 反馈路**：`build_recent_reflection_summary` 聚合近期自评为一行，`ideology_injector._build_injection_block` 按 selection_mode 分场景注入：**有 trait** → trait 块下方"低优先级自查"；**无 trait** → 光谱后"补充参考"。
 
 ### 自指风险护栏（关键）
 
-OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened trait 豁免 / self_observation 默认全人工审批 / 评估 prompt 不给标准答案+对立视角 / 批次归一化可选。
-
+OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened trait 豁免 / self_observation 默认全人工审批 / raw 门槛 + 日 cap / 评估 prompt 不给标准答案+对立视角 / 批次归一化可选 / 修正一次性消费。
 ### P0 前置修复（v2.3.0 同步，单独提交 f58b41b）
 
 **bot 自消息泄漏**：`get_by_time_in_chat` 会返回 bot 自己消息。插件必须通过宿主 `config.get("bot.qq_account")` 自动识别并短路排除，禁止在插件配置里重复维护 bot 身份。
@@ -285,9 +292,9 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文 + v2.4.0 发酵后内化（`fermentation_inputs` 参数），`fermentation_engine.py`（**v2.4.0**：发酵循环 + L1 关键词过滤 + L3 LLM 关联度判断 + 到期检测/延长/最终内化触发）
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
 - `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`；v2.4.0 +`fermentation_prompts.py`）
-- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具，含发酵表+列迁移）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD + **v2.4.0 发酵 CRUD**：`mark_seed_fermenting`/`mark_seed_internalized`/`extend_fermentation_window`/`add_fermentation_input`/`get_fermentation_inputs`/`count_seeds_created_today` 等）、`traits.py`（trait CRUD）、`p1.py`（切片/情绪/图谱边）、`self_reflection.py`（v2.3.0：注入快照/待评队列/自评结果 3 表 CRUD）；`ideology_model.py` 保留为**重导出 shim**，40+ 处 `from ..models.ideology_model import xxx` 零破坏。**新代码直接从子模块 import；改 shim 不影响调用方**
+- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具，含发酵表+列迁移 + origin/raw/consumed 列）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD + 发酵 CRUD + `count_seeds_created_today` / `count_self_observation_seeds_created_today`）、`traits.py`（trait CRUD + `origin_stream_id`）、`p1.py`（切片/情绪/图谱边）、`self_reflection.py`（注入快照/待评/自评 + unconsumed 修正查询）；`ideology_model.py` 保留为**重导出 shim**。**新代码直接从子模块 import**
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `tests/` — 插件内测试（143 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard+trait+inspect 数据聚合与渲染降级/bot 自消息过滤/自评 3 表 CRUD/捕获配对/评价周期/双路反馈/发酵 CRUD/发酵状态机/日上限/关键词过滤
+- `tests/` — 插件内测试（约 **220** 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；覆盖原子守卫/生命周期/全局标记/origin/光谱 clamp/演化三态/发酵 cursor 与无证据不强制内化/自评 raw·consumed·日 cap/关键词召回/system 合并/FeatureSupervisor/dashboard+inspect 等
 
 ## 开发与验证
 
@@ -318,11 +325,33 @@ cd /path/to/Maibot
 
 - **不要改 Maibot 主程序**（`src/`）除非维护者明确许可。
 - 配置示例与文档中的 QQ/群号用占位符，勿提交真实 ID。
-- 可选能力默认关：**Notion**、**思维阁**、**@API**（有 `api.enabled` 守卫）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
+- 可选能力默认关：**Notion**、**思维阁**、**@API**（`api.enabled` 默认 False）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
+- **`plugin.enabled=false`**：注入跳过 + 四后台任务 desired 全 false（经 `_reconcile_background_tasks`）。
 - **`p1_enabled=false` 只关分层/切片/情绪，社交轴仍然生效**，不会回滚到政治轴。
 - **`fermentation_enabled=false` 只关发酵，种子仍会生成（经稀有化过滤），批准后立即内化（旧行为）**。
+- 光谱边界：`update_spectrum_value` 为**硬 clamp**（0–100），禁止越界反弹。
+- 演化群分析：`_analyze_group` 返回 `"success"|"skipped"|"failed"`；`_analyze_with_sem` 必须透传，禁止无条件 True。
 - 发版：插件仓自行 `git push`；宿主侧 `plugins/*` 多在 `.gitignore`，pytest 文件在宿主仓维护。
 - Manifest 版本须严格三段式 semver（`2.4.0`），**禁止 `-dev` 后缀**。
+
+## Phase 0A/0B 正确性打磨（dev 上 v2.4.0 之后，关键）
+
+线上曾出现：演化 skip 假成功、发酵 LLM 失败丢窗口、无证据强制内化、自评修正查不到群 session、trait 锁在来源群、注入全 spectrum_only、Soul 抢宿主 system。Phase 0 **不建 v3 表、不改宿主**，在现模型上修闭环：
+
+| 切片 | 要点 | 关键路径 |
+|------|------|----------|
+| 0A 演化 | AnalysisResult 三态；光谱硬 clamp | `evolution_task.py`、`spectrum_utils.py` |
+| 0A 发酵 | LLM 失败 `[]` 不推进 checked_at；max_extensions 无证据不 finalize | `fermentation_engine.py` |
+| 0A 自评 | raw/normalized 列；种子用 raw；gate 接线；跨 session + `correction_consumed_at` | `self_reflection.py`、`reflection_*` |
+| 0A 生命周期 | `_compute_desired_tasks` + `_reconcile_background_tasks`；API 默认关 | `plugin.py`、`plugin_ui_schema.py` |
+| 0B.1 | 内化 `stream_id=global` + `origin_stream_id` | `traits.py`、`internalization_engine.py` |
+| 0B.2 | 关键词补位 + `activation_reason` | `ideology_injector.py` |
+| 0B.3 | 追加宿主首条 system；无 system fail-open | `ideology_injector.py` |
+| 0B.4 | `self_observation_daily_cap`（默认 2） | `seeds.py`、`reflection_evaluator.py` |
+
+**尚未做（后续）**：0C 内化单事务 UoW / data_dir 迁移；v3 Thought 聚合根与 12 槽；宿主 H1 stream resolver / H2 persona capability / H3 结构化 persona extension。
+
+本地会话进度（不入库）：`.slim/deepwork/production-polish.md` 与评估/蓝图文档。
 
 ## 参考
 
