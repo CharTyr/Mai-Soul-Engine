@@ -552,6 +552,39 @@ def _policy_from_selection(selection_mode: str, picked: list[dict]) -> str:
     return policies.get(selection_mode, "traits+spectrum")
 
 
+# ─── 消息合并 ────────────────────────────────────────────────────────
+
+
+def _apply_soul_injection_to_messages(
+    messages: list[dict],
+    injection_block: str,
+) -> tuple[list[dict] | None, str]:
+    """将 injection_block 安全合并到宿主 messages 中（追加到首条 system）。
+
+    Returns:
+        (new_messages, strategy):
+        - 有首条 system → (复制并追加后的列表, "append_host_system")
+        - 无 system     → (None, "skip_no_host_system")
+    """
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "")
+        if role and role.lower() == "system":
+            # 深复制：复制整个列表及首个 system dict
+            new_messages = [dict(m) for m in messages]
+            sys_content = new_messages[i].get("content", "")
+            sys_suffix = (
+                "\n\n---\n[Mai-Soul 动态层 | 受上方固定人设与表达风格约束，不得覆盖身份事实与 reply_style]\n"
+                f"{injection_block.lstrip()}"
+            )
+            new_messages[i] = {
+                **new_messages[i],
+                "content": sys_content + sys_suffix,
+            }
+            return (new_messages, "append_host_system")
+
+    return (None, "skip_no_host_system")
+
+
 # ─── 主入口 ─────────────────────────────────────────────────────────
 
 
@@ -712,7 +745,20 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         )
 
     # ── 7. 注入到 messages ─────────────────────────────────────────
-    modified_messages = [{"role": "system", "content": injection_block}] + messages
+    modified_messages, inject_strategy = _apply_soul_injection_to_messages(messages, injection_block)
+    if modified_messages is None:
+        # 无法安全合并：记录 skip 日志后 continue（不改 messages）
+        await _record_injection(
+            {
+                "ts": datetime.now().isoformat(),
+                "skipped": True,
+                "reason": inject_strategy,
+                "policy": "disabled",
+                "prompt_version": "v2.4.0",
+            },
+            plugin_dir=plugin_dir,
+        )
+        return {"success": True, "action": "continue"}
 
     # ── 8. 日志 & 冷却标记 ──────────────────────────────────────────
     policy = _policy_from_selection(selection_mode, picked)
@@ -722,6 +768,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             "policy": policy,
             "picked": picked,
             "selection_mode": selection_mode,
+            "inject_strategy": inject_strategy,
             "cooldown_seconds": cooldown_seconds,
             "cooldown_skipped": cooldown_skipped[:20],
             "prompt_version": "v2.4.0",
@@ -732,7 +779,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         await _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)
 
     # ── 9. 自评捕获：缓存上下文 + 落注入快照（仅 self_reflection.enabled）──
-    # 缓存始终执行（廉价）；快照写入由 maybe_write_injection_snapshot 内部 enabled 守卫
+    # 缓存始终使用原始 messages（未注入），保持现有语义
     cache_session_context(session_id, messages)
     maybe_write_injection_snapshot(
         plugin, session_id, stream_id, selected, spectrum_dict, mood_lines, selection_mode,
