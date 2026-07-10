@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.0++] — Phase1 混合：迁移账本 + 12 槽接入
+
+### 用户可感知
+
+- **思维阁槽位（最小实现）**：已固化观点可占用 1–12 号槽；同槽换位会清空旧占位。Dashboard 显示「槽位 x/12」与占用列表；`/soul_traits` 行可带 `#slotN`；trait 详情可显示槽号。
+- **注入优先**：有槽观点在 tag/关键词/补位/fallback 各阶段排序优先于无槽观点（仍可注入无槽观点，非独占）。
+
+### 开发侧
+
+- `PRAGMA user_version` + `soul_schema_migrations` 版本驱动迁移（失败不前进）。
+- `soul_crystallized_traits.cabinet_slot_no` + UNIQUE partial index（活跃唯一）。
+- `set_trait_slot(trait_id, slot_no|None)` 原子事务。
+- 测试约 **251** 项。
+
 ## [2.4.0+] — dev 分支 Phase 0 正确性打磨（v2.4.0 基线之上）
 
 在 v2.4.0 发酵/自评能力之上修复线上假闭环，**不建 v3 表、不改宿主**。测试约 **222** 项。
