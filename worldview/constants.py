@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-GLOBAL_STREAM: str = "global"
-"""全局作用域聊天流标记。
+from ..models._conn import GLOBAL_STREAM
+"""全局作用域聊天流标记（定义在 models 层，此处重导出供 worldview 层使用）。
 
 trait / 光谱以此值表示"不绑定特定群、对所有聊天流生效"的全局作用域。
 历史上 trait 曾用空串 `""` 表全局，与"未设置/异常空值"无法区分（一个误写空

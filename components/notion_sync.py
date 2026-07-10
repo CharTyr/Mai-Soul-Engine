@@ -76,6 +76,7 @@ def _build_config(plugin) -> NotionFrontendConfig:
         visibility_default=str(nc.visibility_default or "Public").strip() or "Public",
         never_overwrite_user_fields=bool(nc.never_overwrite_user_fields),
         max_rich_text_chars=max(200, int(nc.max_rich_text_chars or 1800)),
+        http_timeout_seconds=max(5, int(nc.http_timeout_seconds or 30)),
         property_map=NotionPropertyMap(
             title=str(nc.property_title or "Name"),
             trait_id=str(nc.property_trait_id or "TraitId"),

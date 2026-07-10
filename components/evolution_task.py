@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 _bot_filter_warned: set[str] = set()
 # 聚合种子通知冷却：记录上次通知时间戳（秒），用于 cooldown 检查
 _last_aggregated_notification_ts: float = 0.0
+# 连续演化失败计数器 — 超阈值时私信管理员
+_consecutive_evolution_failures: int = 0
 # 本轮演化产生的种子通知收集列表（每轮开始时清空）
 # 多群并行时多个 _analyze_group 协程同时 append，用 asyncio.Lock 保护
 _pending_seed_notifications: list[tuple[str, str, str]] = []
@@ -44,8 +46,9 @@ _pending_seed_lock = asyncio.Lock()
 
 def reset_aggregation_state() -> None:
     """重置聚合通知的模块级状态，供 on_unload 调用防插件重载间泄漏。"""
-    global _last_aggregated_notification_ts
+    global _last_aggregated_notification_ts, _consecutive_evolution_failures
     _last_aggregated_notification_ts = 0.0
+    _consecutive_evolution_failures = 0
     _pending_seed_notifications.clear()
 
 
@@ -71,6 +74,8 @@ async def run_evolution_loop(plugin) -> None:
         plugin: MaiSoulEnginePlugin 实例。
     """
     logger.debug("演化循环已启动")
+    global _consecutive_evolution_failures
+    global _consecutive_evolution_failures
 
     while True:
         try:
@@ -159,6 +164,9 @@ async def run_evolution_loop(plugin) -> None:
                 interval_hours=float(getattr(plugin.config.evolution, "evolution_interval_hours", 0) or 0),
             )
 
+            # 演化成功，重置连续失败计数器
+            _consecutive_evolution_failures = 0
+
             # U-UX-6: 聚合种子通知 — 本轮所有新种子合并为一条通知发送给管理员
             if (
                 plugin.config.thought_cabinet.admin_notification_enabled
@@ -185,7 +193,31 @@ async def run_evolution_loop(plugin) -> None:
             break
         # 顶层兜底：确保演化循环不因意外异常退出，已 log+exc_info
         except Exception as e:
-            logger.error("灵魂光谱演化任务出错: %s", e, exc_info=True)
+            _consecutive_evolution_failures += 1
+            logger.error(
+                "灵魂光谱演化任务出错 (连续失败 %s 次): %s",
+                _consecutive_evolution_failures, e, exc_info=True,
+            )
+            if _consecutive_evolution_failures >= 5:
+                try:
+                    admin_id = plugin.config.admin.admin_user_id
+                    if admin_id:
+                        from ..utils.spectrum_utils import parse_user_id
+
+                        platform, user_id = parse_user_id(admin_id)
+                        stream = await plugin.ctx.chat.get_stream_by_user_id(
+                            platform=platform, user_id=user_id
+                        )
+                        if stream:
+                            stream_id = stream.get("stream_id", "") if isinstance(stream, dict) else str(stream)
+                            if stream_id:
+                                await plugin.ctx.send.text(
+                                    f"⚠️ 演化任务已连续失败 {_consecutive_evolution_failures} 次，请检查日志。",
+                                    stream_id,
+                                )
+                except Exception:
+                    logger.exception("发送演化失败通知给管理员时出错")
+                _consecutive_evolution_failures = 0
             await asyncio.sleep(60)
 
 

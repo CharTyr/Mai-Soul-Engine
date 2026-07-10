@@ -43,7 +43,7 @@ sincerity 与 directness 相互独立：sincerity 看"是否违心/配合表演"
 tags：打 1-3 个能描述"在什么场景下会用到这个观点"的标签，优先用场景词（如接梗、阴阳、劝架、短回复、技术向、拒绝、冷场救、玩梗、吐槽、边界），也可用话题词（如游戏、感情、职场）。
 
 请以JSON格式返回:
-{{"thought": "我形成的深层观点...", "ideology_layer": "values|worldview|conduct", "spectrum_impact": {{"sincerity": 0, "engagement": 0, "closeness": 0, "directness": 0}}, "reasoning": "为什么会产生这样的光谱影响", "confidence": 0.85, "tags": ["关键词1", "关键词2"]}}"""
+{{"thought": "我形成的深层观点...", "ideology_layer": "values|worldview|conduct", "spectrum_deltas": {{"sincerity": 0, "engagement": 0, "closeness": 0, "directness": 0}}, "reasoning": "为什么会产生这样的光谱影响", "confidence": 0.85, "tags": ["关键词1", "关键词2"]}}"""
 
 
 def _compact_line(text: str, limit: int) -> str:
@@ -117,7 +117,7 @@ class InternalizationEngine:
                 internalization_confidence = 0.0
             internalization_confidence = max(0.0, min(1.0, internalization_confidence))
 
-            spectrum_impact = await self._apply_spectrum_impact(result["spectrum_impact"])
+            spectrum_impact = await self._apply_spectrum_impact(result.get("spectrum_deltas", result.get("spectrum_impact", {})))
             logger.debug(f"光谱影响已应用: {spectrum_impact}")
 
             now = datetime.now()
@@ -217,8 +217,12 @@ class InternalizationEngine:
         }
         logger.debug(f"应用光谱影响前: {old_values}")
 
-        # 经统一光谱闸门（v2.3.0 收口：clamp ±10 + save + history 可观测）
-        # 注：内化保留 ±10 现行幅度；如需收紧改 max_per_axis 一处。
+        # 经统一光谱闸门（v2.3.0 收口：clamp ±max_internalize_delta + save + history 可观测）
+        max_delta = 10
+        try:
+            max_delta = int(getattr(self._plugin.config.thought_cabinet, "max_internalize_delta", 10))
+        except (AttributeError, TypeError, ValueError):
+            pass
         applied = apply_spectrum_deltas(
             "internalize",
             {
@@ -227,7 +231,7 @@ class InternalizationEngine:
                 "closeness": int(impact.get("closeness", 0) or 0),
                 "directness": int(impact.get("directness", 0) or 0),
             },
-            max_per_axis=10,
+            max_per_axis=max_delta,
             group_id="",
             reason="trait 内化光谱影响",
         )

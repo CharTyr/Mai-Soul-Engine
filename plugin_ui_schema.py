@@ -334,6 +334,13 @@ class ThoughtCabinetConfig(PluginConfigBase):
         description="通知冷却",
         json_schema_extra=_ui("聚合通知冷却（分钟）", "两次聚合种子通知的最小间隔，0=不冷却。", step=5),
     )
+    max_internalize_delta: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="内化最大光谱变化",
+        json_schema_extra=_ui("内化单轴最大变化值", "批准一个种子时单轴光谱最多变化多少，默认±10。值越大内化权重越高。", step=1),
+    )
 
 
 class ApiConfig(PluginConfigBase):
@@ -443,6 +450,13 @@ class NotionConfig(PluginConfigBase):
         ge=100,
         description="富文本长度",
         json_schema_extra=_ui("写入 Notion 的文本最大长度", "防止超长块导致 API 失败。"),
+    )
+    http_timeout_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="HTTP 超时",
+        json_schema_extra=_ui("HTTP 请求超时（秒）", "Notion API 请求超时时间，含重试等待。最小 5，最大 120。", advanced=True),
     )
     property_title: str = Field(default="Name", json_schema_extra=_ui("Traits：标题字段名", "Notion 属性名映射，与库结构一致即可。", advanced=True))
     property_trait_id: str = Field(default="TraitId", json_schema_extra=_ui("Traits：TraitId 字段名", "高级：属性名映射。", advanced=True))

@@ -423,6 +423,21 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         return await handle_observe(self, stream_id, **kwargs)
 
+    # ===== Command：帮助 =====
+
+    @Command("soul_help", description="查看可用命令列表", pattern=r"^/soul_help\s*$")
+    async def cmd_soul_help(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.help_command import handle_help
+
+        return await handle_help(self, stream_id, **kwargs)
+
+    # ===== Command：健康状态 =====
+
+    @Command("soul_health", description="查看插件健康状态（管理员）", pattern=r"^/soul_health\s*$")
+    async def cmd_soul_health(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        from .components.health_command import handle_health
+
+        return await handle_health(self, stream_id, **kwargs)
 
     # ===== @API 组件：Soul 数据接口 =====
     #

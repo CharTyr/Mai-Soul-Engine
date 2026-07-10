@@ -12,7 +12,10 @@ from typing import Any
 import logging
 import sqlite3
 
-from ..worldview.constants import GLOBAL_STREAM
+# 全局作用域标记：trait/光谱以此值表示"不绑定特定群、对所有聊天流生效"的全局作用域。
+# 历史上曾用空串 "" 表全局（与"未设置/异常"无法区分），现统一用显式 "global"。
+# 定义在 models 层（低层），worldview 层从此处引用，避免 models→worldview 反向依赖。
+GLOBAL_STREAM = "global"
 
 logger = logging.getLogger(__name__)
 

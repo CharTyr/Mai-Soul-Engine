@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time as _time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -70,6 +71,7 @@ class NotionFrontendConfig:
     property_map: NotionPropertyMap
     spectrum_property_map: NotionSpectrumPropertyMap
     max_rich_text_chars: int = 1800
+    http_timeout_seconds: int = 30
 
 
 def _normalize_notion_id(raw: str) -> str:
@@ -99,31 +101,91 @@ def _safe_text(text: str, limit: int) -> str:
     return s
 
 
-def _json_request(method: str, url: str, token: str, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    data: Optional[bytes]
-    if payload is None:
-        data = None
-    else:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+def _json_request(
+    method: str,
+    url: str,
+    token: str,
+    payload: Optional[dict[str, Any]] = None,
+    *,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """发送 Notion API 请求，带指数退避重试（最多 3 次）和 429 限流退避。
 
-    req = urllib.request.Request(url, data=data, method=method.upper())
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Notion-Version", NOTION_VERSION)
-    req.add_header("Content-Type", "application/json")
+    Args:
+        method: HTTP 方法（GET/POST/PATCH）。
+        url: 请求 URL。
+        token: Notion API token。
+        payload: 请求体（可选）。
+        timeout: 请求超时秒数（默认 30）。
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8") if resp else ""
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
+    Returns:
+        解析后的 JSON 响应字典。
+
+    Raises:
+        NotionAPIError: 所有 HTTP 错误（含重试用尽后的 429）。
+    """
+    max_retries = 3
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(max_retries):
+        data: Optional[bytes]
+        if payload is None:
+            data = None
+        else:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        req = urllib.request.Request(url, data=data, method=method.upper())
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Notion-Version", NOTION_VERSION)
+        req.add_header("Content-Type", "application/json")
+
         try:
-            raw = e.read().decode("utf-8") if e.fp else ""
-            data = json.loads(raw) if raw else {}
-        except Exception:
-            data = {}
-        code = str((data.get("code") if isinstance(data, dict) else "") or "http_error")
-        message = str((data.get("message") if isinstance(data, dict) else "") or str(e))
-        raise NotionAPIError(status=int(getattr(e, "code", 0) or 0), code=code, message=message) from e
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8") if resp else ""
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            try:
+                raw = e.read().decode("utf-8") if e.fp else ""
+                err_data = json.loads(raw) if raw else {}
+            except Exception:
+                err_data = {}
+            code = str((err_data.get("code") if isinstance(err_data, dict) else "") or "http_error")
+            message = str((err_data.get("message") if isinstance(err_data, dict) else "") or str(e))
+
+            if e.code == 429 and attempt < max_retries - 1:
+                retry_after_str = e.headers.get("Retry-After")
+                if retry_after_str is not None:
+                    try:
+                        retry_after = int(retry_after_str)
+                    except (ValueError, TypeError):
+                        retry_after = 2 ** attempt
+                else:
+                    retry_after = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    "[Notion] 429 限流，等待 %ds 后重试（第 %d/%d 次）",
+                    retry_after, attempt + 1, max_retries,
+                )
+                _time.sleep(retry_after)
+                last_exc = NotionAPIError(status=e.code, code=code, message=message)
+                continue
+
+            raise NotionAPIError(status=e.code, code=code, message=message) from e
+        except (urllib.error.URLError, OSError) as e:
+            if attempt < max_retries - 1:
+                sleep_sec = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    "[Notion] 网络错误，%ds 后重试（第 %d/%d 次）: %s",
+                    sleep_sec, attempt + 1, max_retries, e,
+                )
+                _time.sleep(sleep_sec)
+                last_exc = e
+                continue
+            raise NotionAPIError(status=0, code="network_error", message=str(e)) from e
+
+    # 所有重试用尽
+    if isinstance(last_exc, NotionAPIError):
+        raise last_exc
+    raise NotionAPIError(status=0, code="max_retries_exceeded", message=str(last_exc or "unknown"))
 
 
 def _prop_title(text: str) -> dict[str, Any]:
@@ -205,6 +267,7 @@ def _query_page_id_by_rich_text_equals(
     database_id: str,
     property_name: str,
     equals_value: str,
+    timeout: int = 30,
 ) -> Optional[str]:
     prop = (property_name or "").strip()
     if not prop:
@@ -215,7 +278,7 @@ def _query_page_id_by_rich_text_equals(
 
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
     payload = {"page_size": 1, "filter": {"property": prop, "rich_text": {"equals": v}}}
-    data = _json_request("POST", url, token, payload)
+    data = _json_request("POST", url, token, payload, timeout=timeout)
     results = data.get("results")
     if not isinstance(results, list) or not results:
         return None
@@ -235,6 +298,7 @@ def _query_page_id_by_title_and_scope(
     title_equals: str,
     scope_property: str,
     scope_equals: str,
+    timeout: int = 30,
 ) -> Optional[str]:
     title_property = (title_property or "").strip()
     scope_property = (scope_property or "").strip()
@@ -257,7 +321,7 @@ def _query_page_id_by_title_and_scope(
     for scope_filter in scope_filters:
         payload = {"page_size": 1, "filter": {"and": [*filters, scope_filter]}}
         try:
-            data = _json_request("POST", url, token, payload)
+            data = _json_request("POST", url, token, payload, timeout=timeout)
         except NotionAPIError as e:
             if e.code == "validation_error":
                 continue
@@ -274,29 +338,30 @@ def _query_page_id_by_title_and_scope(
     return None
 
 
-def _query_trait_page_id(*, token: str, database_id: str, trait_id_property: str, trait_id: str) -> Optional[str]:
+def _query_trait_page_id(*, token: str, database_id: str, trait_id_property: str, trait_id: str, timeout: int = 30) -> Optional[str]:
     return _query_page_id_by_rich_text_equals(
         token=token,
         database_id=database_id,
         property_name=trait_id_property,
         equals_value=trait_id,
+        timeout=timeout,
     )
 
 
-def _create_trait_page(*, token: str, database_id: str, properties: dict[str, Any]) -> str:
+def _create_trait_page(*, token: str, database_id: str, properties: dict[str, Any], timeout: int = 30) -> str:
     url = f"{NOTION_API_BASE}/pages"
     payload = {"parent": {"database_id": database_id}, "properties": properties}
-    data = _json_request("POST", url, token, payload)
+    data = _json_request("POST", url, token, payload, timeout=timeout)
     pid = data.get("id") if isinstance(data, dict) else None
     if not isinstance(pid, str) or not pid.strip():
         raise NotionAPIError(status=0, code="invalid_response", message="create page returned no id")
     return pid
 
 
-def _update_trait_page(*, token: str, page_id: str, properties: dict[str, Any]) -> None:
+def _update_trait_page(*, token: str, page_id: str, properties: dict[str, Any], timeout: int = 30) -> None:
     url = f"{NOTION_API_BASE}/pages/{page_id}"
     payload = {"properties": properties}
-    _json_request("PATCH", url, token, payload)
+    _json_request("PATCH", url, token, payload, timeout=timeout)
 
 
 def _impact_score_from_json(raw: str) -> float:
@@ -347,6 +412,7 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
     visibility_default = str(_get("visibility_default", "Public") or "Public").strip() or "Public"
     never_overwrite_user_fields = bool(_get("never_overwrite_user_fields", True))
     max_rich_text_chars = max(200, int(_get("max_rich_text_chars", 1800)))
+    http_timeout_seconds = max(5, int(_get("http_timeout_seconds", 30)))
 
     property_map = NotionPropertyMap(
         title=str(_get("property_title", "Name") or "Name"),
@@ -390,6 +456,7 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
         property_map=property_map,
         spectrum_property_map=spectrum_property_map,
         max_rich_text_chars=max_rich_text_chars,
+        http_timeout_seconds=http_timeout_seconds,
     )
 
 
@@ -424,6 +491,8 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
     updated = 0
     skipped = 0
     errors: list[dict[str, Any]] = []
+
+    timeout = cfg.http_timeout_seconds
 
     for t in traits:
         trait_id = str(getattr(t, "trait_id", "") or "").strip()
@@ -469,6 +538,7 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
                 database_id=cfg.database_id,
                 trait_id_property=pm.trait_id,
                 trait_id=trait_id,
+                timeout=timeout,
             ) or ""
             if page_id:
                 page_map[trait_id] = page_id
@@ -487,7 +557,7 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
                 props_create[pm.visibility] = _prop_select(cfg.visibility_default)
 
             try:
-                page_id = _create_trait_page(token=cfg.token, database_id=cfg.database_id, properties=props_create)
+                page_id = _create_trait_page(token=cfg.token, database_id=cfg.database_id, properties=props_create, timeout=timeout)
                 page_map[trait_id] = page_id
                 created += 1
             except Exception as e:
@@ -563,6 +633,8 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
     if mode not in {"dimension_rows", "single_row"}:
         mode = "dimension_rows"
 
+    timeout = cfg.http_timeout_seconds
+
     # 你要求的结构：四行（Dimension 为 Title），一个 Value 字段；ScopeId 用于区分 scope（默认 global）。
     if mode == "dimension_rows":
         dims: list[tuple[str, int]] = [
@@ -606,6 +678,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
                         title_equals=dim,
                         scope_property=pm.scope_id,
                         scope_equals=scope_id,
+                        timeout=timeout,
                     ) or ""
                 except NotionAPIError as e:
                     errors.append({"dimension": dim, "op": "query", "status": e.status, "code": e.code, "message": e.message})
@@ -628,7 +701,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
                     if pm.title:
                         props_create[pm.title] = _prop_title(dim)
                     try:
-                        page_id = _create_trait_page(token=cfg.token, database_id=cfg.spectrum_database_id, properties=props_create)
+                        page_id = _create_trait_page(token=cfg.token, database_id=cfg.spectrum_database_id, properties=props_create, timeout=timeout)
                         spectrum_row_page_map[key] = page_id
                         created += 1
                         created_ok = True
@@ -646,7 +719,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
                     continue
 
             try:
-                _update_trait_page(token=cfg.token, page_id=page_id, properties=props_update)
+                _update_trait_page(token=cfg.token, page_id=page_id, properties=props_update, timeout=timeout)
                 updated += 1
             except NotionAPIError as e:
                 # 兼容 ScopeId/UpdatedAt 字段类型或缺失导致的 validation_error：自动降级重试
@@ -658,7 +731,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
                     ]
                     for retry_props in retry_attempts:
                         try:
-                            _update_trait_page(token=cfg.token, page_id=page_id, properties=retry_props)
+                            _update_trait_page(token=cfg.token, page_id=page_id, properties=retry_props, timeout=timeout)
                             updated += 1
                             break
                         except Exception:
@@ -721,6 +794,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
             database_id=cfg.spectrum_database_id,
             property_name=pm.scope_id,
             equals_value=scope_id,
+            timeout=timeout,
         ) or ""
         if page_id:
             spectrum_page_map[scope_id] = page_id
@@ -731,7 +805,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
         if pm.title:
             props_create[pm.title] = _prop_title(f"Ideology Spectrum ({scope_id})")
         try:
-            page_id = _create_trait_page(token=cfg.token, database_id=cfg.spectrum_database_id, properties=props_create)
+            page_id = _create_trait_page(token=cfg.token, database_id=cfg.spectrum_database_id, properties=props_create, timeout=timeout)
             spectrum_page_map[scope_id] = page_id
             created = True
         except Exception as e:
