@@ -15,7 +15,7 @@
 | 禁止 | `import src.*`、写宿主 `data/MaiBot.db`、恢复 POST_LLM 注入 |
 | 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有一个 `@HookHandler(mode=OBSERVE)`（`replyer.after_response`，见"自我评价反馈回路"） |
 | 注入合并 | **追加到宿主首条 system**（`_apply_soul_injection_to_messages`），不得 prepend 竞争性 system；找不到 system → fail-open 跳过注入 |
-| 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 7 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
+| 数据 | **`soul.db`**（`models/`，stdlib sqlite3）。**优先**宿主 `ctx.paths.data_dir/mai_soul_engine`（`utils/data_dir.resolve_and_prepare_data_dir`，SQLite backup 迁移，失败回退 `plugin_dir/data`）；`plugin._data_dir` / `_data_dir_info` 记录实际路径与 source。`models/` 按实体拆分，`ideology_model.py` 为重导出 shim |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
 | Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.5.0`；`normalize_plugin_config` 会补齐旧配置 |
@@ -189,13 +189,15 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 
 ### 命令
 
-- `/soul_approve <id>`：v2.4.0 行为分叉——`fermentation_enabled=true` → 标 `fermenting`（进入发酵）；`false` → 立即内化（旧行为）。
-- `/soul_reject <id>`：v2.4.0 允许拒绝 `fermenting` 状态种子（清理其发酵输入）。
-- `/soul_seed <id>`：v2.4.0 展示发酵进度（已收集输入数/预览最近3条/关联度分数）。
-- 只读详情：`/soul_trait <id>`（trait 详情卡片）、`/soul_inspect <文本>`（注入命中预览）、`/soul_dashboard`（全状态总览）。
-- 批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**）。
-- 误判 trait 回滚：`/soul_trait_enable <id>`。
-- 群锁提升全局：`/soul_promote_global <id>`（保留 origin_stream_id）。
+- `/soul_approve <id>`：v2.4.0 行为分叉——`fermentation_enabled=true` → 标 `fermenting`；`false` → 立即内化。内化成功（非 merge）会**建议** `/soul_slot <trait_id> <空槽>`。
+- `/soul_reject <id>`：可拒绝 `fermenting`（清理发酵输入）。
+- `/soul_seed <id>`：详情 + 发酵进度。
+- 只读：`/soul_trait <id>`、`/soul_inspect <文本>`（含 `activation_reason`）、`/soul_dashboard`（含 **12 格槽位**）。
+- 批量：`/soul_reject_all`（**仅批量拒绝，无批量批准**）。
+- Trait 管理：`/soul_trait_enable|disable|delete|set_tags|merge`；误判回滚用 enable。
+- **12 槽**：`/soul_slot <trait_id> <1-12|clear>`（`set_trait_slot` 原子换槽）；注入各阶段 **有槽优先**。
+- **群锁→全局**：`/soul_promote_global <id>`（`stream_id=global`，空则写入 `origin_stream_id`）；列表对非 global 标 `[仅群]`。
+- 健康：`/soul_health`（任务、data_dir source、schema version、槽占用、迁移失败则 **degraded**）。
 
 ### 全局作用域标记（`GLOBAL_STREAM`）与来源溯源
 
@@ -206,6 +208,7 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 ### @API 访问控制
 
 7 个 `@API` 均为 SDK 级组件（`public=False`），**无网络暴露面**（插件无 HTTP server/路由/监听）。双层访问控制：`public=False`（SDK 层，仅 Runner 内可信组件可调）+ `api.enabled` 配置守卫（**schema 默认 `False`**，7 个 API 入口全检查）。唯一写接口 `api_set_spectrum` 有审计日志（`data/audit.jsonl`，`type=api_set_spectrum`，记录社交轴 before/after）。**插件层不自行实现网络级认证**（无网络面，加 token 不适用且需改 SDK/宿主）。`token`/`public_mode` 仍为配置位，当前无网络面时勿当作安全边界。
+
 ### 状态卡片可视化（`/soul_dashboard` + `/soul_trait` + `/soul_inspect`，v2.2.0）
 
 三个命令把 Soul 引擎状态渲染成图片卡片发到聊天（非 Web 页面——SDK 无插件前端注册机制，WebUI 只能生成配置表单；此处用 `ctx.render.html2png` 把内联 HTML/CSS 经宿主无头浏览器渲染成 PNG，再 `ctx.send.image` 发图，零宿主改动）。三个卡片**共用 `dashboard_renderer.py` 的 `_wrap_html` CSS 底座**（Raycast 暗色开发工具风格：四级表面梯 + hairline 边框 + 无 drop-shadow + Inter ss03 + 生命周期语义色 chip + 顶部红色 hero stripe），各自根容器 id：`#soul-dashboard`/`#soul-trait`/`#soul-inspect`。视觉规范见 `DESIGN-raycast.md`。
@@ -295,9 +298,12 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文 + v2.4.0 发酵后内化（`fermentation_inputs` 参数），`fermentation_engine.py`（**v2.4.0**：发酵循环 + L1 关键词过滤 + L3 LLM 关联度判断 + 到期检测/延长/最终内化触发）
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
 - `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`；v2.4.0 +`fermentation_prompts.py`）
-- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具，含发酵表+列迁移 + origin/raw/consumed 列）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD + 发酵 CRUD + `count_seeds_created_today` / `count_self_observation_seeds_created_today`）、`traits.py`（trait CRUD + `origin_stream_id`）、`p1.py`（切片/情绪/图谱边）、`self_reflection.py`（注入快照/待评/自评 + unconsumed 修正查询）；`ideology_model.py` 保留为**重导出 shim**。**新代码直接从子模块 import**
+- `models/` — 按实体拆分：`_conn.py`（连接/建表/迁移 ledger + origin/raw/consumed/`cabinet_slot_no`）、`spectrum.py`、`history.py`、`seeds.py`（含日上限计数）、`traits.py`（`origin_stream_id` / `set_trait_slot` / `promote_trait_to_global`）、`p1.py`、`self_reflection.py`；`ideology_model.py` 为重导出 shim
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `tests/` — 插件内测试（约 **220** 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；覆盖原子守卫/生命周期/全局标记/origin/光谱 clamp/演化三态/发酵 cursor 与无证据不强制内化/自评 raw·consumed·日 cap/关键词召回/system 合并/FeatureSupervisor/dashboard+inspect 等
+- `utils/data_dir.py` — 宿主 data_dir 解析 + backup 迁移
+- `utils/host_persona.py` — HostBasePersona 快照（config.get）
+- `utils/runtime_resolution.py` — 群 stream：get_stream → open_session
+- `tests/` — 约 **276** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；含 migrations/cabinet_slots/promote/open_session/persona/message_merge 等
 
 ## 开发与验证
 
@@ -322,7 +328,7 @@ cd /path/to/Maibot
 .venv/bin/python -c "import importlib; p=importlib.import_module('plugins.CharTyr_Mai-Soul-Engine.plugin'); i=p.create_plugin(); print(len(i.get_components()))"
 ```
 
-重载插件后联调：`/soul_setup` → `/soul_answer` → `/soul_status`（dev 下 status 会显示层计数、切片偏移、情绪、发酵中种子数）；开启 `[self_reflection].enabled` 后 `/soul_reflect` 看自评记录；开启 `[thought_cabinet].fermentation_enabled` 后 `/soul_approve` 进入发酵、`/soul_seed <id>` 看发酵进度；看 Runner 日志与 `data/migration_state.json`。
+重载后联调建议：`/soul_health` → `/soul_setup`/`/soul_status` → 有种子时 `/soul_approve`（即时内化应劝槽）→ `/soul_slot` → `/soul_inspect` / `/soul_dashboard`（12 格）。自评开时 `/soul_reflect`；发酵开时 approve 进 fermenting。完整清单见本地 `.slim/deepwork/acceptance-2.5.0.md`（不入库）。
 
 ## 修改约束
 
@@ -331,49 +337,44 @@ cd /path/to/Maibot
 - 可选能力默认关：**Notion**、**思维阁**、**@API**（`api.enabled` 默认 False）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
 - **`plugin.enabled=false`**：注入跳过 + 四后台任务 desired 全 false（经 `_reconcile_background_tasks`）。
 - **`p1_enabled=false` 只关分层/切片/情绪，社交轴仍然生效**，不会回滚到政治轴。
-- **`fermentation_enabled=false` 只关发酵，种子仍会生成（经稀有化过滤），批准后立即内化（旧行为）**。
-- 光谱边界：`update_spectrum_value` 为**硬 clamp**（0–100），禁止越界反弹。
-- 演化群分析：`_analyze_group` 返回 `"success"|"skipped"|"failed"`；`_analyze_with_sem` 必须透传，禁止无条件 True。
-- 发版：插件仓自行 `git push`；宿主侧 `plugins/*` 多在 `.gitignore`，pytest 文件在宿主仓维护。
-- Manifest 版本须严格三段式 semver（`2.5.0`），**禁止 `-dev` 后缀**。
+- **`fermentation_enabled=false` 只关发酵**，批准后立即内化；**`fermentation_min_inputs=0` 会弱化「最少证据」门槛（到期易直接内化），不推荐**。
+- 光谱边界：硬 clamp 0–100，禁止越界反弹。
+- 演化：`_analyze_group` → `"success"|"skipped"|"failed"`，禁止无条件 True。
+- 新内化 trait **默认 global**；槽位**不自动占用**，需 `/soul_slot`（或内化文案提示）。
+- 发版：插件仓 `git push`；宿主 `plugins/*` 常在 gitignore。
+- Manifest / `CONFIG_VERSION`：**2.5.0** 严格三段式 semver，**禁止 `-dev` 后缀**。
 
-## Phase 0A/0B 正确性打磨（dev 上 v2.4.0 之后，关键）
+## v2.5.0 相对 v2.4.0（正确性 + 最小 12 槽 + 插件侧 Capability）
 
-线上曾出现：演化 skip 假成功、发酵 LLM 失败丢窗口、无证据强制内化、自评修正查不到群 session、trait 锁在来源群、注入全 spectrum_only、Soul 抢宿主 system。Phase 0 **不建 v3 表、不改宿主**，在现模型上修闭环：
+线上假闭环与产品缺口的修复汇总（**不建全量 v3 表**；优先用宿主**已有** Capability，勿默认「必须改宿主」）：
 
 | 切片 | 要点 | 关键路径 |
 |------|------|----------|
-| 0A 演化 | AnalysisResult 三态；光谱硬 clamp | `evolution_task.py`、`spectrum_utils.py` |
-| 0A 发酵 | LLM 失败 `[]` 不推进 checked_at；max_extensions 无证据不 finalize | `fermentation_engine.py` |
-| 0A 自评 | raw/normalized 列；种子用 raw；gate 接线；跨 session + `correction_consumed_at` | `self_reflection.py`、`reflection_*` |
+| 0A 演化 | 三态 success/skipped/failed；光谱硬 clamp | `evolution_task.py`、`spectrum_utils.py` |
+| 0A 发酵 | LLM 失败 `[]` 不推进 checked_at；无证据不强制 finalize | `fermentation_engine.py` |
+| 0A 自评 | raw/normalized；种子用 raw；gate 接线；跨 session + consumed | `self_reflection.py`、`reflection_*` |
 | 0A 生命周期 | `_compute_desired_tasks` + `_reconcile_background_tasks`；API 默认关 | `plugin.py`、`plugin_ui_schema.py` |
 | 0B.1 | 内化 `stream_id=global` + `origin_stream_id` | `traits.py`、`internalization_engine.py` |
 | 0B.2 | 关键词补位 + `activation_reason` | `ideology_injector.py` |
 | 0B.3 | 追加宿主首条 system；无 system fail-open | `ideology_injector.py` |
 | 0B.4 | `self_observation_daily_cap`（默认 2） | `seeds.py`、`reflection_evaluator.py` |
+| 0C | 内化光谱+trait+边 `commit=False` + BEGIN/COMMIT | `internalization_engine.py`、`spectrum.py`、`traits.py`、`p1.py` |
+| 1.mix | `soul_schema_migrations` + `user_version`；`cabinet_slot_no` UNIQUE partial | `_conn.py`、`traits.py` |
+| 1.slot | `set_trait_slot`；注入 has_slot 优先；dashboard 12 格；`/soul_slot` | `traits.py`、`ideology_injector.py`、dashboard_*、`thought_commands.py` |
+| 产品 | 内化/发酵完成劝槽；`/soul_promote_global`；health degraded | `thought_commands.py`、`fermentation_engine.py`、`health_command.py` |
+| data.dir | 宿主 `data_dir/mai_soul_engine` + backup 迁移 | `utils/data_dir.py`、`plugin.py` |
+| H1 插件侧 | get_stream → **open_session** 回退（**非**宿主新 PR） | `utils/runtime_resolution.py` |
+| H2 插件侧 | **config.get** 读 personality/reply_style → 内化基底 | `utils/host_persona.py` |
 
-| 0C | 内化 `commit=False` + BEGIN/COMMIT 包裹光谱/trait/边 | `internalization_engine.py`、`spectrum.py`、`traits.py`、`p1.py` |
+**尚未做（YAGNI / 可选）**：完整 v3 candidates/runs/versions；宿主 H3 结构化 persona extension；冷却改分惩罚；自动静默占槽。
 
-| 1.mix | `soul_schema_migrations` + `user_version`；`cabinet_slot_no` UNIQUE partial index | `_conn.py`、`traits.py` |
+**已知债务**：存量群锁 trait 不自动改 global（用 promote）；空池时注入「无 trait 跳过」正常；关键词 2-gram 精度有限。
 
-| 1.slot | `set_trait_slot`；注入 has_slot 优先；dashboard/trait 展示；`/soul_slot` 管理命令 | `traits.py`、`ideology_injector.py`、dashboard_*、`thought_commands.py` |
-
-**已做（6 项补充）**：
-
-| 切片 | 要点 | 关键路径 |
-|------|------|----------|
-| slot.cmd | `/soul_slot` 命令（set/clear/用法） | `thought_commands.py`、`plugin.py`、`help_command.py` |
-| data.dir | `resolve_and_prepare_data_dir`：解析宿主 ctx + backup 迁移 + 回退 | `utils/data_dir.py`、`plugin.py`、`health_command.py` |
-| H1 | `resolve_monitored_group_stream` 新增 `open_session` 降级 | `utils/runtime_resolution.py` |
-| H2 | `fetch_host_persona` 经 `config.get` 读人设 + 内化 prompt 追加 | `utils/host_persona.py`、`thought/internalization_engine.py` |
-
-**尚未做（后续）**：完整 v3 Thought 表；宿主 H3；`/soul_slot` 管理命令（可选）。
-
-本地会话进度（不入库）：`.slim/deepwork/production-polish.md` 与评估/蓝图文档。
+本地（不入库）：`.slim/deepwork/production-polish.md`、`acceptance-2.5.0.md`、`next-plan.md`、评估/蓝图。
 
 ## 参考
 
-- 升级计划与 P0 验收、P1 分阶段计划：`MIGRATION_PLAN.md`
-- 用户向：`README.md`（dev 含完整 P1 架构/轴表/层映射/隐私/API/差异表）
-- 变更：`CHANGELOG.md`（v2.4.0 含思维阁发酵重构；v2.3.0 含自我评价反馈回路；v2.1.0 含轴重构 + P1）
-- SDK 指南：https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md
+- 用户向：`README.md`（含 v2.5.0 要点）
+- 变更：`CHANGELOG.md`（**[2.5.0]** 汇总；更早 2.4/2.3/2.1 条目保留）
+- 升级计划：`MIGRATION_PLAN.md`
+- SDK：https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md
