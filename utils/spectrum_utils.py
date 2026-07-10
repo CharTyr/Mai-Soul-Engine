@@ -153,7 +153,7 @@ def is_user_monitored(platform: str, user_id: str, config: dict) -> bool:
 def is_bot_self_message(platform: str, user_id: str, bot_self_ids: list[str]) -> bool:
     """判断某条消息是否来自 bot 自身（演化分析时排除自消息，防自指泄漏）。
 
-    bot_self_ids 为 ``[monitor].bot_self_id`` 配置，格式同 excluded_users（平台:ID）。
+    bot_self_ids 由宿主 ``bot.qq_account`` 解析，格式同 excluded_users（平台:ID）。
     空列表 = 未配置，返回 False（不排除，由 excluded_users 兜底）。
     """
     for bid in bot_self_ids or []:

@@ -174,17 +174,7 @@ class MonitorConfig(PluginConfigBase):
         description="排除发言人",
         json_schema_extra=_ui(
             "群内排除的发言人（可选）",
-            "这些账号在监控群里的发言不参与演化。强烈建议至少在此处或下方「bot 自身账号」填入 bot 账号，否则 bot 自消息会混入演化分析池导致人设自指。与私聊无关。",
-            placeholder="qq:12345678",
-            advanced=True,
-        ),
-    )
-    bot_self_id: list[str] = Field(
-        default_factory=list,
-        description="bot 自身账号",
-        json_schema_extra=_ui(
-            "bot 自身账号（强烈建议填写）",
-            "bot 自己的账号，格式 平台:ID（如 qq:12345678）。演化分析时一律排除这些账号的发言，防止 bot 自消息污染人设演化（自指泄漏）。可填多个以支持多平台。",
+            "这些账号在监控群里的发言不参与演化。bot 自身账号由宿主 bot.qq_account 自动排除；这里只填写其他机器人或不应参与塑形的账号。与私聊无关。",
             placeholder="qq:12345678",
             advanced=True,
         ),
@@ -580,7 +570,7 @@ class SelfReflectionConfig(PluginConfigBase):
         ),
     )
     evaluation_interval_hours: float = Field(
-        default=6.0,
+        default=1.0,
         ge=0.5,
         le=72.0,
         description="评价周期",

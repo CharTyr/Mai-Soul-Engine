@@ -140,6 +140,8 @@ async def capture_after_response(plugin, source: str, **kwargs: Any) -> dict[str
     """
     if not plugin.config.self_reflection.enabled:
         return {"success": True, "action": "continue"}
+    if source != "replyer":
+        return {"success": True, "action": "continue"}
     response = str(kwargs.get("response", "") or "").strip()
     if not response:
         return {"success": True, "action": "continue"}

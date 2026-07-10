@@ -14,8 +14,11 @@ async def resolve_monitored_group_stream(plugin: Any, config_id: str) -> str:
     routing scope.  The historical MD5 form is retained only as a compatibility
     fallback for hosts where no stream discovery capability is available.
     """
-    platform, group_id, chat_type = parse_chat_id(config_id)
-    if platform and group_id and chat_type == "group":
+    raw = str(config_id or "").strip()
+    platform, group_id, chat_type = parse_chat_id(raw)
+    if not platform:
+        return chat_config_to_stream_id(raw)
+    if group_id and chat_type == "group":
         try:
             result = await plugin.ctx.chat.get_stream_by_group_id(
                 group_id=group_id,
@@ -29,7 +32,7 @@ async def resolve_monitored_group_stream(plugin: Any, config_id: str) -> str:
                         return stream_id
         except (RuntimeError, ValueError, OSError, AttributeError):
             pass
-    return chat_config_to_stream_id(config_id)
+    return ""
 
 
 async def resolve_host_bot_self_ids(plugin: Any) -> list[str]:

@@ -85,23 +85,18 @@ def test_snapshot_written_when_enabled(soul_db: Any) -> None:
 # ─── after_response 捕获 ──────────────────────────────────────────
 
 
-def test_capture_after_response_creates_pending(soul_db: Any) -> None:
+def test_planner_after_response_is_not_enqueued(soul_db: Any) -> None:
     rc = _import_soul_submodule("components.reflection_capture")
     plugin = _plugin_with_self_reflection(enabled=True)
-    rc.cache_session_context("sess", [{"role": "user", "content": "你觉得呢"}])
+    rc.cache_session_context("planner-sess", [{"role": "user", "content": "你觉得呢"}])
     rc.maybe_write_injection_snapshot(
-        plugin, "sess", "g", [], {"sincerity": 50}, [], "spectrum_only"
+        plugin, "planner-sess", "g", [], {"sincerity": 50}, [], "spectrum_only"
     )
     result = asyncio.run(
-        rc.capture_after_response(plugin, "planner", response="我建议...", session_id="sess")
+        rc.capture_after_response(plugin, "planner", response="我建议...", session_id="planner-sess")
     )
     assert result["action"] == "continue"
-    pendings = soul_db.list_pending_reflections(limit=10)
-    assert len(pendings) == 1
-    assert pendings[0].source == "planner"
-    assert pendings[0].response_text == "我建议..."
-    assert pendings[0].snapshot_id  # 配对到了快照
-    assert "你觉得呢" in pendings[0].context_json
+    assert soul_db.list_pending_reflections(limit=10) == []
 
 
 def test_capture_after_response_disabled_skips(soul_db: Any) -> None:
@@ -137,10 +132,21 @@ def test_capture_pairs_with_latest_snapshot(soul_db: Any) -> None:
     # 写两条快照，第二条 selection_mode 不同
     rc.maybe_write_injection_snapshot(plugin, "sess", "g", [], {"sincerity": 50}, [], "spectrum_only")
     rc.maybe_write_injection_snapshot(plugin, "sess", "g", [], {"sincerity": 50}, [], "tag_hit")
-    asyncio.run(rc.capture_after_response(plugin, "planner", response="回复", session_id="sess"))
+    asyncio.run(rc.capture_after_response(plugin, "replyer", response="回复", session_id="sess", reply_message_id="m1"))
     pendings = soul_db.list_pending_reflections(limit=10)
     assert len(pendings) == 1
     # 配对的应是最近那条（tag_hit）
     snap = soul_db.get_injection_snapshot(pendings[0].snapshot_id)
     assert snap is not None
     assert snap.selection_mode == "tag_hit"
+
+
+def test_replyer_capture_deduplicates_reply_message_id(soul_db: Any) -> None:
+    rc = _import_soul_submodule("components.reflection_capture")
+    plugin = _plugin_with_self_reflection(enabled=True)
+    kwargs = {"response": "最终可见回复", "session_id": "sess", "reply_message_id": "same-message"}
+    asyncio.run(rc.capture_after_response(plugin, "replyer", **kwargs))
+    asyncio.run(rc.capture_after_response(plugin, "replyer", **kwargs))
+    pendings = soul_db.list_pending_reflections(limit=10)
+    assert len(pendings) == 1
+    assert pendings[0].reply_message_id == "same-message"

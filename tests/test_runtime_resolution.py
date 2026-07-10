@@ -22,7 +22,7 @@ def test_group_resolution_uses_host_account_scoped_stream() -> None:
     assert stream_id == "current-account-scoped-stream"
 
 
-def test_group_resolution_falls_back_to_legacy_hash_when_host_has_no_stream() -> None:
+def test_group_resolution_returns_empty_when_host_has_no_stream() -> None:
     runtime = _import_soul_submodule("utils.runtime_resolution")
 
     class Chat:
@@ -32,7 +32,7 @@ def test_group_resolution_falls_back_to_legacy_hash_when_host_has_no_stream() ->
     plugin = SimpleNamespace(ctx=SimpleNamespace(chat=Chat()))
     stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:902106123:group"))
 
-    assert stream_id == "931772ff504085850356d5e82c5d4438"
+    assert stream_id == ""
 
 
 def test_soul_text_generation_uses_planner_task_with_long_rpc_timeout() -> None:
@@ -71,3 +71,8 @@ def test_host_bot_identity_is_read_from_main_config() -> None:
     identities = asyncio.run(runtime.resolve_host_bot_self_ids(plugin))
 
     assert identities == ["qq:3430049585"]
+
+
+def test_monitor_schema_has_no_plugin_side_bot_identity() -> None:
+    schema = _import_soul_submodule("plugin_ui_schema")
+    assert "bot_self_id" not in schema.MonitorConfig.model_fields

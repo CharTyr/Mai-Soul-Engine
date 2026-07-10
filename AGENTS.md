@@ -185,7 +185,7 @@ OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened tr
 
 ### P0 前置修复（v2.3.0 同步，单独提交 f58b41b）
 
-**bot 自消息泄漏**：此前 `get_by_time_in_chat` 返回含 bot 自己消息，`excluded_users` 默认空 → bot 自消息混入"看别人"演化池（不受控自指）。修：`[monitor].bot_self_id` 配置 + `filter_messages_for_evolution` bot 自身短路优先于 `monitored_users` 白名单 + 每群一次告警。**必须先修此隐患再做自评，否则两条自指回路纠缠无法调试**。
+**bot 自消息泄漏**：`get_by_time_in_chat` 会返回 bot 自己消息。插件必须通过宿主 `config.get("bot.qq_account")` 自动识别并短路排除，禁止在插件配置里重复维护 bot 身份。
 
 ### 关键文件
 
@@ -217,7 +217,6 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - **`monitored_groups`**：群**白名单**；空 = 不做群演化。
 - **`excluded_groups`**：从白名单里再减掉（可选）。
 - **`monitored_users` / `excluded_users`**：只过滤**监控群内谁的发言**计入演化，**与私聊无关**；用户列表留空 = 该群全员计入。
-- **`bot_self_id`**（v2.3.0 新增，强烈建议填）：bot 自身账号（`平台:ID`），演化时**一律短路排除**其发言，防 bot 自消息污染演化池（自指泄漏）。优先级高于 `monitored_users` 白名单。未填且 `excluded_users` 也空时，演化任务每群告警一次。
 
 ## 目录职责
 

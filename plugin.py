@@ -214,20 +214,6 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
     # ===== HookHandler：自我评价捕获（OBSERVE，不改写输出）=====
 
     @HookHandler(
-        "maisaka.planner.after_response",
-        name="soul_reflection_planner_capture",
-        description="捕获 planner LLM 决策输出供自我评价（OBSERVE，不改写）",
-        mode=HookMode.OBSERVE,
-        order=HookOrder.NORMAL,
-        error_policy=ErrorPolicy.SKIP,
-    )
-    async def hook_reflection_planner_after(self, **kwargs: Any) -> dict[str, Any]:
-        """planner 决策后捕获输出入待评队列。"""
-        from .components.reflection_capture import capture_after_response
-
-        return await capture_after_response(self, "planner", **kwargs)
-
-    @HookHandler(
         "maisaka.replyer.after_response",
         name="soul_reflection_replyer_capture",
         description="捕获 replyer 最终回复供自我评价（OBSERVE，不改写）",

@@ -173,6 +173,16 @@ def create_pending_reflection(
 ) -> int:
     """入队一条待评价回复，返回 pending_id。"""
     conn = _get_conn()
+    normalized_reply_message_id = str(reply_message_id or "").strip()
+    if normalized_reply_message_id:
+        existing = conn.execute(
+            """SELECT pending_id FROM soul_pending_reflections
+               WHERE source = ? AND reply_message_id = ?
+               ORDER BY pending_id DESC LIMIT 1""",
+            (source, normalized_reply_message_id),
+        ).fetchone()
+        if existing:
+            return int(existing[0])
     cursor = conn.execute(
         """INSERT INTO soul_pending_reflections
            (stream_id, session_id, reply_message_id, created_at, snapshot_id,
@@ -181,7 +191,7 @@ def create_pending_reflection(
         (
             stream_id,
             session_id,
-            reply_message_id,
+            normalized_reply_message_id,
             _dt_to_str(datetime.now()),
             snapshot_id,
             source,

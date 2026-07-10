@@ -42,7 +42,7 @@ def _warn_no_bot_filter(stream_id: str) -> None:
         return
     _bot_filter_warned.add(stream_id)
     logger.warning(
-        "群%s：[monitor].bot_self_id 与 excluded_users 均为空，bot 自身消息会混入演化分析池"
+        "群%s：宿主 bot.qq_account 为空且 excluded_users 未配置，bot 自身消息可能混入演化分析池"
         "导致人设自指。建议在配置中填入 bot 账号（格式 平台:ID，如 qq:12345678）。",
         stream_id,
     )
@@ -165,6 +165,10 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
     """
     try:
         stream_id = await resolve_monitored_group_stream(plugin, group_config_id)
+        if not stream_id:
+            logger.warning("监控群无法解析到当前宿主会话: %s", group_config_id)
+            await log_evolution_skip(group_config_id, "stream_not_found")
+            return
 
         record = get_or_create_group_evolution(group_id=stream_id)
         last_time = record.last_analyzed
@@ -197,14 +201,13 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         max_messages = plugin.config.evolution.max_messages_per_analysis
         max_chars = plugin.config.evolution.max_chars_per_message
 
-        # Self identity belongs to the host bot configuration.  Keep the legacy
-        # plugin list only as a compatibility fallback for non-QQ deployments.
+        # Bot identity is owned by the Host (bot.qq_account), never duplicated
+        # in plugin configuration.
         host_bot_self_ids = await resolve_host_bot_self_ids(plugin)
-        configured_bot_self_ids = list(plugin.config.monitor.bot_self_id or [])
         monitor_config = {
             "monitored_users": list(plugin.config.monitor.monitored_users or []),
             "excluded_users": list(plugin.config.monitor.excluded_users or []),
-            "bot_self_id": list(dict.fromkeys(host_bot_self_ids + configured_bot_self_ids)),
+            "bot_self_id": host_bot_self_ids,
         }
 
         # 过滤发言者：bot 自身消息短路排除（防自指泄漏），再过 monitored/excluded

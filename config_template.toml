@@ -39,14 +39,13 @@ monitored_users = []
 # 可选：群内排除的发言人(如机器人)
 excluded_users = []
 # bot 自身账号(强烈建议填写)，格式：平台:ID。演化时一律排除这些账号发言，防止 bot 自消息污染人设(自指泄漏)
-bot_self_id = []
 
 # ─── 自我评价反馈回路（dev 分支新增）─────────────────────────────────
 [self_reflection]
 # 启用后：planner/replyer 决策后捕获回复，定期评价是否符合人设，反馈到光谱演化与下次注入提醒
 enabled = false
 # 评价周期（小时）：多久批量评价一次攒下的回复
-evaluation_interval_hours = 6.0
+evaluation_interval_hours = 1.0
 # 单周期评价上限：每轮最多评价多少条回复
 max_replies_per_cycle = 20
 # 自评对光谱的影响权重（0=不影响，1=与看别人同等，建议0.5自己评自己有偏差）
