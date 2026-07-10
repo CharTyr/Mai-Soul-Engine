@@ -349,7 +349,9 @@ cd /path/to/Maibot
 | 0B.3 | 追加宿主首条 system；无 system fail-open | `ideology_injector.py` |
 | 0B.4 | `self_observation_daily_cap`（默认 2） | `seeds.py`、`reflection_evaluator.py` |
 
-**尚未做（后续）**：0C 内化单事务 UoW / data_dir 迁移；v3 Thought 聚合根与 12 槽；宿主 H1 stream resolver / H2 persona capability / H3 结构化 persona extension。
+| 0C | 内化 `commit=False` + BEGIN/COMMIT 包裹光谱/trait/边 | `internalization_engine.py`、`spectrum.py`、`traits.py`、`p1.py` |
+
+**尚未做（后续）**：data_dir 迁移至宿主路径；v3 Thought 聚合根与 12 槽；宿主 H1 stream resolver / H2 persona capability / H3 结构化 persona extension。
 
 本地会话进度（不入库）：`.slim/deepwork/production-polish.md` 与评估/蓝图文档。
 
