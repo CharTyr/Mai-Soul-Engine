@@ -133,6 +133,28 @@ trait_ttl_days = 90
 seed_dedup_threshold = 0.82
 # 聚合种子通知冷却时间（分钟），防止短时多次通知轰炸管理员，0=不冷却
 admin_notification_cooldown_minutes = 30
+# 内化单轴最大变化值（默认±10）
+max_internalize_delta = 10
+
+# ─── 发酵设置（v2.4.0 新增）───
+# 启用种子发酵：批准后不立即内化，持续收集相关群聊输入，逐步形成结论
+fermentation_enabled = false
+# 发酵窗口（小时）：种子批准后持续收集群聊输入的时间
+fermentation_window_hours = 12.0
+# 发酵检查间隔（分钟）：多久检查一次发酵中种子
+fermentation_check_interval_minutes = 30.0
+# 关联度阈值：群聊消息与种子关联度超过此值才收录，0=全部收录
+fermentation_relevance_threshold = 0.5
+# 最大发酵输入数：单种子最多收集多少条
+fermentation_max_inputs = 20
+# 最小发酵输入数：窗口到期时若不足此数自动延长，0=不延长
+fermentation_min_inputs = 3
+# 最大延长次数：输入不足时最多延长几次
+fermentation_max_extensions = 2
+# 发酵后单轴最大变化值（比即时内化更大，默认±15）
+fermented_max_internalize_delta = 15
+# 每群每天种子上限（0=不限制）
+seed_daily_cap_per_group = 1
 
 # ─── API 设置（可选）────────────────────────────────────────────────
 # Soul 数据 @API 组件，供 WebUI 或其他插件查询光谱/traits/种子。

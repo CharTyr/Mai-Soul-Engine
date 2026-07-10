@@ -66,6 +66,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         self._evolution_task: asyncio.Task | None = None
         self._notion_sync_task: asyncio.Task | None = None
         self._self_reflection_task: asyncio.Task | None = None
+        self._fermentation_task: asyncio.Task | None = None  # v2.4.0 发酵循环
         # 问卷会话状态：{session_key: {current, answers, started_at}}
         self._questionnaire_sessions: dict[str, dict[str, Any]] = {}
         # P1 缓存：避免每条消息重建 WorldviewConfigView 和 WorldviewService
@@ -134,6 +135,11 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
             logger.info("[Mai-Soul-Engine] 自我评价任务已启动")
 
+        # v2.4.0: 启动发酵任务
+        if self.config.thought_cabinet.enabled and getattr(self.config.thought_cabinet, "fermentation_enabled", False):
+            self._fermentation_task = asyncio.create_task(self._fermentation_loop())
+            logger.info("[Mai-Soul-Engine] 发酵任务已启动")
+
     async def on_unload(self) -> None:
         """插件卸载：取消周期任务、关闭数据库。"""
         from .models.ideology_model import close_db
@@ -161,6 +167,15 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             except asyncio.CancelledError:
                 pass
             self._self_reflection_task = None
+
+        # v2.4.0: 取消发酵任务
+        if self._fermentation_task is not None:
+            self._fermentation_task.cancel()
+            try:
+                await self._fermentation_task
+            except asyncio.CancelledError:
+                pass
+            self._fermentation_task = None
 
         # 清模块级可变状态，防插件重载间泄漏
         from .components.ideology_injector import _RECENT_TRAIT_INJECTION
@@ -238,6 +253,12 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.reflection_evaluator import run_reflection_loop
 
         await run_reflection_loop(self)
+
+    async def _fermentation_loop(self) -> None:
+        """v2.4.0 发酵循环 — 委托到 fermentation_engine 模块。"""
+        from .thought.fermentation_engine import run_fermentation_loop
+
+        await run_fermentation_loop(self)
 
     # ===== HookHandler：意识形态注入 =====
 

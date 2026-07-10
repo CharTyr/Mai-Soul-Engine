@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..utils.runtime_resolution import generate_soul_text
+from ..prompts.fermentation_prompts import FERMENTED_INTERNALIZATION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class InternalizationEngine:
         """
         self._plugin = plugin
 
-    async def internalize_seed(self, seed: dict, dedup: dict | None = None) -> dict:
+    async def internalize_seed(self, seed: dict, dedup: dict | None = None, fermentation_inputs: list[str] | None = None) -> dict:
         from ..utils.trait_tags import normalize_tags
 
         try:
@@ -91,16 +92,39 @@ class InternalizationEngine:
             potential_impact = seed_info.get("potential_impact", {})
             impact_text = ", ".join([f"{k}:{v:+d}" for k, v in potential_impact.items() if v != 0]) or "（无）"
 
-            prompt = INTERNALIZATION_PROMPT.format(
-                type=seed_info.get("type", "未知"),
-                event=seed_info.get("event", ""),
-                reasoning=seed_info.get("reasoning", ""),
-                intensity=seed_info.get("intensity", 0.0),
-                confidence=seed_info.get("seed_confidence", 0.0),
-                evidence=evidence_text,
-                context=context_text,
-                potential_impact=impact_text,
-            )
+            # v2.4.0: 发酵后内化使用专用 prompt + 更大光谱影响
+            if fermentation_inputs:
+                fermentation_text = "\n".join([f"│ {x}" for x in fermentation_inputs[:20]]) if fermentation_inputs else "（无）"
+                fermented_max_delta = 15
+                try:
+                    fermented_max_delta = int(getattr(self._plugin.config.thought_cabinet, "fermented_max_internalize_delta", 15))
+                except (AttributeError, TypeError, ValueError):
+                    pass
+                prompt = FERMENTED_INTERNALIZATION_PROMPT.format(
+                    type=seed_info.get("type", "未知"),
+                    event=seed_info.get("event", ""),
+                    reasoning=seed_info.get("reasoning", ""),
+                    intensity=seed_info.get("intensity", 0.0),
+                    confidence=seed_info.get("seed_confidence", 0.0),
+                    evidence=evidence_text,
+                    context=context_text,
+                    fermentation_inputs=fermentation_text,
+                    potential_impact=impact_text,
+                    max_delta=fermented_max_delta,
+                )
+                is_fermented = True
+            else:
+                prompt = INTERNALIZATION_PROMPT.format(
+                    type=seed_info.get("type", "未知"),
+                    event=seed_info.get("event", ""),
+                    reasoning=seed_info.get("reasoning", ""),
+                    intensity=seed_info.get("intensity", 0.0),
+                    confidence=seed_info.get("seed_confidence", 0.0),
+                    evidence=evidence_text,
+                    context=context_text,
+                    potential_impact=impact_text,
+                )
+                is_fermented = False
 
             result = await generate_soul_text(self._plugin, prompt)
             response = result.get("response", "")
@@ -118,7 +142,7 @@ class InternalizationEngine:
                 internalization_confidence = 0.0
             internalization_confidence = max(0.0, min(1.0, internalization_confidence))
 
-            spectrum_impact = await self._apply_spectrum_impact(result.get("spectrum_deltas", result.get("spectrum_impact", {})))
+            spectrum_impact = await self._apply_spectrum_impact(result.get("spectrum_deltas", result.get("spectrum_impact", {})), is_fermented=is_fermented)
             logger.debug(f"光谱影响已应用: {spectrum_impact}")
 
             now = datetime.now()
@@ -205,7 +229,7 @@ class InternalizationEngine:
             logger.warning(f"无法解析内化响应: {response}")
             return None
 
-    async def _apply_spectrum_impact(self, impact: dict) -> dict:
+    async def _apply_spectrum_impact(self, impact: dict, is_fermented: bool = False) -> dict:
         from ..models.ideology_model import apply_spectrum_deltas, get_or_create_spectrum
 
         spectrum = get_or_create_spectrum("global")
@@ -218,12 +242,19 @@ class InternalizationEngine:
         }
         logger.debug(f"应用光谱影响前: {old_values}")
 
-        # 经统一光谱闸门（v2.3.0 收口：clamp ±max_internalize_delta + save + history 可观测）
-        max_delta = 10
-        try:
-            max_delta = int(getattr(self._plugin.config.thought_cabinet, "max_internalize_delta", 10))
-        except (AttributeError, TypeError, ValueError):
-            pass
+        # v2.4.0: 发酵后内化使用 fermented_max_internalize_delta（更大），即时内化用 max_internalize_delta
+        if is_fermented:
+            max_delta = 15
+            try:
+                max_delta = int(getattr(self._plugin.config.thought_cabinet, "fermented_max_internalize_delta", 15))
+            except (AttributeError, TypeError, ValueError):
+                pass
+        else:
+            max_delta = 10
+            try:
+                max_delta = int(getattr(self._plugin.config.thought_cabinet, "max_internalize_delta", 10))
+            except (AttributeError, TypeError, ValueError):
+                pass
         applied = apply_spectrum_deltas(
             "internalize",
             {
@@ -234,7 +265,7 @@ class InternalizationEngine:
             },
             max_per_axis=max_delta,
             group_id="",
-            reason="trait 内化光谱影响",
+            reason="发酵后 trait 内化光谱影响" if is_fermented else "trait 内化光谱影响",
         )
 
         logger.debug(f"应用光谱影响后: {applied}")

@@ -534,7 +534,25 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
 
         reflection_summary = build_recent_reflection_summary(stream_id)
 
+    # ── v2.4.0: 发酵中种子"思考中"提示（仅 fermentation_enabled）──
+    fermenting_hint = ""
+    if getattr(plugin.config.thought_cabinet, "fermentation_enabled", False):
+        from ..models.seeds import get_fermenting_seeds
+
+        fermenting_seeds = get_fermenting_seeds()
+        # 只取与当前群相关的发酵种子
+        relevant = [s for s in fermenting_seeds if s.stream_id == stream_id or s.stream_id == "global"]
+        if relevant:
+            hints = [f"「{s.seed_type}: {s.event[:40]}」" for s in relevant[:2]]
+            fermenting_hint = "\n近期正在思考的问题（尚未形成结论，仅作背景参考）：" + " ".join(hints) + "\n"
+
     injection_block = _build_injection_block(ideology_prompt, p1_blocks, trait_lines, reflection_summary)
+    if fermenting_hint:
+        # 插入到 trait 块之后、收束指令之前
+        injection_block = injection_block.replace(
+            "请综合上述倾向与固化观点来组织回复",
+            fermenting_hint + "请综合上述倾向与固化观点来组织回复",
+        )
 
     # ── 7. 注入到 messages ─────────────────────────────────────────
     modified_messages = [{"role": "system", "content": injection_block}] + messages
@@ -549,7 +567,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             "selection_mode": selection_mode,
             "cooldown_seconds": cooldown_seconds,
             "cooldown_skipped": cooldown_skipped[:20],
-            "prompt_version": "v2.3.0",
+            "prompt_version": "v2.4.0",
         },
         plugin_dir=plugin_dir,
     )
@@ -599,7 +617,7 @@ async def _skip_and_log(plugin_dir: Path, reason: str) -> dict:
             "skipped": True,
             "reason": reason,
             "policy": "disabled",
-            "prompt_version": "v2.3.0",
+            "prompt_version": "v2.4.0",
         },
         plugin_dir=plugin_dir,
     )

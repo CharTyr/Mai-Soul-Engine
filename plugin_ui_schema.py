@@ -13,7 +13,7 @@ from typing import Any
 from maibot_sdk import Field, PluginConfigBase
 from pydantic import model_validator
 
-CONFIG_VERSION = "2.3.0"
+CONFIG_VERSION = "2.4.0"
 
 
 def _ui(
@@ -341,7 +341,66 @@ class ThoughtCabinetConfig(PluginConfigBase):
         ge=1,
         le=20,
         description="内化最大光谱变化",
-        json_schema_extra=_ui("内化单轴最大变化值", "批准一个种子时单轴光谱最多变化多少，默认±10。值越大内化权重越高。", step=1),
+        json_schema_extra=_ui("内化单轴最大变化值", "即时内化时单轴光谱最多变化多少，默认±10。值越大内化权重越高。", step=1),
+    )
+    # ─── 发酵（v2.4.0 新增）───
+    fermentation_enabled: bool = Field(
+        default=False,
+        description="启用发酵",
+        json_schema_extra=_ui("启用种子发酵", "批准后不立即内化，持续收集相关群聊输入，逐步形成结论。关闭则批准后立即内化（旧行为）。"),
+    )
+    fermentation_window_hours: float = Field(
+        default=12.0,
+        ge=1.0,
+        le=168.0,
+        description="发酵窗口",
+        json_schema_extra=_ui("发酵窗口（小时）", "种子批准后持续收集群聊输入的时间，到期后触发最终内化。", step=1.0),
+    )
+    fermentation_check_interval_minutes: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=180.0,
+        description="发酵检查间隔",
+        json_schema_extra=_ui("发酵检查间隔（分钟）", "多久检查一次发酵中种子是否有新的相关群聊输入。", step=5.0),
+    )
+    fermentation_relevance_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="关联度阈值",
+        json_schema_extra=_ui("关联度阈值", "群聊消息与种子关联度超过此值才收录为发酵输入，0=全部收录。", step=0.05),
+    )
+    fermentation_max_inputs: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="最大发酵输入数",
+        json_schema_extra=_ui("最大发酵输入数", "单种子最多收集多少条发酵输入，超出后停止收集。"),
+    )
+    fermentation_min_inputs: int = Field(
+        default=3,
+        ge=0,
+        description="最小发酵输入数",
+        json_schema_extra=_ui("最小发酵输入数", "发酵窗口到期时若输入不足此数，自动延长窗口。0=不延长。"),
+    )
+    fermentation_max_extensions: int = Field(
+        default=2,
+        ge=0,
+        description="最大延长次数",
+        json_schema_extra=_ui("最大延长次数", "输入不足时最多延长几次发酵窗口，每次延长一个完整窗口。"),
+    )
+    fermented_max_internalize_delta: int = Field(
+        default=15,
+        ge=1,
+        le=25,
+        description="发酵后内化最大光谱变化",
+        json_schema_extra=_ui("发酵后单轴最大变化值", "经过发酵的种子内化时单轴光谱最多变化多少，比即时内化更大。", step=1),
+    )
+    seed_daily_cap_per_group: int = Field(
+        default=1,
+        ge=0,
+        description="每群每天种子上限",
+        json_schema_extra=_ui("每群每天种子上限", "限制每天每个群最多产生多少个种子，0=不限制。"),
     )
 
 

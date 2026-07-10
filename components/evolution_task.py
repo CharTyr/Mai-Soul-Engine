@@ -458,7 +458,15 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines:
     manager = ThoughtSeedManager.from_plugin_config(plugin)
     created_ids: list[str] = []
 
-    for seed_data in seeds[:2]:
+    for seed_data in seeds[:1]:  # v2.4.0: 每轮最多 1 个种子（稀有化）
+        # v2.4.0: 每群每天种子上限检查
+        daily_cap = int(getattr(plugin.config.thought_cabinet, "seed_daily_cap_per_group", 1))
+        if daily_cap > 0:
+            from ..models.ideology_model import count_seeds_created_today
+            today_count = count_seeds_created_today(stream_id)
+            if today_count >= daily_cap:
+                logger.info("群%s今日种子已达上限%d/%d，跳过", stream_id, today_count, daily_cap)
+                break
         seed_id = await manager.create_seed(seed_data, stream_id=stream_id, context_messages=msg_lines)
         if seed_id:
             logger.info("群%s创建思维种子: %s", stream_id, seed_id)

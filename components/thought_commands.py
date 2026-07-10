@@ -102,6 +102,21 @@ async def handle_seed_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     if seed.get("status") == "pending":
         lines.append("")
         lines.append(f"/soul_approve {seed_id} - 批准  |  /soul_reject {seed_id} - 拒绝")
+    elif seed.get("status") == "fermenting":
+        # v2.4.0: 发酵进度
+        from ..models.seeds import count_fermentation_inputs, get_fermentation_inputs
+        fi_count = count_fermentation_inputs(seed_id)
+        max_inputs = int(getattr(plugin.config.thought_cabinet, "fermentation_max_inputs", 20))
+        lines.append("")
+        lines.append(f"发酵中: 已收集 {fi_count}/{max_inputs} 条输入")
+        if fi_count > 0:
+            recent_inputs = get_fermentation_inputs(seed_id)
+            lines.append("最近发酵输入:")
+            for fi in recent_inputs[-3:]:  # 展示最近 3 条
+                preview = fi.message_text[:60].replace("\n", " ")
+                lines.append(f"  │ {preview}{'...' if len(fi.message_text) > 60 else ''} (关联度: {fi.relevance_score:.2f})")
+        lines.append("")
+        lines.append(f"/soul_reject {seed_id} - 取消发酵")
 
     msg = "\n".join(lines)
     await plugin.ctx.send.text(msg, stream_id)
@@ -151,6 +166,28 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
+    # v2.4.0: 发酵模式 — 批准后进入 fermenting 状态，不立即内化
+    fermentation_enabled = bool(getattr(plugin.config.thought_cabinet, "fermentation_enabled", False))
+
+    if fermentation_enabled:
+        from ..models.seeds import mark_seed_fermenting
+        ok = mark_seed_fermenting(seed_id)
+        if ok:
+            window_h = float(getattr(plugin.config.thought_cabinet, "fermentation_window_hours", 12.0))
+            msg = (
+                f"✅ 种子 {seed_id} 已批准，进入发酵阶段\n\n"
+                f"将在 ~{window_h:.0f} 小时内持续收集相关群聊输入，\n"
+                f"到期后自动触发最终内化形成结论。\n\n"
+                f"可用 /soul_seed {seed_id} 查看发酵进度"
+            )
+            await plugin.ctx.send.text(msg, stream_id)
+            return True, msg, True
+        else:
+            msg = f"❌ 种子 {seed_id} 状态转换失败"
+            await plugin.ctx.send.text(msg, stream_id)
+            return True, msg, True
+
+    # 旧行为：立即内化（fermentation_enabled=false）
     engine = InternalizationEngine(plugin)
     dedup_cfg = {
         "enabled": bool(plugin.config.thought_cabinet.auto_dedup_enabled),
@@ -224,10 +261,17 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    if seed.get("status") != "pending":
-        msg = f"种子 {seed_id} 不在待审核状态"
+    if seed.get("status") not in ("pending", "fermenting"):
+        msg = f"种子 {seed_id} 已审核或已内化，无法拒绝"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
+
+    # v2.4.0: 拒绝 fermenting 种子时清理发酵输入
+    if seed.get("status") == "fermenting":
+        from ..models.seeds import delete_fermentation_inputs
+        deleted = delete_fermentation_inputs(seed_id)
+        if deleted:
+            logger.info("清理种子 %s 的 %d 条发酵输入", seed_id, deleted)
 
     manager.mark_seed_status(seed_id, "rejected")
     logger.info(f"管理员拒绝思维种子: {seed_id}")

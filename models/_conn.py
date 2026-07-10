@@ -212,6 +212,16 @@ _CREATE_SQL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_pending_created ON soul_pending_reflections (created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS soul_fermentation_inputs (
+        input_id TEXT PRIMARY KEY,
+        seed_id TEXT NOT NULL,
+        stream_id TEXT DEFAULT '',
+        message_text TEXT,
+        relevance_score REAL DEFAULT 0,
+        added_at TEXT DEFAULT ''
+    )
+    """,
 ]
 
 
@@ -236,6 +246,7 @@ def _create_indexes() -> None:
         "CREATE INDEX IF NOT EXISTS idx_snapshot_session ON soul_injection_snapshots(session_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_pending_reply_msg ON soul_pending_reflections(reply_message_id, source)",
         "CREATE INDEX IF NOT EXISTS idx_history_group ON soul_evolution_history(group_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_fermentation_seed ON soul_fermentation_inputs(seed_id)",
     ]
     for sql in index_sqls:
         conn.execute(sql)
@@ -276,6 +287,12 @@ def _run_migrations() -> None:
         _add_column("soul_thought_seeds", "evidence_json", "TEXT DEFAULT '[]'")
     if not _has_column("soul_thought_seeds", "context_json"):
         _add_column("soul_thought_seeds", "context_json", "TEXT DEFAULT '[]'")
+    if not _has_column("soul_thought_seeds", "fermentation_started_at"):
+        _add_column("soul_thought_seeds", "fermentation_started_at", "TEXT DEFAULT ''")
+    if not _has_column("soul_thought_seeds", "fermentation_checked_at"):
+        _add_column("soul_thought_seeds", "fermentation_checked_at", "TEXT DEFAULT ''")
+    if not _has_column("soul_thought_seeds", "fermentation_extension_count"):
+        _add_column("soul_thought_seeds", "fermentation_extension_count", "INTEGER DEFAULT 0")
     if not _has_column("soul_crystallized_traits", "question"):
         _add_column("soul_crystallized_traits", "question", "TEXT DEFAULT ''")
     if not _has_column("soul_crystallized_traits", "tags_json"):

@@ -13,14 +13,25 @@ from ._conn import _dt_to_str, _get_conn, _str_to_dt
 
 __all__ = [
     "ThoughtSeed",
+    "FermentationInput",
     "count_pending_thought_seeds",
     "count_reviewed_seeds",
+    "count_seeds_created_today",
     "create_thought_seed",
     "delete_oldest_reviewed_seeds",
     "delete_thought_seed",
+    "delete_fermentation_inputs",
     "expire_old_pending_seeds",
+    "extend_fermentation_window",
+    "add_fermentation_input",
+    "count_fermentation_inputs",
+    "get_fermentation_inputs",
+    "get_fermenting_seeds",
     "get_pending_thought_seeds",
     "get_thought_seed_by_id",
+    "mark_seed_fermenting",
+    "mark_seed_internalized",
+    "update_fermentation_checked",
     "update_seed_status",
 ]
 
@@ -41,10 +52,24 @@ class ThoughtSeed:
     context_json: str = "[]"
     created_at: datetime = field(default_factory=datetime.now)
     status: str = "pending"
+    fermentation_started_at: datetime | None = None
+    fermentation_checked_at: datetime | None = None
+    fermentation_extension_count: int = 0
 
     def delete_instance(self) -> None:
         """删除当前种子记录。"""
         delete_thought_seed(self.seed_id)
+
+
+@dataclass
+class FermentationInput:
+    """发酵输入 — 发酵期间收集的与种子相关的群聊消息。"""
+    input_id: str = ""
+    seed_id: str = ""
+    stream_id: str = ""
+    message_text: str = ""
+    relevance_score: float = 0.0
+    added_at: datetime = field(default_factory=datetime.now)
 
 
 # ─── ThoughtSeed CRUD ───────────────────────────────────────────────
@@ -193,4 +218,132 @@ def _row_to_seed(row: sqlite3.Row) -> ThoughtSeed:
         context_json=row["context_json"] if "context_json" in row.keys() else "[]",
         created_at=_str_to_dt(row["created_at"]) or datetime.now(),
         status=row["status"],
+        fermentation_started_at=_str_to_dt(row["fermentation_started_at"]) if "fermentation_started_at" in row.keys() and row["fermentation_started_at"] else None,
+        fermentation_checked_at=_str_to_dt(row["fermentation_checked_at"]) if "fermentation_checked_at" in row.keys() and row["fermentation_checked_at"] else None,
+        fermentation_extension_count=int(row["fermentation_extension_count"]) if "fermentation_extension_count" in row.keys() else 0,
+    )
+
+
+# ─── Fermentation CRUD ─────────────────────────────────────────────
+
+
+def add_fermentation_input(seed_id: str, stream_id: str, message_text: str, relevance_score: float = 0.0) -> str:
+    """添加一条发酵输入记录，返回 input_id。"""
+    import uuid
+    conn = _get_conn()
+    input_id = f"fi_{uuid.uuid4().hex[:8]}"
+    conn.execute(
+        "INSERT INTO soul_fermentation_inputs (input_id, seed_id, stream_id, message_text, relevance_score, added_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (input_id, seed_id, stream_id, message_text, relevance_score, _dt_to_str(datetime.now())),
+    )
+    conn.commit()
+    return input_id
+
+
+def get_fermentation_inputs(seed_id: str) -> list[FermentationInput]:
+    """获取指定种子的所有发酵输入，按时间升序。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM soul_fermentation_inputs WHERE seed_id = ? ORDER BY added_at ASC",
+        (seed_id,),
+    ).fetchall()
+    return [_row_to_fermentation_input(row) for row in rows]
+
+
+def count_fermentation_inputs(seed_id: str) -> int:
+    """统计指定种子的发酵输入数量。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM soul_fermentation_inputs WHERE seed_id = ?",
+        (seed_id,),
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def delete_fermentation_inputs(seed_id: str) -> int:
+    """删除指定种子的所有发酵输入，返回删除数量。"""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "DELETE FROM soul_fermentation_inputs WHERE seed_id = ?",
+        (seed_id,),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def get_fermenting_seeds() -> list[ThoughtSeed]:
+    """获取所有发酵中的种子。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM soul_thought_seeds WHERE status = 'fermenting' ORDER BY fermentation_started_at ASC"
+    ).fetchall()
+    return [_row_to_seed(row) for row in rows]
+
+
+def mark_seed_fermenting(seed_id: str) -> bool:
+    """将种子标记为发酵中，记录发酵开始时间。原子守卫：仅 pending 状态可转发酵。"""
+    conn = _get_conn()
+    now = _dt_to_str(datetime.now())
+    cursor = conn.execute(
+        "UPDATE soul_thought_seeds SET status = 'fermenting', fermentation_started_at = ?, fermentation_checked_at = ? WHERE seed_id = ? AND status = 'pending'",
+        (now, now, seed_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def mark_seed_internalized(seed_id: str) -> bool:
+    """将种子标记为已内化（发酵完成后的终态）。"""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "UPDATE soul_thought_seeds SET status = 'internalized' WHERE seed_id = ? AND status = 'fermenting'",
+        (seed_id,),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def update_fermentation_checked(seed_id: str, checked_at: str) -> bool:
+    """更新种子的发酵检查时间戳。"""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "UPDATE soul_thought_seeds SET fermentation_checked_at = ? WHERE seed_id = ? AND status = 'fermenting'",
+        (checked_at, seed_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def extend_fermentation_window(seed_id: str) -> bool:
+    """延长发酵窗口：递增 extension_count，重置 fermentation_started_at 为当前时间。"""
+    conn = _get_conn()
+    now = _dt_to_str(datetime.now())
+    cursor = conn.execute(
+        "UPDATE soul_thought_seeds SET fermentation_extension_count = fermentation_extension_count + 1, fermentation_started_at = ?, fermentation_checked_at = ? WHERE seed_id = ? AND status = 'fermenting'",
+        (now, now, seed_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def count_seeds_created_today(stream_id: str) -> int:
+    """统计今天在指定群创建的种子数量（所有状态）。"""
+    conn = _get_conn()
+    today_start = _dt_to_str(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE stream_id = ? AND created_at >= ?",
+        (stream_id, today_start),
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def _row_to_fermentation_input(row: sqlite3.Row) -> FermentationInput:
+    """sqlite3.Row → FermentationInput。"""
+    return FermentationInput(
+        input_id=row["input_id"],
+        seed_id=row["seed_id"],
+        stream_id=row["stream_id"],
+        message_text=row["message_text"],
+        relevance_score=float(row["relevance_score"] or 0.0),
+        added_at=_str_to_dt(row["added_at"]) or datetime.now(),
     )
