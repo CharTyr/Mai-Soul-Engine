@@ -177,19 +177,24 @@ h1 {
 }
 .bar-row-wide { grid-template-columns: 48px minmax(0, 1fr) 52px; }
 .bar-name { font-size: 13px; color: var(--mute); font-weight: 500; }
-.bar-track, .bipolar-track {
-  height: 14px;
+.bar-track {
+  height: 16px;
   border-radius: 999px;
-  background: var(--surface-card);
+  background-color: #e8eef6;
   border: 1px solid var(--hairline);
   overflow: hidden;
   position: relative;
 }
-.bar-fill {
-  height: 100%;
-  min-width: 2px;
+.bipolar-track {
+  height: 16px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  background: #e8eef6;
+  border: 1px solid var(--hairline);
+  overflow: visible;
+  position: relative;
+}
+.bar-fill {
+  display: none;
 }
 .bar-val {
   font-weight: 700;
@@ -888,7 +893,7 @@ class DashboardRenderer:
                 f"""
                 <div class="bar-row">
                   <span class="bar-name">{escape(label)}</span>
-                  <div class="bar-track"><div class="bar-fill" style="width:{val}%"></div></div>
+                  <div class="bar-track" style="background-image:linear-gradient(90deg,#3b82f6,#2563eb);background-size:{val}% 100%;background-repeat:no-repeat;background-color:#e8eef6;"></div>
                   <span class="bar-val">{val}</span>
                 </div>
                 """
@@ -938,7 +943,7 @@ class DashboardRenderer:
                   <span class="bar-name">{escape(label)}</span>
                   <div class="bipolar-track">
                     <div class="bipolar-mid"></div>
-                    <div class="bipolar-fill" style="left:{pct}%"></div>
+                    <div class="bipolar-fill" style="left:0;transform:translateX(calc({pct}% - 7px));"></div>
                   </div>
                   <span class="bar-val">{val}</span>
                 </div>
@@ -1078,7 +1083,7 @@ class DashboardRenderer:
             <div class="label">置信度</div>
             <div class="bar-row bar-row-wide">
               <span class="bar-name">置信</span>
-              <div class="bar-track"><div class="bar-fill" style="width:{confidence}%"></div></div>
+              <div class="bar-track" style="background-image:linear-gradient(90deg,#3b82f6,#2563eb);background-size:{confidence}% 100%;background-repeat:no-repeat;background-color:#e8eef6;"></div>
               <span class="bar-val">{confidence}%</span>
             </div>
           </section>
