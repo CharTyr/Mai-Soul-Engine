@@ -19,8 +19,12 @@ from ..models.ideology_model import (
 )
 from ..prompts.ideology_prompts import EVOLUTION_ANALYSIS_PROMPT
 from ..utils.audit_log import log_evolution, log_evolution_cycle, log_evolution_skip
+from ..utils.runtime_resolution import (
+    generate_soul_text,
+    resolve_host_bot_self_ids,
+    resolve_monitored_group_stream,
+)
 from ..utils.spectrum_utils import (
-    chat_config_to_stream_id,
     filter_messages_for_evolution,
     parse_chat_id,
     match_chat,
@@ -160,7 +164,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         evolution_rate: 单次演化最大变化值。
     """
     try:
-        stream_id = chat_config_to_stream_id(group_config_id)
+        stream_id = await resolve_monitored_group_stream(plugin, group_config_id)
 
         record = get_or_create_group_evolution(group_id=stream_id)
         last_time = record.last_analyzed
@@ -193,10 +197,14 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         max_messages = plugin.config.evolution.max_messages_per_analysis
         max_chars = plugin.config.evolution.max_chars_per_message
 
+        # Self identity belongs to the host bot configuration.  Keep the legacy
+        # plugin list only as a compatibility fallback for non-QQ deployments.
+        host_bot_self_ids = await resolve_host_bot_self_ids(plugin)
+        configured_bot_self_ids = list(plugin.config.monitor.bot_self_id or [])
         monitor_config = {
             "monitored_users": list(plugin.config.monitor.monitored_users or []),
             "excluded_users": list(plugin.config.monitor.excluded_users or []),
-            "bot_self_id": list(plugin.config.monitor.bot_self_id or []),
+            "bot_self_id": list(dict.fromkeys(host_bot_self_ids + configured_bot_self_ids)),
         }
 
         # 过滤发言者：bot 自身消息短路排除（防自指泄漏），再过 monitored/excluded
@@ -242,7 +250,7 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         # 调用新 SDK 的 LLM 接口
         logger.debug("发送LLM请求，prompt长度: %s", len(prompt))
         try:
-            llm_result = await plugin.ctx.llm.generate(prompt)
+            llm_result = await generate_soul_text(plugin, prompt)
         except (RuntimeError, ValueError, OSError) as exc:
             logger.exception("LLM 请求失败")
             await log_evolution_skip(

@@ -102,13 +102,16 @@ def _self_reflection_config() -> SimpleNamespace:
 def _mock_plugin(llm_response: str) -> SimpleNamespace:
     """构造带 mock ctx.llm 的 plugin。"""
 
-    class _FakeLLM:
-        async def generate(self, prompt: str) -> str:
-            return llm_response
+    class _Context:
+        async def call_capability(self, capability: str, timeout_ms: int, **kwargs: Any) -> dict[str, str]:
+            assert capability == "llm.generate"
+            assert timeout_ms == 120_000
+            assert kwargs.get("model") == "planner"
+            return {"response": llm_response}
 
     return SimpleNamespace(
         config=SimpleNamespace(self_reflection=_self_reflection_config()),
-        ctx=SimpleNamespace(llm=_FakeLLM()),
+        ctx=_Context(),
     )
 
 

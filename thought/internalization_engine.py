@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from ..utils.runtime_resolution import generate_soul_text
+
 logger = logging.getLogger(__name__)
 
 INTERNALIZATION_PROMPT = """基于以下思维种子，进行深层的哲学内化：
@@ -96,7 +98,7 @@ class InternalizationEngine:
                 potential_impact=impact_text,
             )
 
-            result = await self._plugin.ctx.llm.generate(prompt)
+            result = await generate_soul_text(self._plugin, prompt)
             response = result.get("response", "")
             logger.debug(f"内化LLM响应长度: {len(response) if response else 0}")
 
@@ -454,7 +456,7 @@ class InternalizationEngine:
             '{"target_trait_id": "", "similarity": 0.0, "relation": "none", "reason": ""}'
         )
 
-        result = await self._plugin.ctx.llm.generate(prompt)
+        result = await generate_soul_text(self._plugin, prompt)
         response = result.get("response", "")
         if not response:
             return None

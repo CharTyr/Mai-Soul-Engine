@@ -19,6 +19,8 @@ import json as _json
 import logging
 from typing import Any
 
+from ..utils.runtime_resolution import generate_soul_text
+
 logger = logging.getLogger(__name__)
 
 # 自我观察种子生成门槛：一致性分低于此值且 LLM 给了 self_observation_trait 才生成种子
@@ -133,7 +135,7 @@ async def _evaluate_cycle(plugin) -> None:
 
     # 4. 调 LLM
     try:
-        llm_result = await plugin.ctx.llm.generate(prompt)
+        llm_result = await generate_soul_text(plugin, prompt)
     except (RuntimeError, ValueError, OSError) as exc:
         logger.exception("[SelfReflection] 评价 LLM 请求失败")
         from ..utils.audit_log import log_reflection_cycle

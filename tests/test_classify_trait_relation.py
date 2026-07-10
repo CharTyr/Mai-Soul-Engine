@@ -25,12 +25,14 @@ def _make_engine(llm_response: dict) -> Any:
     """
     engine_mod = _import_soul_submodule("thought.internalization_engine")
 
-    async def _fake_generate(prompt: str) -> dict:
-        return {"response": json.dumps(llm_response, ensure_ascii=False)}
+    class _Context:
+        async def call_capability(self, capability: str, timeout_ms: int, **kwargs: Any) -> dict:
+            assert capability == "llm.generate"
+            assert timeout_ms == 120_000
+            assert kwargs.get("model") == "planner"
+            return {"response": json.dumps(llm_response, ensure_ascii=False)}
 
-    fake_plugin = SimpleNamespace(
-        ctx=SimpleNamespace(llm=SimpleNamespace(generate=_fake_generate))
-    )
+    fake_plugin = SimpleNamespace(ctx=_Context())
     return engine_mod.InternalizationEngine(fake_plugin)
 
 
