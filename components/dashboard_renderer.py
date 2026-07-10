@@ -146,7 +146,7 @@ h1 {
 .grid {
   display: grid;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 .grid.two { grid-template-columns: 1fr 1fr; }
 .grid.three { grid-template-columns: 1fr 1fr 1fr; }
@@ -161,7 +161,7 @@ h1 {
   background: var(--surface-elevated);
   border-color: var(--hairline-strong);
 }
-.panel-flags { margin-bottom: 0; }
+.panel-flags { margin-bottom: 0; margin-top: 0; }
 .label {
   margin-bottom: 8px;
   font-size: 13px;
@@ -441,6 +441,20 @@ h1 {
   font-size: 12px;
 }
 .impact-chip strong { color: var(--accent-blue); margin-left: 4px; font-weight: 700; }
+.bottom-stack {
+  display: grid;
+  gap: 12px;
+  margin-top: 2px;
+}
+.bottom-stack > .panel {
+  margin: 0;
+}
+.panel-flags .flags {
+  row-gap: 8px;
+}
+.empty {
+  min-height: 28px;
+}
 """
 _TRAIT_ROOT_ID = "soul-trait"
 _INSPECT_ROOT_ID = "soul-inspect"
@@ -875,14 +889,15 @@ class DashboardRenderer:
             {thought_block}
           </section>
 
-          <section class="panel">
-            <div class="label">最近演化</div>
-            {evolution_block}
-          </section>
-
-          <section class="panel panel-flags">
-            <div class="label">功能开关</div>
-            {flags_block}
+          <section class="bottom-stack">
+            <div class="panel">
+              <div class="label">最近演化</div>
+              {evolution_block}
+            </div>
+            <div class="panel panel-flags">
+              <div class="label">功能开关</div>
+              {flags_block}
+            </div>
           </section>
         </article>
         """
