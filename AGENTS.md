@@ -2,7 +2,7 @@
 
 独立仓库：https://github.com/CharTyr/Mai-Soul-Engine。分支：
 - `main` = v2.0.0 稳定（SDK 2.x 基线）
-- `dev` = v2.4.0 基线 + **Phase 0A/0B 正确性打磨**（思想全局归属、可追踪召回、宿主 system 追加注入、自评/发酵假闭环修复；本文档对应此分支）
+- `dev` = **v2.5.0**（v2.4.0 发酵基线 + Phase 0 正确性 + 12 槽接入 + 插件侧 H1/H2；本文档对应此分支）
 - 旧版归档：`archive/legacy-sdk1-v1`
 
 在 Maibot 宿主中路径：`plugins/CharTyr_Mai-Soul-Engine/`，**自带 `.git`**，勿把 `config.toml` / `data/` / `config_back/` 提交进插件仓。
@@ -18,7 +18,7 @@
 | 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 7 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
-| Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.4.0`；`normalize_plugin_config` 会补齐旧配置 |
+| Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.5.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
 | 功能总开关 | `plugin.enabled` 管**注入 + 四后台任务**（演化/Notion/自评/发酵）；`on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`admin_user_id` 仅标识管理员 QQ |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
@@ -84,7 +84,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 | `components/ideology_injector.py` | P1 块（层摘要 / 情绪行 / 图谱 hint）追加到注入；`_trait_quality_score` 含 6 态生命周期降权 |
 | `thought/internalization_engine.py` | 层推断、生命周期（merge→`strengthened`、矛盾→`contradicted`/`weakened`/`revised`）、`_classify_trait_relation` 关系判定、create 时写图谱边 |
 | `components/status_command.py` | P1 扩展（切片偏移、情绪、层计数） |
-| `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.4.0"` |
+| `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.5.0"` |
 | `plugin.py` | 生命周期 `_compute_desired_tasks` + `_reconcile_background_tasks`；`soul.get_worldview` API；`soul.get_traits` 返回 layer/lifecycle；@API 双层访问控制（`public=False` + `api.enabled`）+ `api_set_spectrum` 审计 |
 | `tests/` | 插件内测试见下方「开发与验证」（约 220 项） |
 
@@ -267,7 +267,7 @@ OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened tr
 | `components/reflection_feedback.py` | 双路反馈：光谱修正（dead zone）+ planner 摘要聚合 |
 | `components/reflection_command.py` | `/soul_reflect [N]` 管理员查看 |
 | `prompts/self_reflection_prompts.py` | 评价 prompt（抽象倾向+对立视角+门槛判例） |
-| `plugin_ui_schema.py` | `SelfReflectionConfig` 段；`CONFIG_VERSION=2.4.0` |
+| `plugin_ui_schema.py` | `SelfReflectionConfig` 段；`CONFIG_VERSION=2.5.0` |
 | `plugin.py` | 一个 after_response HookHandler（replyer）+ `_self_reflection_task` 生命周期 + `/soul_reflect` 命令 |
 
 ## 迁移注意（重要）
@@ -334,7 +334,7 @@ cd /path/to/Maibot
 - 光谱边界：`update_spectrum_value` 为**硬 clamp**（0–100），禁止越界反弹。
 - 演化群分析：`_analyze_group` 返回 `"success"|"skipped"|"failed"`；`_analyze_with_sem` 必须透传，禁止无条件 True。
 - 发版：插件仓自行 `git push`；宿主侧 `plugins/*` 多在 `.gitignore`，pytest 文件在宿主仓维护。
-- Manifest 版本须严格三段式 semver（`2.4.0`），**禁止 `-dev` 后缀**。
+- Manifest 版本须严格三段式 semver（`2.5.0`），**禁止 `-dev` 后缀**。
 
 ## Phase 0A/0B 正确性打磨（dev 上 v2.4.0 之后，关键）
 

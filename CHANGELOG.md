@@ -1,54 +1,36 @@
 # Changelog
 
-## [2.4.0+++] — 插件侧 H1/H2（不依赖宿主新 PR）
+## [2.5.0] — Phase 0 正确性 + 12 槽接入 + 插件侧 H1/H2
 
-### 开发侧
-
-- **群会话解析**：`get_stream_by_group_id` 失败时回退 `chat.open_session` 持久恢复/创建会话，缓解重启后 `stream_not_found`。
-- **宿主人设**：经 `config.get` 读取 `personality.personality` / `reply_style`，生成 `profile_hash`；内化 prompt 追加「宿主固定人设基底」段。
-- 声明 capability `chat.open_session`。
-
-## [2.4.0++] — Phase1 混合：迁移账本 + 12 槽接入
+相对 v2.4.0 发酵基线的生产打磨版本。**不建全量 v3 表**；测试约 **272** 项。
 
 ### 用户可感知
 
-- **思维阁槽位（最小实现）**：已固化观点可占用 1–12 号槽；同槽换位会清空旧占位。Dashboard 显示「槽位 x/12」与占用列表；`/soul_traits` 行可带 `#slotN`；trait 详情可显示槽号。
-- **注入优先**：有槽观点在 tag/关键词/补位/fallback 各阶段排序优先于无槽观点（仍可注入无槽观点，非独占）。
+- **思想默认属于 Bot 全局**：新内化 trait `stream_id=global`，来源群记 `origin_stream_id`；A 群形成的观点可在 B 群相关话题被召回（存量群锁 trait 不自动改写）。
+- **注入更可追踪**：tag → 关键词补位 → tagless → fallback；`activation_reason` 可在 `/soul_inspect`/dashboard 展示。
+- **人设优先**：Soul 动态层追加到宿主首条 system；无 system 则 fail-open。
+- **思维阁 12 槽（MVP）**：`/soul_slot <id> <1-12|clear>`；有槽观点注入优先；dashboard 显示占用。
+- **自我观察日上限**：`self_observation_daily_cap` 默认 2，与群聊种子 cap 独立。
+- **发酵更诚实**：LLM 失败不丢窗口；证据不足不强制内化。
+- **总开关可信**：`plugin.enabled=false` 停注入+四后台任务；热更可启停发酵；`api.enabled` 默认关。
+- **数据目录**：优先宿主 `ctx.paths.data_dir/mai_soul_engine`（backup 迁移）。
 
 ### 开发侧
 
-- `PRAGMA user_version` + `soul_schema_migrations` 版本驱动迁移（失败不前进）。
-- `soul_crystallized_traits.cabinet_slot_no` + UNIQUE partial index（活跃唯一）。
-- `set_trait_slot(trait_id, slot_no|None)` 原子事务。
-- 测试约 **251** 项。
+- 演化三态 success/skipped/failed；光谱硬 clamp。
+- 自评 raw/normalized/consumed + 跨 session 修正；`relevance_gate` 接线。
+- `_reconcile_background_tasks` 统一生命周期。
+- 内化光谱+trait+边单事务；schema `user_version` + `soul_schema_migrations`。
+- **H1 插件侧**：`get_stream` 失败回退 `chat.open_session`（不改宿主）。
+- **H2 插件侧**：`config.get` 读 personality/reply_style → 内化 prompt 基底。
+- `CONFIG_VERSION` / manifest → **2.5.0**。
 
-### 补充（同阶段收尾）
+### 已知债务（非阻塞）
 
-- **`/soul_slot <trait_id> <1-12|clear>`**：管理员管理思维阁槽位。
-- **数据目录**：优先宿主 `ctx.paths.data_dir/mai_soul_engine`；首次用 SQLite backup 安全迁移，失败回退插件 `data/`；`/soul_health` 展示来源与 schema 版本。
+- 存量群锁 trait 跨群不可见，需管理员知悉或手动处理。
+- 槽位无自动入槽建议，不手动 `/soul_slot` 则优先效果弱。
+- 关键词 2-gram 精度有限；冷却仍为硬过滤。
 
-
-## [2.4.0+] — dev 分支 Phase 0 正确性打磨（v2.4.0 基线之上）
-
-在 v2.4.0 发酵/自评能力之上修复线上假闭环，**不建 v3 表、不改宿主**。测试约 **222** 项。
-
-### 用户可感知
-
-- **思想默认属于 Bot 全局**：新内化 trait 的 `stream_id=global`，A 群形成的观点可在 B 群相关话题被召回；来源群记在 `origin_stream_id`（仅溯源）。
-- **注入更可追踪**：选择顺序增加关键词相关补位；`/soul_inspect` 与 dashboard 可展示 `activation_reason`（tag/keyword/tagless/fallback）。
-- **人设优先**：Soul 动态层**追加到宿主首条 system**，不再前置竞争 system；找不到宿主 system 时 fail-open 不注入。
-- **自我观察种子有日上限**：`self_observation_daily_cap`（默认 2，0=不限），与群聊种子日上限独立，减轻自评洪水。
-- **发酵更诚实**：关联度 LLM 失败不丢消息窗口；证据不足达最大延长次数时**不强制内化**，保持 fermenting 并尽量通知管理员。
-- **总开关可信**：`plugin.enabled=false` 同时停注入与四后台任务；配置热更可启停发酵；`api.enabled` schema 默认关。
-
-### 开发侧
-
-- 演化 `AnalysisResult` 三态（success/skipped/failed），skip 不再假计成功。
-- 光谱 `update_spectrum_value` 硬 clamp，去掉越界反弹。
-- 自评 `raw_consistency_score` / `normalized_consistency_score` / `correction_consumed_at`；种子门槛用 raw；`relevance_gate_enabled` 接线；跨 session 光谱修正且一次性消费。
-- `_compute_desired_tasks` + `_reconcile_background_tasks` 统一四任务生命周期。
-- 内化光谱 + trait + 图谱边 `commit=False` + BEGIN/COMMIT 单事务（0C）。
-- 详见 `AGENTS.md`「Phase 0A/0B 正确性打磨」与「0C」表。
 
 ## [2.3.0] — dev 分支（自我评价反馈回路）
 

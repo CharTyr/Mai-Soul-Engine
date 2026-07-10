@@ -13,7 +13,7 @@ from typing import Any
 from maibot_sdk import Field, PluginConfigBase
 from pydantic import model_validator
 
-CONFIG_VERSION = "2.4.0"
+CONFIG_VERSION = "2.5.0"
 
 
 def _ui(

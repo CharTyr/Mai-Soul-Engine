@@ -1,9 +1,9 @@
 {
   "manifest_version": 2,
   "id": "char-tyr.mai-soul-engine",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "name": "Mai-Soul-Engine",
-  "description": "通过聊天塑造 MaiBot 三观的人格底座 — 意识形态光谱演化 + 思维阁内化 + 回复注入",
+  "description": "通过聊天塑造 MaiBot 三观的人格底座 — 光谱演化 + 思维阁/12槽 + 可追踪注入 + 自评闭环",
   "author": {
     "name": "CharTyr",
     "url": "https://github.com/CharTyr/Mai-Soul-Engine"
