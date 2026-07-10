@@ -2,7 +2,7 @@
 
 独立仓库：https://github.com/CharTyr/Mai-Soul-Engine。分支：
 - `main` = v2.0.0 稳定（SDK 2.x 基线）
-- `dev` = v2.3.0（**自我评价反馈回路 + P1 三观生长 + 光谱轴重构**，本文档对应此分支）
+- `dev` = v2.4.0（**思维阁发酵重构 + 自我评价反馈回路 + P1 三观生长 + 光谱轴重构**，本文档对应此分支）
 - 旧版归档：`archive/legacy-sdk1-v1`
 
 在 Maibot 宿主中路径：`plugins/CharTyr_Mai-Soul-Engine/`，**自带 `.git`**，勿把 `config.toml` / `data/` / `config_back/` 提交进插件仓。
@@ -17,7 +17,7 @@
 | 数据 | 插件自有 **`data/soul.db`**（`models/`，stdlib sqlite3）；持久化目录绑在 **插件目录 `data/`**（`plugin._data_dir`），不是 `ctx.paths.data_dir`。`models/` 已按实体拆为 7 子模块，`ideology_model.py` 保留为重导出 shim（见"目录职责"） |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
-| Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.3.0`；`normalize_plugin_config` 会补齐旧配置 |
+| Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.4.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
 | 功能总开关 | `plugin.enabled`（注入等）；`admin_user_id` 仅标识管理员 QQ |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
@@ -81,21 +81,72 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 | `components/ideology_injector.py` | P1 块（层摘要 / 情绪行 / 图谱 hint）追加到注入；`_trait_quality_score` 含 6 态生命周期降权 |
 | `thought/internalization_engine.py` | 层推断、生命周期（merge→`strengthened`、矛盾→`contradicted`/`weakened`/`revised`）、`_classify_trait_relation` 关系判定、create 时写图谱边 |
 | `components/status_command.py` | P1 扩展（切片偏移、情绪、层计数） |
-| `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.1.0"` |
+| `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.4.0"` |
 | `plugin.py` | `soul.get_worldview` API；`soul.get_traits` 返回 layer/lifecycle；@API 双层访问控制（`public=False` + `api.enabled`）+ `api_set_spectrum` 审计 |
-| `tests/` | 插件内测试（28 项）：原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除 |
+| `tests/` | 插件内测试（28 项）：原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/发酵 CRUD/发酵状态机/日上限/关键词过滤 |
 
-## 思维阁（强化，dev）
+## 思维阁（v2.4.0 发酵重构，关键）
 
-种子 → 内化 → trait 全链路在 v2.1.0 做了一轮强化。关键约定（**易踩坑**）：
+v2.4.0 对思维阁做了**根本性架构变更**：从"单点冲刺"（批准→立即内化）到"持续发酵"（批准→~12h 发酵→明确结论→更大光谱影响）。受 `[thought_cabinet].fermentation_enabled` 控制（默认关，关闭时保持旧行为）。
 
-### 种子生命周期（不再删除）
+### 种子生成稀有化
 
-- 种子有 `status`：`pending` → `approved` / `rejected` / `expired`。
-- **审核后不删除记录**：`/soul_approve` → `update_seed_status(.., "approved")`，`/soul_reject` → `"rejected"`，保留种子→trait 审计链。**不要改回 `delete_seed`**。
-- `update_seed_status(seed_id, status, expected_status="pending")` 带**原子守卫**：默认仅当当前状态为 `pending` 才更新，避免竞态下复活已过期/已审核种子。所有 2 参调用自动获得守卫。
-- 物理删除（`delete_seed`/`delete_instance`）仅用于：`_cleanup_old_reviewed_seeds`（已审核超 `reviewed_keep_count` 时删最旧）和显式管理命令。**`_cleanup_excess_seeds`（pending 超 `max_seeds`）改为标 `expired` 而非物理删除**，保留被挤掉种子的审计记录。
-- 种子超 `seed_ttl_hours`(默认168h) 自动标 `expired`；trait 超 `trait_ttl_days`(默认90) 且仍 `active` 自动 `expired`+`enabled=0`（`strengthened` 豁免）。两者在演化循环每轮触发。
+v2.3.0 及之前：每轮演化（~1h）每群最多 2 个种子，频率由 LLM 自控，理论每天每群 48 个。v2.4.0 三重约束使其稀有：
+
+1. **Prompt 强化**（`prompts/thought_prompts.py`，v2.4.0）：明确要求"只有在对话中出现了**完整的思想碰撞**（双方/多方就同一话题表达不同立场、进行有意义讨论）才提取种子"，排除闲聊/附和/问答/吐槽，"大多数对话不会产生种子"。
+2. **每轮上限 2→1**：`_process_thought_seeds` 中 `seeds[:1]`。
+3. **硬性日上限**：`seed_daily_cap_per_group`（默认 1），在 `_process_thought_seeds` 中用 `count_seeds_created_today(stream_id)` 检查。
+
+### 种子生命周期（v2.4.0 状态机扩展）
+
+v2.3.0：`pending → approved/rejected/expired`
+v2.4.0（fermentation_enabled）：`pending → fermenting → internalized`（或 `rejected`/`expired`）
+
+- `pending`：待管理员审核。
+- `fermenting`：管理员批准后进入发酵，发酵循环持续收集群聊输入。
+- `internalized`：发酵完成，trait 已形成，光谱影响已写入（终态）。
+- `rejected`/`expired`：不变。
+
+**状态转换函数**（`models/seeds.py`，均带原子守卫）：
+- `mark_seed_fermenting(seed_id)`：仅 `pending` → `fermenting`，同时写 `fermentation_started_at`/`fermentation_checked_at`。
+- `mark_seed_internalized(seed_id)`：仅 `fermenting` → `internalized`。
+- `extend_fermentation_window(seed_id)`：递增 `fermentation_extension_count`，重置 `fermentation_started_at`。
+- `update_fermentation_checked(seed_id, checked_at)`：更新发酵检查时间戳。
+
+**审核后不删除记录**：`/soul_approve` → `mark_seed_fermenting`（发酵模式）或 `mark_seed_status(.., "approved")` + 立即内化（旧模式），`/soul_reject` → `"rejected"`。**不要改回 `delete_seed`**。
+
+### 发酵引擎（v2.4.0 新增，核心）
+
+**文件**：`thought/fermentation_engine.py`
+
+独立异步协程 `run_fermentation_loop(plugin)`（`plugin._fermentation_task`，`on_load` 启动、`on_unload` cancel，**不复用演化循环**）。受 `thought_cabinet.enabled` + `fermentation_enabled` 双重控制。每 `fermentation_check_interval_minutes`（默认 30min）执行一轮：
+
+1. 扫描 `status='fermenting'` 的种子
+2. 对每个种子取所在群自 `fermentation_checked_at` 以来的新消息（单次窗口上限 6h 防积压）
+3. **L1 关键词子串预筛**：从种子 `type+event+reasoning` 提取关键词，用子串匹配过滤 80% 无关消息（零 LLM 成本）
+4. **L3 LLM 批量关联度判断**：`FERMENTATION_RELEVANCE_PROMPT` 一次处理多条候选消息，输出每条 0-1 关联度
+5. 关联度 ≥ `fermentation_relevance_threshold`（默认 0.5）的消息存入 `soul_fermentation_inputs` 表
+6. 更新 `fermentation_checked_at`
+7. 检查 `fermentation_started_at + fermentation_window_hours` 是否到期
+8. 到期 + 输入 ≥ `fermentation_min_inputs` → 触发最终内化
+9. 到期但输入不足 → `extend_fermentation_window`（最多 `fermentation_max_extensions` 次）
+
+**失败恢复**：
+- 关联度判断 LLM 失败 → 跳过本轮（不更新 `fermentation_checked_at`），下轮重试
+- 最终内化 LLM 失败 → 保持 `fermenting` 状态，下轮重试
+- 插件重启 → 从 DB 的 `fermentation_checked_at` 继续，不丢状态
+- 单种子异常 → try/except per-seed，不阻断其他种子
+
+### 发酵后内化（v2.4.0 改进）
+
+`InternalizationEngine.internalize_seed(seed, dedup, fermentation_inputs)` 新增 `fermentation_inputs` 参数：
+
+- **无 `fermentation_inputs`**（旧模式）：用 `INTERNALIZATION_PROMPT`，`max_internalize_delta`（默认 ±10）
+- **有 `fermentation_inputs`**（发酵后）：用 `FERMENTED_INTERNALIZATION_PROMPT`（`prompts/fermentation_prompts.py`），`fermented_max_internalize_delta`（默认 ±15，更大）。prompt 要求 LLM 基于种子原始内容 + 发酵期间累积讨论形成**明确的、带结论的思想**，标注哪些发酵输入对结论有实质影响。
+
+### 注入中的发酵提示（v2.4.0）
+
+发酵中的种子在 `ideology_injector` 注入时追加一行"近期正在思考的问题（尚未形成结论，仅作背景参考）"，让 bot 行为有连续性。仅 `fermentation_enabled` 时触发，取与当前群相关的 fermenting 种子（最多 2 个）。
 
 ### 种子上下文窗口
 
@@ -105,29 +156,39 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 
 ### 内化 prompt
 
-- `INTERNALIZATION_PROMPT` 现包含 evidence/context/intensity/confidence/potential_impact。内化 LLM 基于真实片段形成观点，复用种子的 `potential_impact` 作参考。改 prompt 时保持这些占位符。
+- `INTERNALIZATION_PROMPT`（即时内化，`thought/internalization_engine.py`）：包含 evidence/context/intensity/confidence/potential_impact。内化 LLM 基于真实片段形成观点。
+- `FERMENTED_INTERNALIZATION_PROMPT`（发酵后内化，`prompts/fermentation_prompts.py`）：在种子原始内容基础上增加发酵期间累积讨论，要求形成明确结论。
+- `FERMENTATION_RELEVANCE_PROMPT`（`prompts/fermentation_prompts.py`）：关联度判断 prompt，批量处理多条消息。
 
 ### 注入选择（`ideology_injector`）
 
 - 选择顺序：tag 命中 → 无 tag 按影响分**补位**填满 `max_traits` → 仍空才 `fallback_recent_impact`。
 - 二级排序用 `_trait_quality_score`（confidence + 生命周期加权：strengthened +0.3 / weakened -0.3）。
 - `selection_mode`：`tag_hit` / `tag_hit+tagless` / `tagless_fill` / `fallback_recent_impact` / `spectrum_only`。
-- 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids, traits=已查列表)` 排除已在详细块的 trait，避免重复；`traits` 参数复用已查列表避免二次 SQL。
-- **热路径优化**（`before_request` 每条消息触发）：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`，`on_load` 构造、`on_config_update` 重建；`inject_ideology` 已拆为 `_is_inject_enabled`/`_select_traits`/`_build_injection_block` 等子函数；锁用 `asyncio.Lock`；注入日志采样（`INJECTION_LOG_EVERY=10`）+ 5MB 轮转 + `asyncio.to_thread` 异步写。
+- 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids, traits=已查列表)` 排除已在详细块的 trait，避免重复。
+- **热路径优化**：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`；锁用 `asyncio.Lock`；注入日志采样 + 5MB 轮转 + `asyncio.to_thread` 异步写。
 
 ### 种子去重
 
-- `_is_duplicate_pending_seed`：本地 difflib 对**同群 pending** 种子按 `type+event+reasoning` 签名去重（阈值 `seed_dedup_threshold` 默认0.82，**不调 LLM**）。trait 级关系判定由 `_classify_trait_relation`（原 `_find_dedup_target`，调 LLM）处理，输出 5 种关系（none/duplicate/contradicted/weakened/revised）。
+- `_is_duplicate_pending_seed`：本地 difflib 对**同群 pending** 种子按 `type+event+reasoning` 签名去重（阈值 `seed_dedup_threshold` 默认0.82，**不调 LLM**）。trait 级关系判定由 `_classify_trait_relation`（调 LLM）处理，输出 5 种关系（none/duplicate/contradicted/weakened/revised）。
 
 ### 配置项（`ThoughtCabinetConfig`）
 
-新增：`seed_ttl_hours` / `reviewed_keep_count` / `trait_ttl_days` / `seed_dedup_threshold`。
-**注意**：读取配置值**不要用 `or 默认`**——`0`/`0.0` 是合法的"关闭"值，`or` 会把它误替换成默认值。pydantic 字段实例化后必然存在，直接属性访问即可（`cfg.trait_ttl_days`，不是 `cfg.trait_ttl_days or 90`）。此规范适用于**所有配置段**（`evolution`/`injection`/`worldview` 等），不只思维阁。
-**构造 `ThoughtSeedManager`**：统一用 `ThoughtSeedManager.from_plugin_config(plugin)` 工厂，不要在调用点重复拼配置 dict（原 4 处重复已收敛到工厂）。
+v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_window_hours` / `fermentation_check_interval_minutes` / `fermentation_relevance_threshold` / `fermentation_max_inputs` / `fermentation_min_inputs` / `fermentation_max_extensions` / `fermented_max_internalize_delta` / `seed_daily_cap_per_group`。
+
+已有：`max_seeds` / `min_trigger_intensity` / `auto_dedup_enabled` / `auto_dedup_threshold` / `seed_ttl_hours` / `reviewed_keep_count` / `trait_ttl_days` / `seed_dedup_threshold` / `admin_notification_cooldown_minutes` / `max_internalize_delta`。
+
+**注意**：读取配置值**不要用 `or 默认`**——`0`/`0.0` 是合法的"关闭"值，`or` 会把它误替换成默认值。pydantic 字段实例化后必然存在，直接属性访问即可。此规范适用于**所有配置段**。
+**构造 `ThoughtSeedManager`**：统一用 `ThoughtSeedManager.from_plugin_config(plugin)` 工厂。
 
 ### 命令
 
-只读详情：`/soul_seed <id>`（种子详情含上下文）、`/soul_trait <id>`（trait 详情**卡片**：分层/生命周期/置信度/光谱影响/证据/图谱边，含全部 5 种关系边 `contradicted_by`/`weakened_by`/`revised_by`）、`/soul_inspect <文本>`（管理员，**注入命中预览卡片**：模拟"这段文本会命中哪些 trait、按什么优先级选中"，干跑 `_select_traits`/`_trait_quality_score`，不实际注入）。批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**——批准会触发大量 LLM 内化）。误判为 contradicted 的 trait 可用 `/soul_trait_enable <id>` 重新启用。全状态总览：`/soul_dashboard`（可视化卡片图片，见下"状态卡片可视化"）。
+- `/soul_approve <id>`：v2.4.0 行为分叉——`fermentation_enabled=true` → 标 `fermenting`（进入发酵）；`false` → 立即内化（旧行为）。
+- `/soul_reject <id>`：v2.4.0 允许拒绝 `fermenting` 状态种子（清理其发酵输入）。
+- `/soul_seed <id>`：v2.4.0 展示发酵进度（已收集输入数/预览最近3条/关联度分数）。
+- 只读详情：`/soul_trait <id>`（trait 详情卡片）、`/soul_inspect <文本>`（注入命中预览）、`/soul_dashboard`（全状态总览）。
+- 批量：`/soul_reject_all`（**只有批量拒绝，无批量批准**）。
+- 误判 trait 回滚：`/soul_trait_enable <id>`。
 
 ### 全局作用域标记（`GLOBAL_STREAM`）
 
@@ -197,7 +258,7 @@ OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened tr
 | `components/reflection_feedback.py` | 双路反馈：光谱修正（dead zone）+ planner 摘要聚合 |
 | `components/reflection_command.py` | `/soul_reflect [N]` 管理员查看 |
 | `prompts/self_reflection_prompts.py` | 评价 prompt（抽象倾向+对立视角+门槛判例） |
-| `plugin_ui_schema.py` | `SelfReflectionConfig` 段；`CONFIG_VERSION=2.3.0` |
+| `plugin_ui_schema.py` | `SelfReflectionConfig` 段；`CONFIG_VERSION=2.4.0` |
 | `plugin.py` | 一个 after_response HookHandler（replyer）+ `_self_reflection_task` 生命周期 + `/soul_reflect` 命令 |
 
 ## 迁移注意（重要）
@@ -221,12 +282,12 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 ## 目录职责
 
 - `components/` — 命令、演化循环、注入、Notion（可选）、状态命令、dashboard 数据聚合/渲染/命令、自我评价捕获/评价/反馈/命令（`reflection_*.py`，v2.3.0）
-- `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文
+- `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文 + v2.4.0 发酵后内化（`fermentation_inputs` 参数），`fermentation_engine.py`（**v2.4.0**：发酵循环 + L1 关键词过滤 + L3 LLM 关联度判断 + 到期检测/延长/最终内化触发）
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
-- `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`）
-- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD，含 `update_seed_status` 原子守卫）、`traits.py`（trait CRUD）、`p1.py`（切片/情绪/图谱边）、`self_reflection.py`（**v2.3.0**：注入快照/待评队列/自评结果 3 表 CRUD）；`ideology_model.py` 保留为**重导出 shim**（`from ._conn/seeds/... import *` + `__getattr__` 委托动态变量），40+ 处 `from ..models.ideology_model import xxx` 零破坏。**新代码直接从子模块 import；改 shim 不影响调用方**
+- `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`；v2.4.0 +`fermentation_prompts.py`）
+- `models/` — 按实体拆分：`_conn.py`（全局连接/建表/迁移/时间工具，含发酵表+列迁移）、`spectrum.py`（光谱+群演化记录）、`history.py`（演化历史）、`seeds.py`（思维种子 CRUD + **v2.4.0 发酵 CRUD**：`mark_seed_fermenting`/`mark_seed_internalized`/`extend_fermentation_window`/`add_fermentation_input`/`get_fermentation_inputs`/`count_seeds_created_today` 等）、`traits.py`（trait CRUD）、`p1.py`（切片/情绪/图谱边）、`self_reflection.py`（v2.3.0：注入快照/待评队列/自评结果 3 表 CRUD）；`ideology_model.py` 保留为**重导出 shim**，40+ 处 `from ..models.ideology_model import xxx` 零破坏。**新代码直接从子模块 import；改 shim 不影响调用方**
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `tests/` — 插件内测试（100 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard+trait+inspect 数据聚合与渲染降级/bot 自消息过滤/自评 3 表 CRUD/捕获配对/评价周期/双路反馈
+- `tests/` — 插件内测试（143 项，从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行）；覆盖原子守卫/生命周期 setter/全局标记/批量边/质量分/清理 expired/矛盾排除/矛盾检测 mock LLM/dashboard+trait+inspect 数据聚合与渲染降级/bot 自消息过滤/自评 3 表 CRUD/捕获配对/评价周期/双路反馈/发酵 CRUD/发酵状态机/日上限/关键词过滤
 
 ## 开发与验证
 
@@ -251,20 +312,21 @@ cd /path/to/Maibot
 .venv/bin/python -c "import importlib; p=importlib.import_module('plugins.CharTyr_Mai-Soul-Engine.plugin'); i=p.create_plugin(); print(len(i.get_components()))"
 ```
 
-重载插件后联调：`/soul_setup` → `/soul_answer` → `/soul_status`（dev 下 status 会显示层计数、切片偏移、情绪）；开启 `[self_reflection].enabled` 后 `/soul_reflect` 看自评记录；看 Runner 日志与 `data/migration_state.json`。
+重载插件后联调：`/soul_setup` → `/soul_answer` → `/soul_status`（dev 下 status 会显示层计数、切片偏移、情绪、发酵中种子数）；开启 `[self_reflection].enabled` 后 `/soul_reflect` 看自评记录；开启 `[thought_cabinet].fermentation_enabled` 后 `/soul_approve` 进入发酵、`/soul_seed <id>` 看发酵进度；看 Runner 日志与 `data/migration_state.json`。
 
 ## 修改约束
 
 - **不要改 Maibot 主程序**（`src/`）除非维护者明确许可。
 - 配置示例与文档中的 QQ/群号用占位符，勿提交真实 ID。
-- 可选能力默认关：**Notion**、**思维阁**、**@API**（有 `api.enabled` 守卫）、**自我评价反馈回路**（`[self_reflection].enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
+- 可选能力默认关：**Notion**、**思维阁**、**@API**（有 `api.enabled` 守卫）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
 - **`p1_enabled=false` 只关分层/切片/情绪，社交轴仍然生效**，不会回滚到政治轴。
+- **`fermentation_enabled=false` 只关发酵，种子仍会生成（经稀有化过滤），批准后立即内化（旧行为）**。
 - 发版：插件仓自行 `git push`；宿主侧 `plugins/*` 多在 `.gitignore`，pytest 文件在宿主仓维护。
-- Manifest 版本须严格三段式 semver（`2.3.0`），**禁止 `-dev` 后缀**。
+- Manifest 版本须严格三段式 semver（`2.4.0`），**禁止 `-dev` 后缀**。
 
 ## 参考
 
 - 升级计划与 P0 验收、P1 分阶段计划：`MIGRATION_PLAN.md`
 - 用户向：`README.md`（dev 含完整 P1 架构/轴表/层映射/隐私/API/差异表）
-- 变更：`CHANGELOG.md`（v2.3.0 含自我评价反馈回路；v2.1.0 含轴重构 + P1）
+- 变更：`CHANGELOG.md`（v2.4.0 含思维阁发酵重构；v2.3.0 含自我评价反馈回路；v2.1.0 含轴重构 + P1）
 - SDK 指南：https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md
