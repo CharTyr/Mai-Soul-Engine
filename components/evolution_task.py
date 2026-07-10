@@ -389,23 +389,28 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines:
                 await _notify_admin_seed(plugin, manager, seed_id)
 
 
-async def _notify_admin_seed(plugin, manager, seed_id: str) -> None:
-    """向管理员私聊发送思维种子通知（含原始对话上下文）。"""
+async def notify_admin_seed(plugin, manager, seed_id: str) -> bool:
+    """向管理员私聊发送思维种子通知（含原始对话上下文）。
+
+    Returns True when a notification text was handed to send.text.
+    """
     from ..utils.spectrum_utils import parse_user_id
 
     admin_config_id = plugin.config.admin.admin_user_id
     if not admin_config_id:
-        return
+        logger.warning("admin_user_id 未配置，跳过种子通知 seed=%s", seed_id)
+        return False
 
     platform, user_id = parse_user_id(admin_config_id)
     if not platform or not user_id:
-        return
+        logger.warning("admin_user_id 无法解析，跳过种子通知 seed=%s raw=%s", seed_id, admin_config_id)
+        return False
 
     # 从数据库取存储的种子数据（含上下文窗口）
     seed_data = await manager.get_seed_by_id(seed_id)
     if not seed_data:
         logger.warning("无法找到种子 %s，跳过通知", seed_id)
-        return
+        return False
 
     # 通过新 SDK 的 chat API 获取管理员的 stream_id
     try:
@@ -413,17 +418,30 @@ async def _notify_admin_seed(plugin, manager, seed_id: str) -> None:
             platform=platform, user_id=user_id
         )
     except (RuntimeError, ValueError, OSError):
-        logger.exception("获取管理员 stream_id 失败，无法发送种子通知")
-        return
+        logger.exception("获取管理员 stream_id 失败，无法发送种子通知 seed=%s", seed_id)
+        return False
 
     if not admin_stream_id:
-        logger.warning("未找到管理员的聊天流，无法发送种子通知")
-        return
+        logger.warning(
+            "未找到管理员聊天流，无法发送种子通知 seed=%s admin=%s:%s",
+            seed_id,
+            platform,
+            user_id,
+        )
+        return False
 
     try:
         await plugin.ctx.send.text(
             text=manager.format_seed_notification(seed_id, seed_data),
             stream_id=admin_stream_id,
         )
+        logger.info("已发送思维种子通知 seed=%s admin_stream=%s", seed_id, admin_stream_id)
+        return True
     except (RuntimeError, ValueError, OSError):
-        logger.exception("发送思维种子通知失败")
+        logger.exception("发送思维种子通知失败 seed=%s", seed_id)
+        return False
+
+
+# Backward-compatible private alias used by this module.
+async def _notify_admin_seed(plugin, manager, seed_id: str) -> bool:
+    return await notify_admin_seed(plugin, manager, seed_id)

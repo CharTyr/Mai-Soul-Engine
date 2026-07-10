@@ -322,6 +322,14 @@ async def _maybe_create_self_observation_seed(
         seed_id = await manager.create_seed(seed_data, stream_id=pending.stream_id or "", context_messages=ctx)
         if seed_id:
             logger.info("[SelfReflection] 生成自我观察种子 %s: %s", seed_id, sot.get("name", ""))
+            # Self-observation seeds previously skipped admin push; reuse evolution notifier.
+            try:
+                if plugin.config.thought_cabinet.admin_notification_enabled:
+                    from .evolution_task import notify_admin_seed
+
+                    await notify_admin_seed(plugin, manager, seed_id)
+            except Exception:
+                logger.exception("[SelfReflection] 发送自我观察种子通知失败 seed=%s", seed_id)
         return seed_id
     except Exception:
         logger.exception("[SelfReflection] 创建自我观察种子失败")
