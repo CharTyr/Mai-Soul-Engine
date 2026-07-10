@@ -106,8 +106,11 @@ h1 {
   margin: 0 0 8px;
   font-size: 12px;
   color: var(--mute);
-  word-break: break-all;
-  line-height: 1.4;
+  line-height: 1.45;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 0;
 }
 .badge {
   display: inline-flex;
@@ -441,6 +444,60 @@ h1 {
   font-size: 12px;
 }
 .impact-chip strong { color: var(--accent-blue); margin-left: 4px; font-weight: 700; }
+
+.meta-sep { color: var(--ash); }
+.meta-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--body);
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+.grid.three {
+  align-items: stretch;
+}
+.grid.three > .panel {
+  min-height: 168px;
+  display: flex;
+  flex-direction: column;
+}
+.grid.three > .panel > .label {
+  flex: 0 0 auto;
+}
+.grid.three > .panel > .bipolar,
+.grid.three > .panel > .thought-box,
+.grid.three > .panel > .placeholder-body,
+.grid.three > .panel > .slice-grid {
+  flex: 1 1 auto;
+}
+.panel-placeholder .placeholder-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 110px;
+  padding: 4px 2px 2px;
+}
+.placeholder-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.placeholder-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--body);
+}
+.placeholder-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mute);
+}
 .bottom-stack {
   display: grid;
   gap: 12px;
@@ -564,6 +621,17 @@ def _short_id(trait_id: str, *, max_len: int = 10) -> str:
     if len(tid) <= max_len:
         return tid
     return tid[:max_len] + "…"
+
+
+
+def _short_perspective(stream_id: str) -> str:
+    """Human-readable view label; truncate long stream ids for header density."""
+    sid = str(stream_id or "").strip()
+    if not sid:
+        return "全局"
+    if len(sid) <= 14:
+        return sid
+    return f"{sid[:8]}…{sid[-4:]}"
 
 
 class DashboardRenderer:
@@ -825,7 +893,8 @@ class DashboardRenderer:
         initialized = bool(data.get("initialized"))
         generated_at = _dash_or(data.get("generated_at"), empty="未知时间")
         stream_id = str(data.get("stream_id") or "").strip()
-        perspective = "全局" if not stream_id else stream_id
+        perspective = _short_perspective(stream_id)
+        perspective_title = stream_id if stream_id else "全局"
 
         spectrum = _as_dict(data.get("spectrum"))
         trait_layers = _as_dict(data.get("trait_counts_by_layer"))
@@ -862,7 +931,7 @@ class DashboardRenderer:
               <div class="hero-main">
                 <div class="eyebrow">Mai Soul Engine</div>
                 <h1>Soul 引擎状态</h1>
-                <p class="meta">生成于 {escape(generated_at)} · 视角 {escape(perspective)}</p>
+                <p class="meta" title="视角 {escape(perspective_title)}">生成于 {escape(generated_at)}<span class="meta-sep"> · </span>视角 <code class="meta-id">{escape(perspective)}</code></p>
                 {init_badge}
               </div>
             </div>
@@ -885,7 +954,7 @@ class DashboardRenderer:
 
           <section class="grid three">
             {mood_block}
-            {slice_block or '<div class="panel panel-dim"><div class="label">本群切片</div><div class="empty">全局视角不显示群切片</div></div>'}
+            {slice_block or self._render_group_slice_global_placeholder()}
             {thought_block}
           </section>
 
@@ -991,6 +1060,20 @@ class DashboardRenderer:
           <div class="label">本群切片</div>
           <div class="slice-grid">{"".join(rows)}</div>
           <p class="footnote">样本数 {sample}</p>
+        </div>
+        """
+
+
+    def _render_group_slice_global_placeholder(self) -> str:
+        """Empty-state card when dashboard is opened without a group stream."""
+        return """
+        <div class="panel panel-dim panel-placeholder">
+          <div class="label">本群切片</div>
+          <div class="placeholder-body">
+            <div class="placeholder-title">全局视角</div>
+            <p class="placeholder-desc">当前不是群会话视角，群切片不会显示。</p>
+            <p class="placeholder-hint">在群里执行 /soul_dashboard 可查看本群偏移。</p>
+          </div>
         </div>
         """
 
