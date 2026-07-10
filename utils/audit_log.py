@@ -54,6 +54,9 @@ async def log_audit_event(event_type: str, **fields: Any) -> None:
     }
     for k, v in fields.items():
         if v is not None:
+            # 截断 detail 字段到 200 字符，防 audit.jsonl 膨胀
+            if k == "detail" and len(str(v)) > 200:
+                v = str(v)[:200] + "..."
             entry[k] = v
 
     path = _audit_file

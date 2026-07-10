@@ -221,7 +221,7 @@ def _extract_user_text(messages: list[dict]) -> str:
 # ─── 辅助选择器 ─────────────────────────────────────────────────────
 
 
-def _should_inject(plugin, messages: list[dict]) -> dict | None:
+def _is_inject_enabled(plugin, messages: list[dict]) -> dict | None:
     """检查是否应执行注入。返回 None 表示允许注入，或返回终止字典。"""
     if not plugin.config.plugin.enabled:
         return {"success": True, "action": "continue"}
@@ -410,7 +410,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     """
     # ── 1. 配置/消息检查 ───────────────────────────────────────────
     messages: list[dict] = list(kwargs.get("messages") or [])
-    skip_check = _should_inject(plugin, messages)
+    skip_check = _is_inject_enabled(plugin, messages)
     if skip_check is not None:
         return skip_check
 

@@ -54,7 +54,7 @@ async def handle_inspect(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
         return True, err, True
 
     # ── 3. 取活跃 trait 池 ──────────────────────────────────────────
-    traits = query_active_traits_for_injection(stream_id=stream_id, limit=80)
+    traits = query_active_traits_for_injection(stream_id=stream_id, limit=40)
     total_active = len(traits)
 
     # 配置值：直接属性访问（无 or 兜底）

@@ -17,7 +17,7 @@ from ..models.ideology_model import (
     get_or_create_group_evolution,
     get_or_create_spectrum,
 )
-from ..prompts.ideology_prompts import EVOLUTION_ANALYSIS_PROMPT
+from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
 from ..utils.audit_log import log_evolution, log_evolution_cycle, log_evolution_skip
 from ..utils.runtime_resolution import (
     generate_soul_text,
@@ -37,7 +37,9 @@ _bot_filter_warned: set[str] = set()
 # 聚合种子通知冷却：记录上次通知时间戳（秒），用于 cooldown 检查
 _last_aggregated_notification_ts: float = 0.0
 # 本轮演化产生的种子通知收集列表（每轮开始时清空）
+# 多群并行时多个 _analyze_group 协程同时 append，用 asyncio.Lock 保护
 _pending_seed_notifications: list[tuple[str, str, str]] = []
+_pending_seed_lock = asyncio.Lock()
 
 
 def reset_aggregation_state() -> None:
@@ -273,14 +275,9 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             await log_evolution_skip(stream_id, "empty_message_text", message_count=len(messages))
             return
 
-        prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
-
         thought_cabinet_enabled = bool(plugin.config.thought_cabinet.enabled)
         logger.debug("思维阁启用状态: %s", thought_cabinet_enabled)
-        if thought_cabinet_enabled:
-            from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
-
-            prompt = ENHANCED_EVOLUTION_PROMPT.format(rate=evolution_rate, messages=msg_text)
+        prompt = ENHANCED_EVOLUTION_PROMPT.format(rate=evolution_rate, messages=msg_text)
 
         # 调用新 SDK 的 LLM 接口
         logger.debug("发送LLM请求，prompt长度: %s", len(prompt))
@@ -310,10 +307,11 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 response = response.split("\n", 1)[1].rsplit("```", 1)[0]
             result = _json.loads(response)
 
-            if thought_cabinet_enabled and "spectrum_deltas" in result:
+            if "spectrum_deltas" in result:
                 deltas = result["spectrum_deltas"]
-                thought_seeds = result.get("thought_seeds", [])
-                await _process_thought_seeds(plugin, thought_seeds, stream_id, msg_lines)
+                if thought_cabinet_enabled:
+                    thought_seeds = result.get("thought_seeds", [])
+                    await _process_thought_seeds(plugin, thought_seeds, stream_id, msg_lines)
             else:
                 deltas = result
         except (_json.JSONDecodeError, ValueError):
@@ -434,9 +432,10 @@ async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines:
             created_ids.append(seed_id)
             # 收集到聚合通知列表（不再单独通知）
             if plugin.config.thought_cabinet.admin_notification_enabled:
-                _pending_seed_notifications.append(
-                    (seed_id, seed_data.get("type", "未知"), seed_data.get("event", "")[:80])
-                )
+                async with _pending_seed_lock:
+                    _pending_seed_notifications.append(
+                        (seed_id, seed_data.get("type", "未知"), seed_data.get("event", "")[:80])
+                    )
 
     return created_ids
 

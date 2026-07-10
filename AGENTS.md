@@ -68,7 +68,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 - `weakened`：新证据部分削弱旧观点 → 标 weakened（`enabled` 不变，降权但可见）+ 写 `weakened_by` 边。
 - `revised`：新知是旧知的更精细版本 → 标 revised（`enabled` 不变）+ 写 `revised_by` 边。
 
-矛盾/弱化/修正由内化时 `_classify_trait_relation`（原 `_find_dedup_target`，复用同一次 LLM 调用，零额外 token）判定。**防误报三重**：(1) 置信度阈值（contradicted≥0.70、weakened/revised≥0.60，低于降级 none）；(2) `strengthened` trait 豁免（仅可判 duplicate，不可判矛盾/弱化/修正）；(3) 可回滚（管理员 `/soul_trait_enable` 重新启用误判 trait，`/soul_trait <id>` 详情展示关系边可追溯）。注入侧 `_trait_quality_score` 对 weakened -0.3 / revised -0.1 / contradicted -1.0 降权；contradicted 因 `enabled=0` 自动排除出注入池。
+矛盾/弱化/修正由内化时 `_classify_trait_relation`（原 `_find_dedup_target`，是独立的 LLM 调用，internalization_engine.py 中第 2 次 LLM）判定。内化每个种子实际 2 次 LLM 调用：第 1 次形成观点，第 2 次判定与已有 trait 的关系。**防误报三重**：(1) 置信度阈值（contradicted≥0.70、weakened/revised≥0.60，低于降级 none）；(2) `strengthened` trait 豁免（仅可判 duplicate，不可判矛盾/弱化/修正）；(3) 可回滚（管理员 `/soul_trait_enable` 重新启用误判 trait，`/soul_trait <id>` 详情展示关系边可追溯）。注入侧 `_trait_quality_score` 对 weakened -0.3 / revised -0.1 / contradicted -1.0 降权；contradicted 因 `enabled=0` 自动排除出注入池。
 
 ### 关键文件
 
@@ -113,7 +113,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 - 二级排序用 `_trait_quality_score`（confidence + 生命周期加权：strengthened +0.3 / weakened -0.3）。
 - `selection_mode`：`tag_hit` / `tag_hit+tagless` / `tagless_fill` / `fallback_recent_impact` / `spectrum_only`。
 - 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids, traits=已查列表)` 排除已在详细块的 trait，避免重复；`traits` 参数复用已查列表避免二次 SQL。
-- **热路径优化**（`before_request` 每条消息触发）：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`，`on_load` 构造、`on_config_update` 重建；`inject_ideology` 已拆为 `_should_inject`/`_select_traits`/`_build_injection_block` 等子函数；锁用 `asyncio.Lock`；注入日志采样（`INJECTION_LOG_EVERY=10`）+ 5MB 轮转 + `asyncio.to_thread` 异步写。
+- **热路径优化**（`before_request` 每条消息触发）：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`，`on_load` 构造、`on_config_update` 重建；`inject_ideology` 已拆为 `_is_inject_enabled`/`_select_traits`/`_build_injection_block` 等子函数；锁用 `asyncio.Lock`；注入日志采样（`INJECTION_LOG_EVERY=10`）+ 5MB 轮转 + `asyncio.to_thread` 异步写。
 
 ### 种子去重
 

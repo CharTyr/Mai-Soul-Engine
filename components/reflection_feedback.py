@@ -35,6 +35,7 @@ _SUMMARY_MIN_DEVIATIONS: int = 2
 # 避免每条消息都查 list_recent_reflections；TTL 过期或主动 invalidate 后才查。
 _summary_cache: dict[str, tuple[str, float, int]] = {}  # stream_id -> (summary, ts, last_reflection_id)
 _SUMMARY_CACHE_TTL: float = 300.0  # 5 分钟
+_SUMMARY_CACHE_MAX_ENTRIES: int = 100  # 防内存泄漏上限
 
 
 def invalidate_reflection_summary_cache(stream_id: str = "") -> None:
@@ -105,6 +106,11 @@ def build_recent_reflection_summary(stream_id: str, limit: int = 10) -> str:
     # 仅缓存非空结果（空结果查 DB 很快，且避免跨测试/跨场景缓存污染）
     if result:
         _summary_cache[stream_id] = (result, now, last_id)
+        # 防内存泄漏：超上限时删最旧的一半
+        if len(_summary_cache) > _SUMMARY_CACHE_MAX_ENTRIES:
+            sorted_items = sorted(_summary_cache.items(), key=lambda x: x[1][1])
+            for k, _ in sorted_items[: len(sorted_items) // 2]:
+                _summary_cache.pop(k, None)
     return result
 
 

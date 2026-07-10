@@ -56,20 +56,23 @@ def cache_session_context(session_id: str, messages: list[dict]) -> None:
     """从 before_request 的 messages 提取最近用户消息，缓存供 after_response 用。
 
     after_response payload 不含触发消息，故在此缓存。空 session_id 不缓存。
+    sanitize_text 在锁外执行（含正则替换，messages 极长时避免阻塞事件循环）。
     """
     if not session_id:
         return
+    # 锁外：提取 + 脱敏（CPU 密集，不需要锁保护）
+    lines: list[str] = []
+    for msg in reversed(messages):
+        if len(lines) >= _CONTEXT_MAX_LINES:
+            break
+        if msg.get("role") == "user":
+            content = str(msg.get("content", "") or "")
+            sanitized = sanitize_text(content, max_chars=_CONTEXT_LINE_MAX_CHARS)
+            if sanitized:
+                lines.append(sanitized)
+    lines.reverse()
+    # 锁内：只做 dict 写入（O(1) 操作，微秒级）
     with _context_cache_lock:
-        lines: list[str] = []
-        for msg in reversed(messages):
-            if len(lines) >= _CONTEXT_MAX_LINES:
-                break
-            if msg.get("role") == "user":
-                content = str(msg.get("content", "") or "")
-                sanitized = sanitize_text(content, max_chars=_CONTEXT_LINE_MAX_CHARS)
-                if sanitized:
-                    lines.append(sanitized)
-        lines.reverse()
         # 容量控制：超上限删最旧一半
         if len(_context_cache) > _CONTEXT_MAX_ENTRIES:
             sorted_items = sorted(_context_cache.items(), key=lambda x: x[1][1])

@@ -90,7 +90,7 @@ async def handle_setup(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
                 msg = (
                     "确定要重新开始吗？当前进度会被清空，无法恢复。\n\n"
                     "确认：/soul_setup --restart --yes\n"
-                    "取消：/soul_setup --continue 或直接继续答题"
+                    "取消：直接继续答题即可（用 /soul_answer <1-5> 回答下一题）"
                 )
                 await plugin.ctx.send.text(msg, stream_id)
                 return True, msg, True

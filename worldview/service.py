@@ -171,7 +171,7 @@ class WorldviewService:
             return ""
         exclude = exclude_trait_ids or set()
         if traits is None:
-            traits = im.query_active_traits_for_injection(stream_id=stream_id, limit=80)
+            traits = im.query_active_traits_for_injection(stream_id=stream_id, limit=40)
         by_layer: dict[str, list[str]] = {layer: [] for layer in IDEOLOGY_LAYERS}
         for t in traits:
             if t.trait_id in exclude:

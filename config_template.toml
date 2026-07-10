@@ -9,12 +9,14 @@
 # ─── 插件元数据（Runner 必填）────────────────────────────────────────
 [plugin]
 enabled = true
-config_version = "2.2.0"
+config_version = "2.3.0"
 
 # ─── 管理员配置 ─────────────────────────────────────────────────────
 [admin]
 # 管理员用户ID（必填，格式：平台:ID，如 qq:12345678）
 admin_user_id = ""
+# 审计日志开关（关闭后不写 audit.jsonl）
+audit_enabled = true
 
 # ─── 演化设置 ───────────────────────────────────────────────────────
 [evolution]
@@ -32,6 +34,8 @@ direction_resistance = 0.5
 max_messages_per_analysis = 200
 # 每条消息的最大字符数
 max_chars_per_message = 200
+# 多群演化分析的最大并发数（防 LLM 限流）
+max_concurrent_groups = 3
 
 # ─── 监控范围（演化仅针对监控群）────────────────────────────────────
 [monitor]
@@ -127,6 +131,8 @@ reviewed_keep_count = 200
 trait_ttl_days = 90
 # 种子去重相似度阈值(0-1)，新种子与已有待审种子相似度超过此值则跳过，0=不去重
 seed_dedup_threshold = 0.82
+# 聚合种子通知冷却时间（分钟），防止短时多次通知轰炸管理员，0=不冷却
+admin_notification_cooldown_minutes = 30
 
 # ─── API 设置（可选）────────────────────────────────────────────────
 # Soul 数据 @API 组件，供 WebUI 或其他插件查询光谱/traits/种子。

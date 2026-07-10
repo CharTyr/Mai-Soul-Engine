@@ -33,9 +33,15 @@ async def handle_reset(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
     is_confirm = "confirm" in message_text.casefold()
 
     if is_confirm:
+        # 先清理过期项（>5 分钟），防内存泄漏
+        now = time.time()
+        expired = [k for k, ts in plugin._reset_confirm_ts.items() if now - ts > 300]
+        for k in expired:
+            plugin._reset_confirm_ts.pop(k, None)
+
         # 检查是否在确认窗口内
         last_ts = plugin._reset_confirm_ts.get(stream_id, 0.0)
-        if time.time() - last_ts > _RESET_CONFIRM_TIMEOUT:
+        if now - last_ts > _RESET_CONFIRM_TIMEOUT:
             msg = "确认超时，请重新发送 /soul_reset 开始重置流程"
             await plugin.ctx.send.text(msg, stream_id)
             return True, msg, True

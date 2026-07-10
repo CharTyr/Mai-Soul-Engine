@@ -3,6 +3,7 @@ config.toml
 
 # 插件数据目录
 data/
+data.bak/
 
 # Python 缓存
 __pycache__/

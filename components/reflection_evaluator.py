@@ -58,7 +58,7 @@ async def _evaluate_cycle(plugin) -> None:
         list_pending_reflections,
         update_pending_status,
     )
-    from ..models.ideology_model import get_crystallized_trait_by_id, get_or_create_spectrum
+    from ..models.ideology_model import get_crystallized_traits_by_ids, get_or_create_spectrum
     from ..prompts.self_reflection_prompts import (
         build_abstract_tendency,
         build_reply_block,
@@ -103,19 +103,36 @@ async def _evaluate_cycle(plugin) -> None:
         }
     )
 
+    # 批量收集所有 pending 的 trait_ids（去重），一次查
+    all_trait_ids: set[str] = set()
+    snap_cache: dict[str, Any] = {}
+    for p in pendings:
+        if p.snapshot_id and p.snapshot_id not in snap_cache:
+            snap = get_injection_snapshot(p.snapshot_id)
+            snap_cache[p.snapshot_id] = snap
+            if snap:
+                try:
+                    tids = _json.loads(snap.trait_ids_json or "[]")
+                except (_json.JSONDecodeError, TypeError):
+                    tids = []
+                all_trait_ids.update(tids)
+    traits_by_id: dict[str, Any] = {}
+    if all_trait_ids:
+        traits_by_id = get_crystallized_traits_by_ids(list(all_trait_ids))
+
     reply_blocks: list[str] = []
     meta: list[dict[str, Any]] = []  # 每条 pending 的配对元数据
     for idx, p in enumerate(pendings, start=1):
         trait_lines: list[str] = []
         if p.snapshot_id:
-            snap = get_injection_snapshot(p.snapshot_id)
+            snap = snap_cache.get(p.snapshot_id)
             if snap:
                 try:
                     trait_ids = _json.loads(snap.trait_ids_json or "[]")
                 except (_json.JSONDecodeError, TypeError):
                     trait_ids = []
                 for tid in trait_ids:
-                    trait = get_crystallized_trait_by_id(tid)
+                    trait = traits_by_id.get(tid)
                     if trait and trait.enabled:
                         trait_lines.append(f"{trait.name}: {trait.thought}")
         try:

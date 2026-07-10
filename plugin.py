@@ -84,6 +84,14 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
+        # 审计日志开关（从配置读取，在 init_db 之前确保 degraded 模式也读 config）
+        from .utils.audit_log import set_audit_enabled
+        set_audit_enabled(getattr(self.config.admin, "audit_enabled", True))
+
+        # P1 缓存（不依赖 DB，在 init_db 之前构造确保 degraded 模式也可用）
+        self._wv_config_view = config_from_plugin(self)
+        self._wv_service = WorldviewService(self._wv_config_view)
+
         # 初始化插件自有 SQLite
         soul_db_path = self._data_dir / "soul.db"
         try:
@@ -98,10 +106,6 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             init_audit_log(self._plugin_dir)
         except Exception as e:
             logger.error("[Mai-Soul-Engine] 审计日志初始化失败: %s", e, exc_info=True)
-
-        # 审计日志开关（从配置读取）
-        from .utils.audit_log import set_audit_enabled
-        set_audit_enabled(getattr(self.config.admin, "audit_enabled", True))
 
         # 旧版数据迁移（带超时，防宿主 DB 锁住时卡 on_load）
         project_root = self._plugin_dir.parent.parent
@@ -129,10 +133,6 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         if self.config.self_reflection.enabled:
             self._self_reflection_task = asyncio.create_task(self._self_reflection_loop())
             logger.info("[Mai-Soul-Engine] 自我评价任务已启动")
-
-        # 初始化 P1 缓存
-        self._wv_config_view = config_from_plugin(self)
-        self._wv_service = WorldviewService(self._wv_config_view)
 
     async def on_unload(self) -> None:
         """插件卸载：取消周期任务、关闭数据库。"""
