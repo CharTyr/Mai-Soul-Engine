@@ -6,9 +6,9 @@ import logging
 from html import escape
 from typing import Any
 
-_logger = logging.getLogger(__name__)
+from .card_render import render_card_png
 
-_DEBUG_DUMP_HTML = False  # 生产环境不写调试 HTML；调试时改为 True
+_logger = logging.getLogger(__name__)
 
 _ROOT_ID = "soul-dashboard"
 
@@ -197,213 +197,32 @@ class DashboardRenderer:
         root_id: str,
         viewport_height: int = 1600,
     ) -> tuple[str, str | None]:
-        """返回 (base64, error_reason)。成功时 error_reason=None。"""
-        if self._ctx is None:
+        """返回 (base64, error_reason)。成功时 error_reason=None。
+
+        渲染稳定性由共享内核 card_render.render_card_png 保证：
+        多 attempt + 指数退避 + 内容裁剪 + CSS 泄漏检测。
+        总览卡高度窗 980–2300 仅告警不拒绝（保持旧行为）。
+        """
+        image_base64, err = await render_card_png(
+            self._ctx,
+            html,
+            root_id=root_id,
+            viewport_width=self.viewport_width,
+            viewport_height=viewport_height,
+            device_scale_factor=self.device_scale_factor,
+            render_timeout_ms=self.render_timeout_ms,
+            detect_css_leak=True,
+            logger=self._ctx_logger(),
+        )
+        if err is not None:
             return ("", "卡片渲染失败")
+        return (image_base64, None)
 
-        if _DEBUG_DUMP_HTML:
-            try:
-                from datetime import datetime
-                from pathlib import Path as _Path
-
-                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                dump_dir = _Path("/tmp/soul-dash-live")
-                dump_dir.mkdir(parents=True, exist_ok=True)
-                (dump_dir / f"{stamp}-{root_id}.html").write_text(html, encoding="utf-8")
-                body_part = html.split("<body", 1)[-1]
-                meta = {
-                    "root_id": root_id,
-                    "viewport_width": self.viewport_width,
-                    "viewport_height": viewport_height,
-                    "device_scale_factor": self.device_scale_factor,
-                    "html_len": len(html),
-                    "style_open": html.count("<style"),
-                    "style_close": html.count("</style>"),
-                    "css_in_body": ("justify-content" in body_part) or (".skip-row" in body_part),
-                }
-                (dump_dir / f"{stamp}-{root_id}.meta.txt").write_text(repr(meta), encoding="utf-8")
-            except Exception:
-                pass
-
-        def _png_size(blob: bytes) -> tuple[int | None, int | None]:
-            if blob[:8] == b"\x89PNG\r\n\x1a\n" and len(blob) >= 24:
-                return int.from_bytes(blob[16:20], "big"), int.from_bytes(blob[20:24], "big")
-            return None, None
-
-        def _crop_content_png(blob: bytes) -> bytes:
-            try:
-                from io import BytesIO
-                from PIL import Image
-
-                with Image.open(BytesIO(blob)) as im:
-                    im = im.convert("RGB")
-                    pixels = im.load()
-                    w, h = im.size
-                    left, top, right, bottom = w, h, 0, 0
-                    found = False
-                    step = 2
-                    for y in range(0, h, step):
-                        for x in range(0, w, step):
-                            r, g, b = pixels[x, y]
-                            if r + g + b < 735:
-                                found = True
-                                left = min(left, x)
-                                top = min(top, y)
-                                right = max(right, x)
-                                bottom = max(bottom, y)
-                    if not found:
-                        return blob
-                    pad = 12
-                    box = (
-                        max(0, left - pad),
-                        max(0, top - pad),
-                        min(w, right + 1 + pad),
-                        min(h, bottom + 1 + pad),
-                    )
-                    if box[2] - box[0] < 120 or box[3] - box[1] < 120:
-                        return blob
-                    cropped = im.crop(box)
-                    out = BytesIO()
-                    cropped.save(out, format="PNG", optimize=True)
-                    return out.getvalue()
-            except Exception:
-                return blob
-
-        def _top_looks_like_css_leak(blob: bytes) -> bool:
-            try:
-                from io import BytesIO
-                from PIL import Image
-
-                with Image.open(BytesIO(blob)) as im:
-                    im = im.convert("RGB")
-                    w, h = im.size
-                    band_h = min(28, h)
-                    pixels = im.load()
-                    dark = total = 0
-                    for y in range(band_h):
-                        for x in range(0, w, 3):
-                            r, g, b = pixels[x, y]
-                            total += 1
-                            if r + g + b < 420:
-                                dark += 1
-                    return total > 0 and (dark / total) > 0.08
-            except Exception:
-                return False
-
-        def _dump(name: str, blob: bytes | None, meta: dict) -> None:
-            if not _DEBUG_DUMP_HTML:
-                return
-            try:
-                from datetime import datetime
-                from pathlib import Path as _Path
-
-                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                dump_dir = _Path("/tmp/soul-dash-live")
-                dump_dir.mkdir(parents=True, exist_ok=True)
-                (dump_dir / f"{stamp}-{root_id}-{name}.result.txt").write_text(
-                    repr(meta), encoding="utf-8"
-                )
-                if blob is not None:
-                    (dump_dir / f"{stamp}-{root_id}-{name}.png").write_bytes(blob)
-            except Exception:
-                pass
-
-        async def _once(*, selector: str, full_page: bool, wait_ms: int) -> tuple[str, bytes | None, int | None, int | None]:
-            result = await self._ctx.render.html2png(
-                html,
-                selector=selector,
-                viewport={"width": self.viewport_width, "height": viewport_height},
-                device_scale_factor=self.device_scale_factor,
-                full_page=full_page,
-                omit_background=False,
-                wait_until="load",
-                wait_for_selector=f"#{root_id}",
-                wait_for_timeout_ms=wait_ms,
-                render_timeout_ms=self.render_timeout_ms,
-                allow_network=False,
-            )
-            if not isinstance(result, dict):
-                return "", None, None, None
-            image_base64 = result.get("image_base64")
-            if not isinstance(image_base64, str) or not image_base64:
-                return "", None, None, None
-            try:
-                import base64 as _b64
-
-                blob = _b64.b64decode(image_base64)
-            except Exception:
-                return image_base64, None, None, None
-            width, height = _png_size(blob)
-            return image_base64, blob, width, height
-
-        import asyncio as _asyncio
-        import base64 as _b64
-
-        # Prefer body viewport first: live element screenshots are the unstable path.
-        attempts = [
-            {"name": "a1-body", "selector": "body", "full_page": False, "wait_ms": 300, "crop": True},
-            {"name": "a2-element", "selector": f"#{root_id}", "full_page": False, "wait_ms": 300, "crop": False},
-            {"name": "a3-full-crop", "selector": "body", "full_page": True, "wait_ms": 250, "crop": True},
-        ]
-
-        for idx, attempt in enumerate(attempts):
-            try:
-                image_base64, blob, width, height = await _once(
-                    selector=attempt["selector"],
-                    full_page=attempt["full_page"],
-                    wait_ms=attempt["wait_ms"],
-                )
-            except Exception:
-                self._log_exception(f"html2png failed ({attempt['name']})")
-                # 指数 backoff：重试间递增等待，避免压垮宿主无头浏览器
-                await _asyncio.sleep(0.2 * (2 ** idx))
-                continue
-            if not image_base64 or blob is None:
-                # 指数 backoff：重试间递增等待，避免压垮宿主无头浏览器
-                await _asyncio.sleep(0.2 * (2 ** idx))
-                continue
-
-            if attempt.get("crop"):
-                cropped = _crop_content_png(blob)
-                if cropped is not blob:
-                    blob = cropped
-                    width, height = _png_size(blob)
-                    image_base64 = _b64.b64encode(blob).decode("ascii")
-
-            leak = _top_looks_like_css_leak(blob)
-            _dump(
-                attempt["name"],
-                blob,
-                {
-                    "attempt": attempt,
-                    "width": width,
-                    "height": height,
-                    "bytes": len(blob),
-                    "css_leak_heuristic": leak,
-                },
-            )
-            if leak:
-                _logger.warning(
-                    "Soul dashboard rejected CSS-leak-looking frame %s: %sx%s",
-                    attempt["name"],
-                    width,
-                    height,
-                )
-                # 指数 backoff：重试间递增等待，避免压垮宿主无头浏览器
-                await _asyncio.sleep(0.2 * (2 ** idx))
-                continue
-            if root_id == _ROOT_ID and (height is None or height < 980 or height > 2300):
-                _logger.warning(
-                    "Soul dashboard size outside recommended range %s: %sx%s — passing through",
-                    attempt["name"],
-                    width,
-                    height,
-                )
-                # 高度超区间只 log warning 不 reject，让渲染结果通过（可能需要裁剪）
-            return (image_base64, None)
-
-        _logger.error("Soul dashboard render failed after all attempts")
-        return ("", "卡片渲染失败")
+    def _ctx_logger(self) -> Any:
+        ctx = self._ctx
+        if ctx is not None and getattr(ctx, "logger", None) is not None:
+            return ctx.logger
+        return _logger
 
     def _log_exception(self, message: str) -> None:
         ctx = self._ctx
