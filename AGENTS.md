@@ -238,7 +238,13 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 
 - **捕获**：`@HookHandler("maisaka.replyer.after_response")`，`mode=HookMode.OBSERVE` + `error_policy=ErrorPolicy.SKIP`（**零干扰不改写输出**，失败不影响 bot 回复）。宿主触发点（**只读引用，不改**）：`src/chat/replyer/maisaka_generator_base.py:1182`，payload 含 `response`/`session_id`/`reply_message_id`/token 统计。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
 - **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode + **触发上下文**）；`after_response` 用 `claim_snapshot_for_response` **FIFO 认领最旧的未认领快照**（同一 reply 重试复用同一快照）。旧行为是"取最近一条"，同会话两轮并发时会把 A 轮的回复配到 B 轮的快照上——trait 归属与触发上文一起串味。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
-- **配对歧义（v6）与宿主零改动结论**：陈旧窗口内 ≥2 条未认领快照 → 标 `pairing_ambiguous=1`，**下游阻断会改人格的自评反馈**（不确定就不改人格）。`reply_message_id` 只让「同一回复重试」那条腿**精确**；planner ↔ replyer 之间**没有共同请求 id**（已核实宿主 payload），在「不得修改宿主任何代码」约束下精确绑定**不可达——已知限制，不是待办**。作用域字段：快照记 `bot_identity`（v7）+ `platform`（v8，按配置声明的平台列表探测宿主流列表得出；探不到留空）。
+- **配对：内容证据优先 + 不确定即弃权**（v6 起，第五轮补强）
+  - **内容证据（首选项）**：`maisaka.replyer.before_model_request` 在注入前记下本轮「在回答哪条消息」——取真实生成 items 的最后一条用户文本尾行，**剥「昵称:」前缀**归一（两侧渲染可能不同，裸比会漏配），进程内缓存 TTL 30min；`after_response` 认领快照时与候选的 `context_json` 尾行比对：**唯一命中 → 精确认领（不算歧义）**；**全不命中 → 弃权**（照旧消费最旧 + 标歧义）；多条命中 → 歧义。无证据（hook 未观测到 / 进程重启）→ **退回下面的顺序规则**。
+  - 它堵的漏洞：上一轮注入后回复没发出来（快照滞留）、下一轮回复**自己没注入**时，窗口内恰好只剩 1 条 → 旧顺序规则无条件认领 → **拿别人的人格反馈去改光谱**。
+  - **顺序规则（兜底）**：陈旧窗口内认领最旧未认领；窗口内 ≥2 条 → 标 `pairing_ambiguous=1`。
+  - 标歧义 = **下游阻断会改人格的自评反馈**（记未评；光谱修正只消费 `evaluated=1`）。**不确定就不改人格，不许猜。**
+  - **宿主零改动结论**：planner ↔ replyer **没有共同请求 id**（已核实宿主 payload：planner 侧只有 7 个键），**请求级**绑定不可达——已知限制，不是待办；**内容级**关联已在插件侧补齐，不需要宿主加字段。
+  - 作用域字段：快照记 `bot_identity`（v7）+ `platform`（v8，按配置声明的平台列表探测宿主流列表得出；探不到留空）。
 - **context 来源**：`after_response` payload **不含触发消息**，故 before_request 把触发上文随快照一起落库（`context_json`）；`reflection_capture.take_cached_context` 的 session 键缓存只作旧数据兜底。**上下文缺失 = context_json 空 = 合法降级**（评估只基于 response 文本判语气）。
 - **投递阶段**：`delivery_state` 记 `selected` → `hook_applied`。宿主未提供请求后回调，插件**无法自我声明"最终请求已包含注入"**（`final_request_verified` 不可达）——不要把它当成已验证。
 
@@ -398,7 +404,7 @@ cd /path/to/Maibot
 3. **作用域字段**——**已落地（宿主零改动）**。快照记 `bot_identity`（宿主 `bot.qq_account`）+ `platform`。平台 = **配置声明**平台列表（`plugin.platforms`，默认 `["qq"]`）→ 按平台探测宿主流列表（SDK 的 `chat.get_*_streams` 吃 platform **入参**，不返回平台）→ 命中即归属，探不到**留空**。**禁止按 `session_id` 字符串猜平台**。
 4. **任务监督器五态**——**已落地**：`running` / `waiting` / `backoff` / `failed` / `stopped`；退避 5s→…→300s，另有 `last_success` / `heartbeat` / `next_retry_at`；五个真实循环在等待间隔打 `waiting`（否则该状态只是装饰）。
 
-**宿主零改动（用户硬约束）**：**不得修改宿主任何代码**。因此 T03 的精确并发绑定（planner ↔ replyer 的共同请求 id）**不可达，属已知限制而非待办**——已核实宿主 payload：planner hook 只有 `items / item_schema_version / tool_definitions / selected_history_count / built_message_count / selection_reason / session_id` 七项，两侧没有共同 id。插件侧穷尽为：replyer 重试按 `reply_message_id` **精确**复用 + 陈旧窗口内最旧未认领 + **窗口内 ≥2 条未认领即标 `pairing_ambiguous` 并阻断会改人格的自评反馈**。宁可不动，不许猜。
+**宿主零改动（用户硬约束）**：**不得修改宿主任何代码**。因此 T03 的精确并发绑定（planner ↔ replyer 的共同请求 id）**不可达，属已知限制而非待办**——已核实宿主 payload：planner hook 只有 `items / item_schema_version / tool_definitions / selected_history_count / built_message_count / selection_reason / session_id` 七项，两侧没有共同 id。插件侧已补到：replyer 重试按 `reply_message_id` **精确**复用 + **内容证据**（replyer 腿真实 items 的触发消息尾行 ↔ 候选快照 `context_json` 尾行，剥「昵称:」前缀再比；唯一命中即精确认领、全不命中即弃权——堵住「滞留单条快照被误配」的漏洞）+ 无证据时退回顺序规则（最旧未认领 / 窗口内 ≥2 条即标 `pairing_ambiguous`）。标歧义即**阻断会改人格的自评反馈**。**不确定就不改人格，不许猜。**
 
 **尚未做（YAGNI / 可选）**：完整 v3 candidates/runs/versions；宿主 H3 结构化 persona extension；冷却改分惩罚；自动静默占槽。
 
