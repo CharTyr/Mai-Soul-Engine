@@ -25,9 +25,16 @@ mode = "off"        # off | observe | apply
 enabled = true      # 旧字段，保留兼容
 ```
 
-**旧配置的升级行为（重要）**：若没有显式写 `mode`，`enabled = true` 只会映射为
-`observe` —— 学习继续、但**不注入、不改人格**，`/soul_health` 会提示需要显式选
-`apply`。这是刻意的：一次升级不该让插件突然开始改写人格并影响真实回复。
+**旧配置的升级行为（按真实行为描述，已用测试钉住）**：
+
+- schema 默认值就是 `off`。因此"升级前 `enabled = true`、但配置里从没写过 `mode`"的实例
+  （pydantic 会补上默认值 `off`）实际落在 **`off`**：不学习、不注入、不改人格。
+- 只有 `mode` 是**空串**（配置文件里真的没有该键）且 `enabled = true` 时才映射为
+  `observe`，并在 `/soul_health` 提示需要显式选 `apply`。
+- 两种情况都**绝不会隐式进入 `apply`**。这是刻意的：一次升级不该让插件突然开始
+  改写人格并影响真实回复。
+
+要恢复"学习但不注入"，显式写 `mode = "observe"`；要真正生效写 `mode = "apply"`。
 
 **推荐上线顺序**：`off` → 确认 `/soul_health` 与数据目录 → `observe` 跑若干个演化
 周期、人工检查候选与选择结果 → 确认无误后再切 `apply`。
@@ -39,9 +46,12 @@ enabled = true      # 旧字段，保留兼容
 1. **备份数据**（用 SQLite 备份 API 或停写后的完整快照，不要单独复制可能带 WAL 的 `.db`）。
 2. 确认权威数据目录：只认 `on_load` 日志里打印的 `soul.db` 路径，不要凭目录名猜。
    - 历史遗留：`plugins/<插件>/data/` 与 `data/plugins/<plugin-id>/` 可能**同时存在**且内容不同。
-   - 迁移前先只读比对两者的表计数与初始化状态，**由操作者决定用哪一份**，不要按文件大小或修改时间自动选。
+   - 用 `migration/inventory.py` 做**只读**盘点与预演（不建表、不改文件、不自动选源）：
+     `python migration/inventory.py <db> [<db>...] [--json]`
+   - 它会给出表计数、schema 版本、是否含实质数据，并做**谱系观察**（某份是不是另一份的
+     后续状态）。选哪一份**永远由操作者决定**，不要按文件大小或修改时间自动选。
 3. 停 MaiBot（**由操作者执行**，插件不自行重启宿主）。
-4. 更新插件代码；启动后 `init_db` 会按版本跑迁移（v1→v4，幂等、失败不推进版本）。
+4. 更新插件代码；启动后 `init_db` 会按版本跑迁移（v1→v5，幂等、失败不推进版本）。
 5. 确认 `/soul_health`：schema 版本、数据目录来源、四个任务状态、当前运行模式。
 6. 保持 `mode = "observe"` 观察一轮，再决定是否切 `apply`。
 
@@ -49,6 +59,7 @@ enabled = true      # 旧字段，保留兼容
 
 - v3：`soul_injection_snapshots` 增 `context_json` / `consumed_at` / `consumed_by_reply` / `delivery_state`
 - v4：新增 `soul_seed_operations`（内化租约与幂等终结）
+- v5：新增 `soul_notifications`（通知 outbox，`dedupe_key` 唯一）
 
 均为加列/加表，向后兼容；旧行按默认值填充。
 
@@ -57,7 +68,7 @@ enabled = true      # 旧字段，保留兼容
 ## 3. 回退
 
 - **代码回退**：`git revert` 或切回上一个 tag。
-- **数据回退**：若新版本已写入 v3/v4 结构，旧代码无法读新 schema 时**不要直接降级**——
+- **数据回退**：若新版本已写入 v3/v4/v5 结构，旧代码无法读新 schema 时**不要直接降级**——
   用迁移前的备份恢复，并明确告知：迁移后产生的数据会丢失。
 - **业务撤销**：不要直接删历史或反向减数值。人格变化以补偿操作处理并保留原事件。
 
