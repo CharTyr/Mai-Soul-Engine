@@ -33,6 +33,7 @@ __all__ = [
 ]
 
 NOTIFICATION_PENDING = "pending"
+NOTIFICATION_SENDING = "sending"   # 已被某个消费者认领、正在发送
 NOTIFICATION_SENT = "sent"
 NOTIFICATION_FAILED = "failed"
 
@@ -145,6 +146,55 @@ def list_pending_notifications(limit: int = 20) -> list[Notification]:
         (NOTIFICATION_PENDING, int(limit)),
     ).fetchall()
     return [_row_to_notification(r) for r in rows]
+
+
+def claim_notification(notification_id: str) -> bool:
+    """原子认领一条待发通知：``pending`` → ``sending``。
+
+    并发重放（演化循环 + 发酵循环各有一个 drain）会把同一条通知发两次。
+    race 发生在事件循环的 await 点之间（同进程共享一个连接），
+    所以认领必须是**一段没有 await 的同步 CAS**：只有一个认领者拿到 True。
+    """
+    conn = _get_conn()
+    now = _dt_to_str(datetime.now())
+    cursor = conn.execute(
+        "UPDATE soul_notifications SET status = ?, updated_at = ? "
+        "WHERE notification_id = ? AND status = ?",
+        (NOTIFICATION_SENDING, now, notification_id, NOTIFICATION_PENDING),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def release_notification_claim(notification_id: str) -> None:
+    """把认领未完成的通知放回 pending（进程内异常路径）。"""
+    conn = _get_conn()
+    now = _dt_to_str(datetime.now())
+    conn.execute(
+        "UPDATE soul_notifications SET status = ?, updated_at = ? "
+        "WHERE notification_id = ? AND status = ?",
+        (NOTIFICATION_PENDING, now, notification_id, NOTIFICATION_SENDING),
+    )
+    conn.commit()
+
+
+def mark_pending_by_dedupe_sent(dedupe_key: str) -> int:
+    """按去重键结清**尚未发出**的历史记录（直发成功时调用）。
+
+    否则：同 key 先失败入队、后直发成功 → 那条 pending 还留着，
+    下次 drain 会把它再发一遍（用户收到重复通知）。
+    """
+    if not dedupe_key:
+        return 0
+    conn = _get_conn()
+    now = _dt_to_str(datetime.now())
+    cursor = conn.execute(
+        "UPDATE soul_notifications SET status = ?, sent_at = ?, updated_at = ?, last_error = '' "
+        "WHERE dedupe_key = ? AND status IN (?, ?)",
+        (NOTIFICATION_SENT, now, now, dedupe_key, NOTIFICATION_PENDING, NOTIFICATION_SENDING),
+    )
+    conn.commit()
+    return int(cursor.rowcount)
 
 
 def mark_notification_sent(notification_id: str) -> bool:

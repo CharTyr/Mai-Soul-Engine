@@ -187,11 +187,11 @@ async def run_evolution_loop(plugin) -> None:
                 and _pending_seed_notifications
             ):
                 try:
+                    # 清空由 _send_aggregated_seed_notification 在**交付成功后**负责；
+                    # 这里无条件 clear 会把「没管理员/冷却中」时未交付的内容丢掉。
                     await _send_aggregated_seed_notification(plugin)
                 except (RuntimeError, ValueError, OSError):
                     logger.exception("[SeedNotify] 聚合通知发送失败")
-                finally:
-                    _pending_seed_notifications.clear()
 
             # P1.5：自评反馈 → 光谱修正（仅 self_reflection.enabled）
             if plugin.config.self_reflection.enabled:
@@ -642,10 +642,21 @@ async def _send_aggregated_seed_notification(plugin) -> bool:
     # 走 outbox：失败不再是"一行日志就没了"，而是入队重放（种子被批准前不能丢）
     from ..utils.notify import send_or_queue
 
-    dedupe_key = f"seeds:{now.strftime('%Y%m%d%H')}:{','.join(sid for sid, _, _ in display)}"
+    # now 是 time.time() 浮点（用于冷却计算），**不是** datetime——
+    # 直接 strftime 会 AttributeError，通知根本发不出去（且静默进不了 outbox）。
+    from datetime import datetime as _dt
+
+    now_hour = _dt.fromtimestamp(now).strftime("%Y%m%d%H")
+    dedupe_key = f"seeds:{now_hour}:{','.join(sid for sid, _, _ in display)}"
     sent = await send_or_queue(
         plugin, text, admin_stream_id, dedupe_key=dedupe_key,
     )
+    # 内容已交付（直发成功 或 已落 outbox）→ 移除本次消费的条目。
+    # 早退路径（无管理员 / 冷却中 / 找不到 stream）**不走到这里**，
+    # 待发内容保留到下一轮——否则种子通知会被静默丢掉。
+    consumed = set(id(x) for x in display)
+    _pending_seed_notifications[:] = [x for x in _pending_seed_notifications if id(x) not in consumed]
+
     if sent:
         _last_aggregated_notification_ts = now
         logger.info("已发送聚合种子通知（%s 个） admin_stream=%s", total, admin_stream_id)

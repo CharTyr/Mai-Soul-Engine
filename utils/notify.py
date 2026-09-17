@@ -49,6 +49,13 @@ async def send_or_queue(
     try:
         result = await plugin.ctx.send.text(text=text, stream_id=stream_id)
         if _send_succeeded(result):
+            # 直发成功 → 结清同去重键的历史待发项。否则「先失败入队、后直发成功」
+            # 会让那条 pending 留在库里，下次重放再发一遍（用户收到重复通知）。
+            from ..models.notifications import mark_pending_by_dedupe_sent
+
+            superseded = mark_pending_by_dedupe_sent(dedupe_key)
+            if superseded:
+                logger.info("直发成功，已结清 %d 条同键待发通知（key=%s）", superseded, dedupe_key)
             return True
         error = f"send.text 返回失败: {result}"
     except Exception as e:  # noqa: BLE001 — 发送失败必须降级为入队，不能丢
@@ -71,14 +78,21 @@ async def drain_notifications(plugin: Any, limit: int = 20) -> dict[str, int]:
         ``{"sent": n, "retry": n, "failed": n}``
     """
     from ..models.notifications import (
+        claim_notification,
         list_pending_notifications,
         mark_notification_failed,
         mark_notification_sent,
         purge_old_notifications,
+        release_notification_claim,
     )
 
     stats = {"sent": 0, "retry": 0, "failed": 0}
     for notification in list_pending_notifications(limit=limit):
+        # 原子认领：并发的 drain（演化循环 / 发酵循环）只能有一个拿到这条，
+        # 否则同一条通知会被发两次。
+        if not claim_notification(notification.notification_id):
+            logger.debug("通知已被其他消费者认领，跳过（id=%s）", notification.notification_id)
+            continue
         try:
             result = await plugin.ctx.send.text(
                 text=notification.text, stream_id=notification.stream_id,
@@ -94,7 +108,12 @@ async def drain_notifications(plugin: Any, limit: int = 20) -> dict[str, int]:
             stats["sent"] += 1
             continue
 
-        status = mark_notification_failed(notification.notification_id, error)
+        try:
+            status = mark_notification_failed(notification.notification_id, error)
+        except Exception:
+            # 连记账都失败 → 至少把认领放回去，不然这条永远卡在 sending
+            release_notification_claim(notification.notification_id)
+            raise
         if status == "failed":
             stats["failed"] += 1
             logger.error(

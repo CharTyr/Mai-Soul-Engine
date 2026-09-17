@@ -119,7 +119,10 @@ def test_reset_confirm_reaches_execution_with_real_payload(soul_db) -> None:
         asyncio.run(rc.handle_reset(plugin, "qq-123-group", **{
             k: v for k, v in _real_command_kwargs("/soul_reset").items() if k != "stream_id"
         }))
-        assert "qq-123-group" in plugin._reset_confirm_ts
+        # 确认状态按 **操作者 + 会话** 绑定（防止同群他人补确认）
+        key = rc.reset_confirm_key("qq", "3659592968", "qq-123-group")
+        assert any("qq-123-group" in k for k in plugin._reset_confirm_ts)
+        assert key in plugin._reset_confirm_ts
         assert "确认" in sent[-1]
 
         # 第二次：确认 → 必须真正执行重置（而不是再次提示确认）
@@ -128,7 +131,7 @@ def test_reset_confirm_reaches_execution_with_real_payload(soul_db) -> None:
         }))
 
     assert "已重置为中立状态" in sent[-1]
-    assert "qq-123-group" not in plugin._reset_confirm_ts
+    assert key not in plugin._reset_confirm_ts
 
 
 def test_reset_without_confirm_only_asks(soul_db) -> None:

@@ -528,39 +528,52 @@ def test_candidate_validation_rejects_fabricated_evidence_and_unknown_axis(db):
 
 
 @pytest.mark.asyncio
-async def test_aggregated_notification_does_not_crash_and_keeps_content(db):
-    """聚合种子通知不得因时间类型报错，且失败时保留待发内容。"""
+async def test_aggregated_notification_handles_float_time(db):
+    """聚合通知的时间是浮点时间戳，不得对其直接 strftime（会崩、且内容进不了 outbox）。"""
     p = make_plugin("apply")
     p.config.admin.admin_user_id = "qq:fixture-admin"
+    ev._pending_seed_notifications.append(("fixture-seed", "type", "event"))
+    p.ctx.send.text = AsyncMock(return_value={"success": True})
+
+    await ev._send_aggregated_seed_notification(p)  # 修前抛 AttributeError
+
+    assert p.ctx.send.text.await_count == 1, "聚合通知没有真正发出去"
+
+
+@pytest.mark.asyncio
+async def test_aggregated_notification_not_lost_on_early_return(db):
+    """早退路径（未配置管理员）不得清空待发内容——否则种子通知被静默丢弃。"""
+    p = make_plugin("apply")
+    p.config.admin.admin_user_id = ""
     ev._pending_seed_notifications.append(("fixture-seed", "type", "event"))
 
     await ev._send_aggregated_seed_notification(p)
 
-    remaining = list(ev._pending_seed_notifications)
-    assert remaining, "发送后无条件清空了待发列表（失败会丢通知）"
+    assert list(ev._pending_seed_notifications), "未交付的内容被清空了"
 
 
 @pytest.mark.asyncio
 async def test_outbox_concurrent_drain_claims_once(db):
-    """并发重放不得把同一条待发通知发两次。"""
+    """并发重放不得把同一条待发通知发两次（认领必须是原子 CAS）。"""
     p = make_plugin("apply")
     ntf.enqueue_notification("test", "admin", "notice")
 
-    entered, proceed = asyncio.Event(), asyncio.Event()
+    started, release = asyncio.Event(), asyncio.Event()
     calls: list[dict] = []
 
     async def send(**kwargs):
         calls.append(kwargs)
-        if len(calls) == 2:
-            entered.set()
-        await proceed.wait()
+        started.set()
+        await release.wait()
         return {"success": True}
 
     p.ctx.send.text = send
-    tasks = [asyncio.create_task(notify.drain_notifications(p)) for _ in range(2)]
-    await entered.wait()
-    proceed.set()
-    await asyncio.gather(*tasks)
+    first = asyncio.create_task(notify.drain_notifications(p))
+    await started.wait()  # 第一条已在发送中（已被认领）
+    second = asyncio.create_task(notify.drain_notifications(p))
+    await asyncio.sleep(0.05)  # 给第二个消费者足够时间「抢」同一条
+    release.set()
+    await asyncio.gather(first, second)
 
     assert len(calls) == 1, f"同一条通知被发送 {len(calls)} 次"
 
