@@ -49,12 +49,9 @@ async def _resolve_via_get_stream(
             group_id=group_id,
             platform=platform,
         )
-        if isinstance(result, dict) and result.get("success"):
-            stream = result.get("stream")
-            if isinstance(stream, dict):
-                stream_id = str(stream.get("session_id", "") or "").strip()
-                if stream_id:
-                    return stream_id
+        stream_id = _extract_session_id(result)
+        if stream_id:
+            return stream_id
     except (RuntimeError, ValueError, OSError, AttributeError):
         pass
     return ""
@@ -69,13 +66,22 @@ async def _resolve_via_open_session(
       1. plugin.ctx.chat.open_session (direct attribute)
       2. plugin.ctx.call_capability("chat.open_session", …)
     """
+    account_id = (
+        await _resolve_host_bot_account_id(plugin)
+        if platform == "qq"
+        else ""
+    )
+    session_kwargs: dict[str, str] = {
+        "platform": platform,
+        "group_id": group_id,
+        "chat_type": "group",
+    }
+    if account_id:
+        session_kwargs["account_id"] = account_id
+
     # Path A — direct attribute
     try:
-        result = await plugin.ctx.chat.open_session(
-            platform=platform,
-            group_id=group_id,
-            chat_type="group",
-        )
+        result = await plugin.ctx.chat.open_session(**session_kwargs)
         sid = _extract_session_id(result)
         if sid:
             logger.info(
@@ -90,9 +96,7 @@ async def _resolve_via_open_session(
     try:
         result = await plugin.ctx.call_capability(
             "chat.open_session",
-            platform=platform,
-            group_id=group_id,
-            chat_type="group",
+            **session_kwargs,
         )
         sid = _extract_session_id(result)
         if sid:
@@ -128,8 +132,8 @@ def _extract_session_id(result: Any) -> str:
     return ""
 
 
-async def resolve_host_bot_self_ids(plugin: Any) -> list[str]:
-    """Read the bot's QQ identity from host configuration, not plugin config."""
+async def _resolve_host_bot_account_id(plugin: Any) -> str:
+    # Accept both SDK 2.x unwrapped values and legacy result envelopes.
     try:
         result = await plugin.ctx.call_capability(
             "config.get",
@@ -137,10 +141,20 @@ async def resolve_host_bot_self_ids(plugin: Any) -> list[str]:
             default="",
         )
     except (RuntimeError, ValueError, OSError, AttributeError):
-        return []
-    if not isinstance(result, dict) or not result.get("success"):
-        return []
-    account_id = str(result.get("value", "") or "").strip()
+        return ""
+
+    if isinstance(result, str):
+        return result.strip()
+    if isinstance(result, dict):
+        if "success" in result and not result.get("success"):
+            return ""
+        return str(result.get("value", "") or "").strip()
+    return ""
+
+
+async def resolve_host_bot_self_ids(plugin: Any) -> list[str]:
+    """Read the bot's QQ identity from host configuration, not plugin config."""
+    account_id = await _resolve_host_bot_account_id(plugin)
     return [f"qq:{account_id}"] if account_id else []
 
 

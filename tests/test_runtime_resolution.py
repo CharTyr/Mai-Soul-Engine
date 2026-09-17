@@ -151,6 +151,108 @@ def test_host_bot_identity_is_read_from_main_config() -> None:
     assert identities == ["qq:3430049585"]
 
 
+
+def test_group_resolution_accepts_unwrapped_session_dict() -> None:
+    # SDK 2.x unwraps get_stream_by_group_id to a flat session dict.
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            return {"session_id": "unwrapped-session"}
+
+    plugin = SimpleNamespace(ctx=SimpleNamespace(chat=Chat()))
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == "unwrapped-session"
+
+
+def test_group_resolution_open_session_uses_host_account_id() -> None:
+    # Fallback session creation must preserve the host bot account scope.
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+    captured: dict[str, object] = {}
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            return None
+
+        async def open_session(
+            self,
+            platform: str,
+            group_id: str,
+            chat_type: str,
+            *,
+            account_id: str,
+        ):
+            captured.update(
+                platform=platform,
+                group_id=group_id,
+                chat_type=chat_type,
+                account_id=account_id,
+            )
+            return {"session_id": "account-scoped-session"}
+
+    class Context:
+        chat = Chat()
+
+        async def call_capability(self, capability: str, **kwargs: object):
+            if capability == "config.get":
+                return "3430049585"
+            return None
+
+    plugin = SimpleNamespace(ctx=Context())
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == "account-scoped-session"
+    assert captured["account_id"] == "3430049585"
+
+
+def test_group_resolution_capability_fallback_uses_host_account_id() -> None:
+    # The raw capability fallback must carry the same account scope.
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+    captured: dict[str, object] = {}
+
+    class Chat:
+        async def get_stream_by_group_id(self, group_id: str, platform: str):
+            return None
+
+    class Context:
+        chat = Chat()
+
+        async def call_capability(self, capability: str, **kwargs: object):
+            captured[capability] = kwargs
+            if capability == "config.get":
+                return "3430049585"
+            if capability == "chat.open_session":
+                return {"session_id": "capability-account-scoped-session"}
+            return None
+
+    plugin = SimpleNamespace(ctx=Context())
+    stream_id = asyncio.run(runtime.resolve_monitored_group_stream(plugin, "qq:12345:group"))
+
+    assert stream_id == "capability-account-scoped-session"
+    assert captured["chat.open_session"] == {
+        "platform": "qq",
+        "group_id": "12345",
+        "chat_type": "group",
+        "account_id": "3430049585",
+    }
+
+
+def test_host_bot_identity_accepts_unwrapped_config_value() -> None:
+    # SDK 2.x unwraps config.get to the configured string value.
+    runtime = _import_soul_submodule("utils.runtime_resolution")
+
+    class Context:
+        async def call_capability(self, capability: str, **kwargs: object):
+            assert capability == "config.get"
+            return "3430049585"
+
+    plugin = SimpleNamespace(ctx=Context())
+    identities = asyncio.run(runtime.resolve_host_bot_self_ids(plugin))
+
+    assert identities == ["qq:3430049585"]
+
+
 def test_monitor_schema_has_no_plugin_side_bot_identity() -> None:
     schema = _import_soul_submodule("plugin_ui_schema")
     assert "bot_self_id" not in schema.MonitorConfig.model_fields
