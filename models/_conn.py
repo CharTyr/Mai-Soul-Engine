@@ -27,7 +27,7 @@ __all__ = [
     "init_db",
 ]
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -234,6 +234,21 @@ _CREATE_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS soul_notifications (
+        notification_id TEXT PRIMARY KEY,
+        dedupe_key TEXT NOT NULL,
+        stream_id TEXT DEFAULT '',
+        text TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        attempts INTEGER DEFAULT 0,
+        max_attempts INTEGER DEFAULT 3,
+        last_error TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        sent_at TEXT DEFAULT ''
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS soul_seed_operations (
         operation_id TEXT PRIMARY KEY,
         seed_id TEXT NOT NULL,
@@ -397,6 +412,7 @@ def _run_migrations() -> None:
             _run_v1_migration()
             _record_migration_success(1, "v1_legacy_bootstrap")
             _set_schema_version(1)
+            current = 1
         except Exception as e:
             _record_migration_failed(1, "v1_legacy_bootstrap", str(e))
             raise
@@ -407,6 +423,7 @@ def _run_migrations() -> None:
             _run_v2_migration()
             _record_migration_success(2, "v2_cabinet_slot_no")
             _set_schema_version(2)
+            current = 2
         except Exception as e:
             _record_migration_failed(2, "v2_cabinet_slot_no", str(e))
             raise
@@ -417,6 +434,7 @@ def _run_migrations() -> None:
             _run_v3_migration()
             _record_migration_success(3, "v3_snapshot_pairing_and_delivery")
             _set_schema_version(3)
+            current = 3
         except Exception as e:
             _record_migration_failed(3, "v3_snapshot_pairing_and_delivery", str(e))
             raise
@@ -427,9 +445,56 @@ def _run_migrations() -> None:
             _run_v4_migration()
             _record_migration_success(4, "v4_seed_operation_lease")
             _set_schema_version(4)
+            current = 4
         except Exception as e:
             _record_migration_failed(4, "v4_seed_operation_lease", str(e))
             raise
+
+    if current < 5:
+        _record_migration_start(5, "v5_notification_outbox")
+        try:
+            _run_v5_migration()
+            _record_migration_success(5, "v5_notification_outbox")
+            _set_schema_version(5)
+            current = 5
+        except Exception as e:
+            _record_migration_failed(5, "v5_notification_outbox", str(e))
+            raise
+
+
+def _run_v5_migration() -> None:
+    """Version 5：通知 outbox。
+
+    通知发送失败必须可重试、可查询，不能静默丢——否则「管理员没收到通知」
+    会被误当成「没有需要通知的事」。``dedupe_key`` 唯一，重排队不会刷屏。
+    """
+    conn = _get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS soul_notifications (
+            notification_id TEXT PRIMARY KEY,
+            dedupe_key TEXT NOT NULL,
+            stream_id TEXT DEFAULT '',
+            text TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            attempts INTEGER DEFAULT 0,
+            max_attempts INTEGER DEFAULT 3,
+            last_error TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT '',
+            sent_at TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe "
+        "ON soul_notifications(dedupe_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_status "
+        "ON soul_notifications(status, created_at)"
+    )
+    conn.commit()
 
 
 def _run_v4_migration() -> None:

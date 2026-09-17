@@ -91,6 +91,13 @@ async def run_fermentation_loop(plugin: Any) -> None:
     while True:
         try:
             await asyncio.sleep(interval)
+            # 重放通知 outbox（发酵通知失败后在这里补发）
+            try:
+                from ..utils.notify import drain_notifications
+
+                await drain_notifications(plugin)
+            except Exception as e:  # noqa: BLE001 — 重放失败不影响发酵
+                logger.warning("[Fermentation] 通知 outbox 重放失败: %s: %s", type(e).__name__, e)
             await _fermentation_cycle(plugin)
         except asyncio.CancelledError:
             logger.info("[Fermentation] 发酵循环被取消")
@@ -335,10 +342,13 @@ async def _try_notify_admin_insufficient(plugin: Any, seed: Any, input_count: in
         f"收集到 {input_count}/{min_inputs} 条相关输入，已达最大延长次数\n"
         f"种子保持发酵状态，可手动处理 (approve/reject)"
     )
-    try:
-        await plugin.ctx.send.text(text=text, stream_id=admin_stream_id)
-    except (RuntimeError, ValueError, OSError):
-        logger.debug("[Fermentation] 发送管理员通知失败 seed=%s", seed.seed_id)
+    # 走 outbox：证据不足需要人工定夺，通知丢了这粒种子会一直卡在 fermenting
+    from ..utils.notify import send_or_queue
+
+    await send_or_queue(
+        plugin, text, admin_stream_id,
+        dedupe_key=f"ferment_insufficient:{seed.seed_id}",
+    )
 
 
 async def _try_notify_admin_fermented(plugin: Any, seed: Any, trait_id: str) -> None:
@@ -383,10 +393,12 @@ async def _try_notify_admin_fermented(plugin: Any, seed: Any, trait_id: str) -> 
         logger.info("[Fermentation] 种子 %s 发酵内化: trait=%s（未找到管理员流，仅日志）", seed.seed_id, trait_id)
         return
 
-    try:
-        await plugin.ctx.send.text(text=text, stream_id=admin_stream_id)
-    except (RuntimeError, ValueError, OSError):
-        logger.debug("[Fermentation] 发送管理发酵成功通知失败 seed=%s", seed.seed_id)
+    from ..utils.notify import send_or_queue
+
+    await send_or_queue(
+        plugin, text, admin_stream_id,
+        dedupe_key=f"ferment_done:{seed.seed_id}:{trait_id}",
+    )
 
 
 async def _check_completion(plugin: Any, seed: Any) -> None:

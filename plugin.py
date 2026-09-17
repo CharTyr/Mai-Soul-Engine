@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 from collections.abc import Mapping
@@ -241,53 +242,91 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         # 启动周期任务（统一管理）
         await self._reconcile_background_tasks()
 
+        # 重启后补发上次未送出的管理员通知
+        try:
+            from .utils.notify import drain_notifications
+
+            stats = await drain_notifications(self)
+            if stats["sent"] or stats["failed"]:
+                logger.info(
+                    "[Mai-Soul-Engine] 启动补发通知: 发出 %s / 待重试 %s / 放弃 %s",
+                    stats["sent"], stats["retry"], stats["failed"],
+                )
+        except Exception as e:  # noqa: BLE001 — 补发失败不影响启动
+            logger.warning("[Mai-Soul-Engine] 启动补发通知失败: %s: %s", type(e).__name__, e)
+
     async def on_unload(self) -> None:
-        """插件卸载：取消周期任务、关闭数据库。"""
-        from .models.ideology_model import close_db
+        """插件卸载：取消周期任务、清模块级状态、关闭数据库。
 
-        if self._evolution_task is not None:
-            self._evolution_task.cancel()
+        **每一步独立兜底**：单个清理步骤失败不得中断其余步骤。卸载不完整是
+        「重启后状态诡异」的常见来源（库没关 → 连接泄漏；状态没清 → 旧冷却
+        串到新实例），而失败原因必须留在日志里，不能无声跳过。
+        """
+
+        async def _step(label: str, fn: Any) -> None:
             try:
-                await self._evolution_task
+                result = fn()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:  # noqa: BLE001 — 清理步骤的失败必须被隔离
+                logger.warning(
+                    "[Mai-Soul-Engine] 卸载清理步骤「%s」失败，继续其余步骤: %s: %s",
+                    label, type(e).__name__, e,
+                )
+
+        async def _cancel_task(attr_name: str) -> None:
+            task = getattr(self, attr_name, None)
+            if task is None:
+                return
+            try:
+                task.cancel()
+                await task
             except asyncio.CancelledError:
                 pass
-            self._evolution_task = None
+            except Exception as e:  # noqa: BLE001 — 任务自身异常不该阻断卸载
+                logger.warning(
+                    "[Mai-Soul-Engine] 取消 %s 时任务报错: %s: %s",
+                    attr_name, type(e).__name__, e,
+                )
+            finally:
+                setattr(self, attr_name, None)
 
-        if self._notion_sync_task is not None:
-            self._notion_sync_task.cancel()
-            try:
-                await self._notion_sync_task
-            except asyncio.CancelledError:
-                pass
-            self._notion_sync_task = None
-
-        if self._self_reflection_task is not None:
-            self._self_reflection_task.cancel()
-            try:
-                await self._self_reflection_task
-            except asyncio.CancelledError:
-                pass
-            self._self_reflection_task = None
-
-        # v2.4.0: 取消发酵任务
-        if self._fermentation_task is not None:
-            self._fermentation_task.cancel()
-            try:
-                await self._fermentation_task
-            except asyncio.CancelledError:
-                pass
-            self._fermentation_task = None
+        for attr_name in (
+            "_evolution_task",
+            "_notion_sync_task",
+            "_self_reflection_task",
+            "_fermentation_task",
+        ):
+            await _step(f"取消 {attr_name}", lambda a=attr_name: _cancel_task(a))
 
         # 清模块级可变状态，防插件重载间泄漏
-        from .components.ideology_injector import _RECENT_TRAIT_INJECTION
-        _RECENT_TRAIT_INJECTION.clear()
-        from .components.reflection_capture import _context_cache
-        _context_cache.clear()
-        from .components.evolution_task import _bot_filter_warned, reset_aggregation_state
-        _bot_filter_warned.clear()
-        reset_aggregation_state()
+        async def _clear_module_state() -> None:
+            from .components.ideology_injector import _RECENT_TRAIT_INJECTION
 
-        close_db()
+            _RECENT_TRAIT_INJECTION.clear()
+
+        async def _clear_context_cache() -> None:
+            from .components.reflection_capture import _context_cache
+
+            _context_cache.clear()
+
+        async def _reset_evolution_state() -> None:
+            from .components.evolution_task import _bot_filter_warned, reset_aggregation_state
+
+            _bot_filter_warned.clear()
+            reset_aggregation_state()
+
+        await _step("清注入冷却表", _clear_module_state)
+        await _step("清自评上下文缓存", _clear_context_cache)
+        await _step("清演化聚合状态", _reset_evolution_state)
+
+        async def _close_database() -> None:
+            from .models.ideology_model import close_db
+
+            close_db()
+
+        await _step("关闭数据库", _close_database)
+
         logger.info("[Mai-Soul-Engine] 插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:

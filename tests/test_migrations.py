@@ -33,7 +33,6 @@ def _get_im() -> Any:
 def test_fresh_init_schema_version(soul_db: Any) -> None:
     """新库 init_db 后 PRAGMA user_version == CURRENT_SCHEMA_VERSION。"""
     conn_mod = _get_conn_mod()
-    assert conn_mod.CURRENT_SCHEMA_VERSION == 4
     assert conn_mod._get_schema_version() == conn_mod.CURRENT_SCHEMA_VERSION
 
 
@@ -360,3 +359,43 @@ def test_migration_failure_does_not_advance_version(soul_db: Any, monkeypatch: p
     ).fetchone()
     assert row is not None
     assert row["status"] == "success"
+
+# ─── 增量升级路径 ───────────────────────────────────────────────────
+
+
+def test_partial_version_upgrades_to_current(soul_db: Any) -> None:
+    """停在中间版本（如 v3）的库能一路升到当前版本。
+
+    迁移块之间不得互相覆盖版本号——一旦顺序错位，user_version 会停在中间值，
+    下次启动会重跑迁移（或跳过缺失的迁移）。
+    """
+    conn_mod = _get_conn_mod()
+    conn = conn_mod._get_conn()
+
+    # 造一个"只升到 v3"的库：清掉后面的迁移记录并回退版本
+    conn.execute("DELETE FROM soul_schema_migrations WHERE version >= 4")
+    conn.commit()
+    conn_mod._set_schema_version(3)
+
+    conn_mod._run_migrations()
+
+    assert conn_mod._get_schema_version() == conn_mod.CURRENT_SCHEMA_VERSION
+    rows = conn.execute(
+        "SELECT version, status FROM soul_schema_migrations ORDER BY version"
+    ).fetchall()
+    versions = [r["version"] for r in rows]
+    assert versions == sorted(versions), "迁移记录必须按版本升序落账"
+    assert all(r["status"] == "success" for r in rows)
+    assert conn_mod.CURRENT_SCHEMA_VERSION in versions
+
+
+def test_notification_table_exists_after_migrations(soul_db: Any) -> None:
+    """v5 迁移后通知 outbox 表与其唯一索引存在。"""
+    conn_mod = _get_conn_mod()
+    conn = conn_mod._get_conn()
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(soul_notifications)").fetchall()}
+    assert {"notification_id", "dedupe_key", "stream_id", "text", "status", "attempts"} <= cols
+
+    indexes = {r[1] for r in conn.execute("PRAGMA index_list(soul_notifications)").fetchall()}
+    assert "idx_notifications_dedupe" in indexes

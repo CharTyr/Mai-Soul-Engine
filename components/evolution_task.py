@@ -84,6 +84,19 @@ async def run_evolution_loop(plugin) -> None:
             logger.debug("演化循环等待 %s 小时", interval_hours)
             await asyncio.sleep(interval_hours * 3600)
 
+            # 先重放通知 outbox：演化/发酵产生的通知若之前发送失败，在这里补发
+            try:
+                from ..utils.notify import drain_notifications
+
+                stats = await drain_notifications(plugin)
+                if stats["sent"] or stats["failed"]:
+                    logger.info(
+                        "通知 outbox 重放: 发出 %s / 待重试 %s / 放弃 %s",
+                        stats["sent"], stats["retry"], stats["failed"],
+                    )
+            except Exception as e:  # noqa: BLE001 — 重放失败不影响演化
+                logger.warning("通知 outbox 重放失败: %s: %s", type(e).__name__, e)
+
             if not plugin.config.evolution.evolution_enabled:
                 logger.debug("演化已禁用，跳过本轮")
                 continue
@@ -601,11 +614,16 @@ async def _send_aggregated_seed_notification(plugin) -> bool:
         + "\n\n用 /soul_seed <ID> 查看详情，/soul_approve <ID> 批准内化。"
     )
 
-    try:
-        await plugin.ctx.send.text(text=text, stream_id=admin_stream_id)
+    # 走 outbox：失败不再是"一行日志就没了"，而是入队重放（种子被批准前不能丢）
+    from ..utils.notify import send_or_queue
+
+    dedupe_key = f"seeds:{now.strftime('%Y%m%d%H')}:{','.join(sid for sid, _, _ in display)}"
+    sent = await send_or_queue(
+        plugin, text, admin_stream_id, dedupe_key=dedupe_key,
+    )
+    if sent:
         _last_aggregated_notification_ts = now
         logger.info("已发送聚合种子通知（%s 个） admin_stream=%s", total, admin_stream_id)
-        return True
-    except (RuntimeError, ValueError, OSError):
-        logger.exception("发送聚合种子通知失败（%s 个）", total)
-        return False
+    else:
+        logger.warning("聚合种子通知转入 outbox 待重放（%s 个）", total)
+    return sent
