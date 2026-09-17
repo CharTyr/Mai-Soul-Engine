@@ -1,10 +1,11 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from ..utils.runtime_resolution import generate_soul_text
 from ..prompts.fermentation_prompts import FERMENTED_INTERNALIZATION_PROMPT
+from .candidate import build_trait_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +144,28 @@ class InternalizationEngine:
                 logger.warning(f"内化响应解析失败: {seed_info.get('id', '')}")
                 return {"success": False, "error": "内化响应解析失败"}
 
-            internalization_confidence = 0.0
-            try:
-                internalization_confidence = float(result.get("confidence", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                internalization_confidence = 0.0
-            internalization_confidence = max(0.0, min(1.0, internalization_confidence))
+            # Phase D「候选优先」：LLM 输出是**候选**，不是人格。
+            # 结构非法（空观点 / 数值无法解析 / 越界 / 类型错误）→ 明确拒绝并记录原因，
+            # 不写任何人格状态。旧行为是静默 clamp 或归零，出了事无法归因。
+            max_delta = self._max_internalize_delta(is_fermented)
+            candidate = build_trait_candidate(result, max_delta=max_delta)
+            if not candidate.valid:
+                logger.warning(
+                    "内化候选被拒（种子 %s）: %s",
+                    seed_info.get("id", ""), candidate.rejection_reason,
+                )
+                return {
+                    "success": False,
+                    "error": f"候选被拒: {candidate.rejection_reason}",
+                    "candidate_rejected": True,
+                    "rejection_reason": candidate.rejection_reason,
+                }
+            for warning in candidate.warnings:
+                logger.info(
+                    "内化候选告警（种子 %s）: %s", seed_info.get("id", ""), warning,
+                )
+
+            internalization_confidence = candidate.confidence
 
             # Phase 0C：原子化内化 — 光谱 + trait + graph edges 在同一事务中
             # 先完成 LLM 处理后，再统一进入 DB 写入阶段。BEGIN 必须放在所有 DML 之前，
@@ -158,8 +175,9 @@ class InternalizationEngine:
             conn = _get_db_conn()
             conn.execute("BEGIN")
             try:
+                # 只应用已校验的 delta（候选校验已挡住非数字/越界，这里不会再抛 ValueError）
                 spectrum_impact = await self._apply_spectrum_impact(
-                    result.get("spectrum_deltas", result.get("spectrum_impact", {})),
+                    candidate.spectrum_deltas,
                     is_fermented=is_fermented,
                     commit=False,
                 )
@@ -256,7 +274,22 @@ class InternalizationEngine:
             logger.warning(f"无法解析内化响应: {response}")
             return None
 
-    async def _apply_spectrum_impact(self, impact: dict, is_fermented: bool = False, commit: bool = True) -> dict:
+    def _max_internalize_delta(self, is_fermented: bool) -> int:
+        """单轴允许的最大 delta：发酵后内化更宽（默认 ±15），即时内化 ±10。
+
+        从配置读取；非数字或缺失时回落默认值。该值同时用于**候选校验**
+        （越界即拒绝）与光谱写入，两处必须一致。
+        """
+        default = 15 if is_fermented else 10
+        attr = "fermented_max_internalize_delta" if is_fermented else "max_internalize_delta"
+        try:
+            return int(getattr(self._plugin.config.thought_cabinet, attr, default))
+        except (AttributeError, TypeError, ValueError):
+            return default
+
+    async def _apply_spectrum_impact(
+        self, impact: Mapping[str, Any], is_fermented: bool = False, commit: bool = True,
+    ) -> dict:
         from ..models.ideology_model import apply_spectrum_deltas, get_or_create_spectrum
 
         spectrum = get_or_create_spectrum("global")
@@ -269,19 +302,8 @@ class InternalizationEngine:
         }
         logger.debug(f"应用光谱影响前: {old_values}")
 
-        # v2.4.0: 发酵后内化使用 fermented_max_internalize_delta（更大），即时内化用 max_internalize_delta
-        if is_fermented:
-            max_delta = 15
-            try:
-                max_delta = int(getattr(self._plugin.config.thought_cabinet, "fermented_max_internalize_delta", 15))
-            except (AttributeError, TypeError, ValueError):
-                pass
-        else:
-            max_delta = 10
-            try:
-                max_delta = int(getattr(self._plugin.config.thought_cabinet, "max_internalize_delta", 10))
-            except (AttributeError, TypeError, ValueError):
-                pass
+        # v2.4.0: 发酵后内化用 fermented_max_internalize_delta（更大），即时内化用 max_internalize_delta
+        max_delta = self._max_internalize_delta(is_fermented)
         applied = apply_spectrum_deltas(
             "internalize",
             {
