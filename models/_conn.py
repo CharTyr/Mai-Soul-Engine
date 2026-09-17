@@ -27,7 +27,7 @@ __all__ = [
     "init_db",
 ]
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -471,6 +471,38 @@ def _run_migrations() -> None:
         except Exception as e:
             _record_migration_failed(6, "v6_snapshot_pairing_ambiguous", str(e))
             raise
+
+    if current < 7:
+        _record_migration_start(7, "v7_snapshot_bot_identity")
+        try:
+            _run_v7_migration()
+            _record_migration_success(7, "v7_snapshot_bot_identity")
+            _set_schema_version(7)
+            current = 7
+        except Exception as e:
+            _record_migration_failed(7, "v7_snapshot_bot_identity", str(e))
+            raise
+
+
+def _run_v7_migration() -> None:
+    """Version 7：注入快照记录**机器人身份**。
+
+    同一条 session_id 在换机器人/换部署后可能指向不同人格数据；快照不带身份就
+    无法判断「这条记录属于谁」。身份来源是宿主 ``bot.qq_account``（权威），
+    插件侧不重复维护。
+
+    **平台字段故意没加**：宿主 hook 载荷与流列表接口都没有平台字段，
+    按 session_id 字符串猜平台是方案明令禁止的。平台需求已并入宿主最小接口
+    变更清单（见 ACCEPTANCE §6.1），拿到之前不造一个永远为空的列。
+    """
+    conn = _get_conn()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(soul_injection_snapshots)")}
+    if "bot_identity" not in cols:
+        conn.execute(
+            "ALTER TABLE soul_injection_snapshots "
+            "ADD COLUMN bot_identity TEXT NOT NULL DEFAULT ''"
+        )
+    conn.commit()
 
 
 def _run_v6_migration() -> None:

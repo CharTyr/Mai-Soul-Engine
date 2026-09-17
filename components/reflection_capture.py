@@ -108,6 +108,7 @@ def maybe_write_injection_snapshot(
     mood_lines: list[str],
     selection_mode: str,
     context_lines: list[str] | None = None,
+    bot_identity: str = "",
 ) -> str:
     """仅 ``[self_reflection].enabled`` 时落注入快照，返回 snapshot_id（否则空串）。
 
@@ -115,6 +116,9 @@ def maybe_write_injection_snapshot(
 
     ``context_lines``（本轮触发上文）随快照落库：同会话并发两轮时，
     放在 session 键缓存里会互相顶掉，回复会配上别人的触发消息。
+
+    ``bot_identity``：宿主 ``bot.qq_account``（权威来源）。同一条 session_id
+    在换机器人后可能指向不同人格，快照不带身份就无法判断归属。
     """
     if not plugin.config.self_reflection.enabled:
         return ""
@@ -124,6 +128,8 @@ def maybe_write_injection_snapshot(
     fingerprint = hashlib.md5(fp_src.encode()).hexdigest()[:16]
     mood_json = _json.dumps({"lines": mood_lines}, ensure_ascii=False) if mood_lines else "{}"
     context_json = _json.dumps(list(context_lines), ensure_ascii=False) if context_lines else "[]"
+    # bot_identity 由**异步调用方**解析后传入：本函数是同步的（不能 await），
+    # 身份解析属于 IO。取不到时留空——作用域字段宁可缺席也不编造。
     try:
         from ..models.self_reflection import create_injection_snapshot
 
@@ -136,6 +142,7 @@ def maybe_write_injection_snapshot(
             selection_mode=selection_mode,
             context_fingerprint=fingerprint,
             context_json=context_json,
+            bot_identity=bot_identity,
         )
     except Exception:
         logger.exception("[SelfReflection] 写注入快照失败")

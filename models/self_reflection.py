@@ -96,6 +96,8 @@ class InjectionSnapshot:
     # 配对歧义：同会话存在多条未认领快照时，无法确定这条回复对应哪次注入。
     # 下游**不得**据此改写人格（标记而不是猜）。
     pairing_ambiguous: bool = False
+    # 作用域：这条快照属于哪个机器人（宿主 bot.qq_account；取不到为空串）
+    bot_identity: str = ""
 
 
 @dataclass
@@ -148,10 +150,13 @@ def create_injection_snapshot(
     selection_mode: str,
     context_fingerprint: str = "",
     context_json: str = "[]",
+    bot_identity: str = "",
 ) -> str:
     """落一条注入快照，返回 snapshot_id。仅在 [self_reflection].enabled 时调用。
 
     ``context_json`` 是该轮的触发上文，随快照一起落库，保证并发轮次互不覆盖。
+    ``bot_identity`` 是宿主 ``bot.qq_account``——作用域字段之一，用于回答
+    「这条记录属于哪个机器人」。取不到时留空（不编造）。
     """
     conn = _get_conn()
     snapshot_id = uuid.uuid4().hex
@@ -159,8 +164,8 @@ def create_injection_snapshot(
         """INSERT INTO soul_injection_snapshots
            (snapshot_id, stream_id, session_id, created_at, trait_ids_json,
             spectrum_json, mood_json, selection_mode, context_fingerprint,
-            context_json, delivery_state)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            context_json, delivery_state, bot_identity)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             snapshot_id,
             stream_id,
@@ -173,6 +178,7 @@ def create_injection_snapshot(
             context_fingerprint,
             context_json,
             DELIVERY_SELECTED,
+            str(bot_identity or ""),
         ),
     )
     conn.commit()
@@ -571,6 +577,7 @@ def _row_to_snapshot(row) -> InjectionSnapshot:
         pairing_ambiguous=bool(
             row["pairing_ambiguous"] if "pairing_ambiguous" in row.keys() else 0
         ),
+        bot_identity=(row["bot_identity"] if "bot_identity" in row.keys() else ""),
     )
 
 

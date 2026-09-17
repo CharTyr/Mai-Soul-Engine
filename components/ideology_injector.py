@@ -192,6 +192,30 @@ INJECTION_LOG_MAX_BYTES: int = _INJECTION_LOG_MAX_SIZE_MB * 1024 * 1024
 INJECTION_LOG_RETENTION_DAYS: int = 14
 
 
+# 机器人身份（作用域字段）缓存：宿主配置不常变，别在注入热路径上反复读取
+_BOT_IDENTITY_CACHE: dict[str, Any] = {"value": "", "at": 0.0}
+_BOT_IDENTITY_TTL = 600.0
+
+
+async def _resolve_cached_bot_identity(plugin) -> str:
+    """带 TTL 缓存的宿主 bot 身份（作用域字段；读不到返回空串）。"""
+    import time as _time
+
+    now = _time.time()
+    if now - float(_BOT_IDENTITY_CACHE["at"]) < _BOT_IDENTITY_TTL:
+        return str(_BOT_IDENTITY_CACHE["value"])
+    identity = ""
+    try:
+        from ..utils.runtime_resolution import resolve_host_bot_identity
+
+        identity = await resolve_host_bot_identity(plugin)
+    except Exception:  # noqa: BLE001 — 身份读不到不影响注入与快照
+        logger.debug("[注入] 读取宿主 bot 身份失败（作用域字段留空）")
+    _BOT_IDENTITY_CACHE["value"] = identity
+    _BOT_IDENTITY_CACHE["at"] = now
+    return identity
+
+
 def _purge_expired_injection_logs(plugin_dir: Path, *, now: float | None = None) -> list[str]:
     """删掉超过保留期的注入日志（含轮转文件）。返回被删的文件名。
 
@@ -889,6 +913,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         snapshot_id = maybe_write_injection_snapshot(
             plugin, session_id, stream_id, selected, spectrum_dict, mood_lines, selection_mode,
             context_lines=context_lines,
+            bot_identity=await _resolve_cached_bot_identity(plugin),
         )
     if snapshot_id:
         # INJECTION_SNAPSHOT_TODO: 这里只能确认「已交回宿主」。

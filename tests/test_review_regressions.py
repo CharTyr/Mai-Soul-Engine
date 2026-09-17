@@ -670,3 +670,25 @@ def _cfg_dict(mode: str = "apply", **flags) -> dict:
     cfg.evolution.evolution_enabled = bool(flags.get("evolution", False))
     cfg.thought_cabinet.enabled = bool(flags.get("thought_cabinet", False))
     return cfg.model_dump()
+
+
+def test_snapshot_records_bot_identity_scope_field(db):
+    """作用域字段：快照必须记录**机器人身份**，且取不到时留空而不是编造。
+
+    来源必须是宿主 ``bot.qq_account``（权威）。同一条 session_id 在换机器人后
+    可能指向不同人格数据——不带身份的快照无法回答「这条记录属于谁」。
+    """
+    snap_id = sr.create_injection_snapshot(
+        "group-A", "sess-1", '["trait-x"]', "{}", "{}", "tag_hit",
+        bot_identity="qq:12345678",
+    )
+    stored = sr.get_injection_snapshot(snap_id)
+    assert stored is not None
+    assert stored.bot_identity == "qq:12345678", "快照没有记录机器人身份"
+
+    # 取不到身份时留空——空串表示「未知」，不是「无身份」
+    snap2 = sr.create_injection_snapshot(
+        "group-A", "sess-2", "[]", "{}", "{}", "spectrum_only",
+    )
+    stored2 = sr.get_injection_snapshot(snap2)
+    assert stored2 is not None and stored2.bot_identity == ""

@@ -32,6 +32,11 @@ def im(conn_mod: Any) -> Any:
     model.close_db()
 
 
+def _latest() -> int:
+    """从模块取最新版本号——**不要硬编码**，否则每次加迁移测试都要改。"""
+    return int(_import_soul_submodule("models._conn").CURRENT_SCHEMA_VERSION)
+
+
 def _version(db: Path) -> int:
     conn = sqlite3.connect(str(db))
     try:
@@ -97,15 +102,18 @@ def test_wal_db_migrates_forward_without_losing_rows(im: Any, tmp_path: Path) ->
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("DROP TABLE IF EXISTS soul_notifications")
     conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN pairing_ambiguous")
-    conn.execute("PRAGMA user_version = 3")
+    conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN bot_identity")
+    conn.execute(f"PRAGMA user_version = {_latest() - 2}")
     conn.commit()
     conn.close()
 
-    assert _version(db) == 3
+    stale = _latest() - 2
+    assert _version(db) == stale
     im.init_db(db)
 
-    assert _version(db) == 6, "迁移没有推进到最新版本"
+    assert _version(db) == _latest(), "迁移没有推进到最新版本"
     assert _has_column(db, "soul_injection_snapshots", "pairing_ambiguous")
+    assert _has_column(db, "soul_injection_snapshots", "bot_identity")
     _assert_rows_intact(im)
 
     conn = sqlite3.connect(str(db))
@@ -144,29 +152,30 @@ def test_interrupted_migration_does_not_advance_version(
     _seed_rows(im)
     im.close_db()
 
-    # 退回 v5 并拆掉 v6 产物，制造「v6 待执行」的状态
+    # 退回一个版本并拆掉最后一个迁移的产物，制造「待执行」的状态
+    latest = _latest()
     conn = sqlite3.connect(str(db))
-    conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN pairing_ambiguous")
-    conn.execute("PRAGMA user_version = 5")
+    conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN bot_identity")
+    conn.execute(f"PRAGMA user_version = {latest - 1}")
     conn.commit()
     conn.close()
 
     def _boom() -> None:
         raise RuntimeError("injected migration failure")
 
-    monkeypatch.setattr(conn_mod, "_run_v6_migration", _boom)
+    monkeypatch.setattr(conn_mod, f"_run_v{latest}_migration", _boom)
     with pytest.raises(RuntimeError):
         im.init_db(db)
     im.close_db()
 
-    assert _version(db) == 5, "失败的迁移推进了 user_version"
-    assert any(status == "failed" for status, _ in _ledger(db, 6)), "账本没记失败"
+    assert _version(db) == latest - 1, "失败的迁移推进了 user_version"
+    assert any(status == "failed" for status, _ in _ledger(db, latest)), "账本没记失败"
 
     # 放开故障 → 重试仍从失败版本开始并完成
     monkeypatch.undo()
     im.init_db(db)
-    assert _version(db) == 6
-    assert _has_column(db, "soul_injection_snapshots", "pairing_ambiguous")
+    assert _version(db) == latest
+    assert _has_column(db, "soul_injection_snapshots", "bot_identity")
     _assert_rows_intact(im)
 
 
@@ -185,8 +194,8 @@ def test_repeated_init_is_idempotent_and_keeps_rows(im: Any, tmp_path: Path) -> 
         _assert_rows_intact(im)
         im.close_db()
 
-    assert _version(db) == 6
-    assert not any(status == "running" for status, _ in _ledger(db, 6)), (
+    assert _version(db) == _latest()
+    assert not any(status == "running" for status, _ in _ledger(db, _latest())), (
         "账本遗留 running 记录（上次迁移没有收尾）"
     )
 

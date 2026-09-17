@@ -142,6 +142,16 @@ async def _resolve_host_bot_account_id(plugin: Any) -> str:
     return await fetch_config_value(plugin.ctx, "bot.qq_account")
 
 
+async def resolve_host_bot_identity(plugin: Any) -> str:
+    """宿主 bot 身份，形如 ``qq:12345678``；读不到返回空串。
+
+    权威来源是宿主配置（``bot.qq_account``），插件侧不重复维护身份。
+    作用域字段宁可缺席也不编造——空串表示「未知」，不是「无身份」。
+    """
+    account_id = await _resolve_host_bot_account_id(plugin)
+    return f"qq:{account_id}" if account_id else ""
+
+
 async def resolve_host_bot_self_ids(plugin: Any) -> list[str]:
     """Read the bot's QQ identity from host configuration, not plugin config."""
     account_id = await _resolve_host_bot_account_id(plugin)
