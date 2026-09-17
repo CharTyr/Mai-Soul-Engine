@@ -92,6 +92,7 @@ enabled = true      # 旧字段，保留兼容
 | T12 非法输入不写正式状态 | 非法投递态、非法种子终态、未知 operation 均拒绝 | 上述各文件 |
 | T13 模式闸门 | off/observe 不注入、不接纳、不改人格；旧配置不隐式 apply | `tests/test_runtime_mode.py`、`tests/test_mode_gate_commands.py` |
 | T14 任务监督与故障恢复 | 崩溃可发现（不再只看 `is not None`）、自动重启、超限转 failed 并提示人工介入；稳定运行后的偶发崩溃不累积（1h 窗口） | `tests/test_task_supervisor.py` |
+| 长操作队列 | 命令只入队并立刻回 `operation_id`，后台按预算执行；`/soul_op` 查状态；失败释放租约可重试；完成时操作结果与种子终态同事务提交 | `tests/test_internalization_queue.py` |
 | T15 命令鉴权与确认 | 真实载荷下 `/soul_reset confirm` 走执行分支；只读命令在 observe 下不受阻 | `tests/test_command_input.py`、`tests/test_mode_gate_commands.py` |
 | T16 迁移与多库 | 只读盘点 + 不自动选源 + 风险告警 + 谱系观察；已在真实双库上跑通 | `tests/test_migration_inventory.py`、`migration/inventory.py` |
 | T17 legacy 隔离 | — | **未实现** |
