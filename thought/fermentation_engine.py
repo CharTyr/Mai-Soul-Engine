@@ -90,6 +90,9 @@ async def run_fermentation_loop(plugin: Any) -> None:
 
     while True:
         try:
+            from ..utils.task_supervisor import note_task_waiting
+
+            note_task_waiting(plugin, "fermentation", reason="等待下一次发酵检查")
             await asyncio.sleep(interval)
             # 重放通知 outbox（发酵通知失败后在这里补发）
             try:

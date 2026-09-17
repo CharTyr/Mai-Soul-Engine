@@ -12,11 +12,17 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 from dataclasses import dataclass, field
 
 __all__ = [
     "HEALTHY_RUN_SECONDS",
     "TASK_NAMES",
+    "STATUS_BACKOFF",
+    "STATUS_FAILED",
+    "STATUS_RUNNING",
+    "STATUS_STOPPED",
+    "STATUS_WAITING",
     "TaskState",
     "TaskSupervisor",
 ]
@@ -30,10 +36,12 @@ TASK_NAMES: tuple[str, ...] = (
     "internalization",
 )
 
-STATUS_STOPPED = "stopped"
-STATUS_RUNNING = "running"
-STATUS_RESTARTING = "restarting"
-STATUS_FAILED = "failed"
+STATUS_STOPPED = "stopped"      # 主动停止（配置关闭 / 卸载）
+STATUS_RUNNING = "running"      # 在跑
+STATUS_WAITING = "waiting"      # 期望运行但尚未启动（被卸载守卫/首次启动挡住）
+STATUS_BACKOFF = "backoff"      # 意外结束，正在退避，到期后重启
+STATUS_RESTARTING = "restarting"  # 兼容旧值：等价于 backoff（无退避时直接重启）
+STATUS_FAILED = "failed"        # 连续异常超限，等人工介入
 
 # 默认重启上限：连续异常结束超过该次数即判 failed，等人工介入。
 DEFAULT_MAX_RESTARTS = 5
@@ -114,7 +122,7 @@ class TaskSupervisor:
                 line += f"(重启{s.restart_count})"
             if s.last_success_at:
                 line += f" 最后成功={_fmt(s.last_success_at)}"
-            if s.status == STATUS_RESTARTING and s.next_retry_at:
+            if s.status in (STATUS_BACKOFF, STATUS_RESTARTING) and s.next_retry_at:
                 line += f" 下次重试={_fmt(s.next_retry_at)}"
             parts.append(line)
         return "后台任务: " + " | ".join(parts)
@@ -152,7 +160,7 @@ class TaskSupervisor:
         state.status = (
             STATUS_FAILED
             if state.restart_count >= self._max_restarts
-            else STATUS_RESTARTING
+            else STATUS_BACKOFF
         )
         state.last_change_at = current
         state.next_retry_at = current + self.restart_delay(name)
@@ -173,6 +181,18 @@ class TaskSupervisor:
         state.last_success_at = t
         state.heartbeat_at = t
 
+    def note_waiting(self, name: str, *, reason: str = "") -> None:
+        """期望运行但尚未启动（卸载守卫挡住、首次启动前、退避外的阻塞）。
+
+        与 stopped 的区别：stopped 是**不需要**跑；waiting 是**该跑但还没跑起来**。
+        看板上两者混同会让人以为任务正常。
+        """
+        state = self.state_of(name)
+        state.status = STATUS_WAITING
+        if reason:
+            state.last_death_reason = str(reason)[:300]
+        state.last_change_at = time.time()
+
     def note_heartbeat(self, name: str, *, now: float | None = None) -> None:
         """循环每轮打点（用于判断任务是否卡死，与「干成了」区分）。"""
         state = self.state_of(name)
@@ -192,3 +212,19 @@ class TaskSupervisor:
         state.last_death_reason = ""
         state.status = STATUS_STOPPED
         state.last_change_at = time.time()
+
+
+def note_task_waiting(plugin: Any, key: str, *, reason: str = "") -> None:
+    """循环进入**等待间隔**时打点。
+
+    模块级循环函数拿不到 supervisor 引用，用它做薄封装。
+    观测代码必须**绝不**影响业务循环：没有 supervisor（测试桩）时静默跳过，
+    打点异常也只记 debug。
+    """
+    supervisor = getattr(plugin, "_task_supervisor", None)
+    if supervisor is None:
+        return
+    try:
+        supervisor.note_waiting(key, reason=reason)
+    except Exception:  # noqa: BLE001 — 观测失败不得影响业务循环
+        logger.debug("note_task_waiting(%s) 失败（已忽略）", key)

@@ -47,6 +47,9 @@ async def run_reflection_loop(plugin) -> None:
             raise
         except Exception:
             logger.exception("[SelfReflection] 评价周期异常（run_reflection_loop 顶层兜底，保留 Exception 防止循环退出）")
+        from ..utils.task_supervisor import note_task_waiting
+
+        note_task_waiting(plugin, "reflection", reason="等待下一次自评周期")
         await asyncio.sleep(interval_hours * 3600)
 
 

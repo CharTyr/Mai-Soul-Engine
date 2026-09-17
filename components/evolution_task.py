@@ -82,6 +82,9 @@ async def run_evolution_loop(plugin) -> None:
         try:
             interval_hours = plugin.config.evolution.evolution_interval_hours
             logger.debug("演化循环等待 %s 小时", interval_hours)
+            from ..utils.task_supervisor import note_task_waiting
+
+            note_task_waiting(plugin, "evolution", reason="等待下一轮演化间隔")
             await asyncio.sleep(interval_hours * 3600)
 
             # 先重放通知 outbox：演化/发酵产生的通知若之前发送失败，在这里补发

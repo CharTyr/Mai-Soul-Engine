@@ -89,14 +89,18 @@ def test_note_started_marks_running() -> None:
     assert s.state_of("evolution").status == "running"
 
 
-def test_note_death_marks_restarting_and_counts() -> None:
-    """异常结束 → 记为 restarting 并累加重启次数。"""
+def test_note_death_marks_backoff_and_counts() -> None:
+    """异常结束 → 记为 **backoff**（不是笼统的 restarting）并累加重启次数。
+
+    backoff 与 restarting 的区别是要紧的：backoff 表示「正在退避窗口里等」，
+    看板据此能显示下次重试时刻；笼统的 restarting 看不出还要等多久。
+    """
     s = _sup().TaskSupervisor()
     s.note_started("evolution")
     s.note_death("evolution", reason="RuntimeError: boom")
 
     state = s.state_of("evolution")
-    assert state.status == "restarting"
+    assert state.status == "backoff"
     assert state.restart_count == 1
     assert "boom" in state.last_death_reason
 
@@ -236,7 +240,7 @@ def test_healthy_run_resets_failure_streak() -> None:
     s.note_death("evolution", reason="偶发2", now=1000.0 + 7200)
 
     assert s.state_of("evolution").restart_count == 1, "稳定运行后的崩溃应重新计数"
-    assert s.state_of("evolution").status == "restarting"
+    assert s.state_of("evolution").status in ("backoff", "restarting")
 
 
 def test_rapid_repeated_crashes_still_accumulate() -> None:
@@ -251,3 +255,64 @@ def test_rapid_repeated_crashes_still_accumulate() -> None:
     assert s.state_of("evolution").restart_count == 2
     assert s.state_of("evolution").status == "failed"
     assert s.start_allowed("evolution") is False
+
+
+def test_all_five_plan_states_are_reachable() -> None:
+    """方案要求监督器识别 running / waiting / backoff / failed / stopped。
+
+    五态都必须**可达**且互不混同——特别是 waiting（该跑但还没跑起来）不能
+    被显示成 running（在跑），否则看板会在任务实际停摆时显示正常。
+    """
+    from .conftest import _import_soul_submodule
+
+    ts = _import_soul_submodule("utils.task_supervisor")
+    s = ts.TaskSupervisor(max_restarts=2)
+
+    seen: set[str] = set()
+
+    s.note_started("evolution")
+    seen.add(s.state_of("evolution").status)
+
+    s.note_waiting("evolution", reason="等待下一轮间隔")
+    seen.add(s.state_of("evolution").status)
+
+    s.note_death("evolution")
+    seen.add(s.state_of("evolution").status)
+
+    s.note_stopped("evolution")
+    seen.add(s.state_of("evolution").status)
+
+    # failed：连续异常超限
+    for _ in range(3):
+        s.note_started("evolution")
+        s.note_death("evolution")
+    seen.add(s.state_of("evolution").status)
+
+    assert seen == {"running", "waiting", "backoff", "stopped", "failed"}, (
+        f"五态未全部可达: {sorted(seen)}"
+    )
+
+
+def test_waiting_is_reported_by_real_loops() -> None:
+    """真实循环必须调用 waiting 打点（否则该状态只是装饰）。
+
+    直接检查源码调用点：模块级循环拿不到 supervisor，须经薄封装打点。
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parent.parent
+    expected = {
+        "components/evolution_task.py": "evolution",
+        "thought/fermentation_engine.py": "fermentation",
+        "components/reflection_evaluator.py": "reflection",
+        "components/notion_sync.py": "notion",
+        "plugin.py": "internalization",
+    }
+    missing = [
+        f"{rel} → {key}"
+        for rel, key in expected.items()
+        if f'"{key}"' not in (root / rel).read_text(encoding="utf-8")
+        or "note_task_waiting" not in (root / rel).read_text(encoding="utf-8")
+        and 'note_waiting("internalization"' not in (root / rel).read_text(encoding="utf-8")
+    ]
+    assert not missing, f"这些循环没有 waiting 打点: {missing}"

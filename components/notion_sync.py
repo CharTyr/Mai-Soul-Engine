@@ -45,6 +45,9 @@ async def run_notion_sync_loop(plugin) -> None:
             res = await asyncio.to_thread(sync_notion_frontend, plugin_dir=plugin_dir, cfg=cfg)
             logger.debug("[Mai-Soul-Engine] Notion 同步结果: %s", res)
 
+            from ..utils.task_supervisor import note_task_waiting
+
+            note_task_waiting(plugin, "notion", reason="等待下一次 Notion 同步")
             await asyncio.sleep(cfg.sync_interval_seconds)
         except asyncio.CancelledError:
             logger.info("[Mai-Soul-Engine] Notion 前端同步任务已停止")

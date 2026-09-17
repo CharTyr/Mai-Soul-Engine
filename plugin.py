@@ -237,7 +237,10 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             if not self._task_supervisor.start_allowed(key):
                 continue
             if not self._task_supervisor.ready_to_restart(key):
-                continue  # 退避未到期
+                # 退避未到期：状态在**发现死亡那一轮**已经记为 backoff，
+                # 这里只等待。再调一次 note_death 会把一次死亡记成两次、
+                # 重启计数虚高，最后把任务误判成 failed。
+                continue
 
             loop_fn = getattr(self, loop_attr)
             setattr(self, attr_name, asyncio.create_task(loop_fn()))
@@ -490,6 +493,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         while True:
             try:
+                self._task_supervisor.note_waiting("internalization", reason="等待下一步队列消费")
                 await asyncio.sleep(interval)
                 stats = await run_queue_once(self)
                 if stats["done"] or stats["retry"]:

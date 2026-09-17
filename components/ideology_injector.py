@@ -187,10 +187,36 @@ _injection_log_counter: int = 0
 # 注入日志轮转阈值（MB）
 _INJECTION_LOG_MAX_SIZE_MB: int = 5
 INJECTION_LOG_MAX_BYTES: int = _INJECTION_LOG_MAX_SIZE_MB * 1024 * 1024
+# 保留期（天）：注入日志是**调试追踪**，不该无限期留着。
+# 只按大小轮转等于没有保留上限——低频环境下一份日志能躺几年。
+INJECTION_LOG_RETENTION_DAYS: int = 14
+
+
+def _purge_expired_injection_logs(plugin_dir: Path, *, now: float | None = None) -> list[str]:
+    """删掉超过保留期的注入日志（含轮转文件）。返回被删的文件名。
+
+    注入日志只含元数据（trait id / 策略 / 版本，**不含原始消息文本**），
+    但仍是调试追踪，必须有 TTL——保留策略是「大小轮转 + 时间上限」两条一起。
+    """
+    import time as _time
+
+    data_dir = plugin_dir / "data"
+    if not data_dir.is_dir():
+        return []
+    cutoff = (_time.time() if now is None else float(now)) - INJECTION_LOG_RETENTION_DAYS * 86400
+    removed: list[str] = []
+    for path in data_dir.glob("injections*.jsonl"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed.append(path.name)
+        except OSError:
+            continue
+    return removed
 
 
 async def _record_injection(entry: dict, plugin_dir: Path) -> None:
-    """记录注入日志到 data/injections.jsonl（采样 + 自动轮转）。"""
+    """记录注入日志到 data/injections.jsonl（采样 + 大小轮转 + 保留期）。"""
     global _injection_log_counter
 
     # 采样：每 INJECTION_LOG_EVERY 条写一次
@@ -202,6 +228,9 @@ async def _record_injection(entry: dict, plugin_dir: Path) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     async with _injection_log_lock:
+        # 保留期清理（低频环境下靠它兜底，大小轮转不会触发）
+        _purge_expired_injection_logs(plugin_dir)
+
         # 文件大小检查与轮转
         if file_path.exists() and file_path.stat().st_size > INJECTION_LOG_MAX_BYTES:
             rotated = file_path.with_suffix(".1.jsonl")
