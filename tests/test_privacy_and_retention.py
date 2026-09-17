@@ -63,6 +63,7 @@ def test_injection_log_never_contains_raw_message_text(soul_db: Any, tmp_path: P
     cfg.plugin.mode = "apply"
     plugin.config = cfg
     plugin._plugin_dir = tmp_path
+    plugin._data_dir = tmp_path / "data"
     plugin._wv_config_view = None
 
     class _WV:
@@ -146,7 +147,7 @@ def test_injection_log_has_retention_ttl(tmp_path: Path) -> None:
     fresh = data_dir / "injections.2.jsonl"
     fresh.write_text("{}\n", encoding="utf-8")
 
-    removed = inj._purge_expired_injection_logs(tmp_path)
+    removed = inj._purge_expired_injection_logs(data_dir)
 
     assert sorted(removed) == ["injections.1.jsonl", "injections.jsonl"]
     assert fresh.exists(), "未过期的日志被误删"

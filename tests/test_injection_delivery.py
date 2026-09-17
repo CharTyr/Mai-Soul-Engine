@@ -94,6 +94,7 @@ def _plugin(tmp_path: Path, *, mode: str = "apply", enabled: bool = True) -> Sim
             thought_cabinet=SimpleNamespace(fermentation_enabled=False),
         ),
         _plugin_dir=tmp_path,
+        _data_dir=tmp_path / "data",
         _wv_service=_WVStub(),
         _wv_config_view=None,
     )

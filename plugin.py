@@ -321,9 +321,9 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             logger.error("[Mai-Soul-Engine] 数据库初始化失败，插件将以降级模式运行: %s", e, exc_info=True)
             return  # 不启动后台任务，但不让 SDK 崩
 
-        # 初始化审计日志
+        # 初始化审计日志（传数据目录本身，与 soul.db 同处一个目录）
         try:
-            init_audit_log(self._plugin_dir)
+            init_audit_log(self._data_dir)
         except Exception as e:
             logger.error("[Mai-Soul-Engine] 审计日志初始化失败: %s", e, exc_info=True)
 

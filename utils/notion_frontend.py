@@ -239,8 +239,12 @@ def _prop_date(iso: str) -> dict[str, Any]:
     return {"date": {"start": s}}
 
 
-def _state_file(plugin_dir: Path) -> Path:
-    data_dir = plugin_dir / "data"
+def _state_file(data_dir: Path) -> Path:
+    """返回 Notion 前端状态文件路径。
+
+    ``data_dir`` 是已解析的插件数据目录本身（宿主统一目录或 plugin_dir/data），
+    不再拼 ``/ "data"``——否则状态会写回旧式源码目录。
+    """
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "notion_frontend_state.json"
 
@@ -460,7 +464,7 @@ def build_notion_frontend_config(plugin, *, section: str = "notion") -> NotionFr
     )
 
 
-def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
+def sync_traits_to_notion(*, data_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
     if not cfg.enabled:
         return {"enabled": False, "synced": 0}
 
@@ -475,7 +479,7 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
     from ..models.ideology_model import query_crystallized_traits
     from ..utils.trait_tags import parse_tags_json
 
-    state_path = _state_file(plugin_dir)
+    state_path = _state_file(data_dir)
     state = _load_state(state_path)
     page_map = state.get("trait_page_map")
     if not isinstance(page_map, dict):
@@ -600,7 +604,7 @@ def sync_traits_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dic
     return result
 
 
-def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
+def sync_spectrum_to_notion(*, data_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
     if not cfg.enabled or not cfg.sync_spectrum:
         return {"enabled": False, "updated": False}
 
@@ -615,7 +619,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
 
     spectrum = get_or_create_spectrum("global")
 
-    state_path = _state_file(plugin_dir)
+    state_path = _state_file(data_dir)
     state = _load_state(state_path)
     spectrum_page_map = state.get("spectrum_page_map")
     if not isinstance(spectrum_page_map, dict):
@@ -834,7 +838,7 @@ def sync_spectrum_to_notion(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> d
     }
 
 
-def sync_notion_frontend(*, plugin_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
-    traits_result = sync_traits_to_notion(plugin_dir=plugin_dir, cfg=cfg)
-    spectrum_result = sync_spectrum_to_notion(plugin_dir=plugin_dir, cfg=cfg)
+def sync_notion_frontend(*, data_dir: Path, cfg: NotionFrontendConfig) -> dict[str, Any]:
+    traits_result = sync_traits_to_notion(data_dir=data_dir, cfg=cfg)
+    spectrum_result = sync_spectrum_to_notion(data_dir=data_dir, cfg=cfg)
     return {"enabled": bool(cfg.enabled), "traits": traits_result, "spectrum": spectrum_result}

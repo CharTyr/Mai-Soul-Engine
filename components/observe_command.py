@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from ..utils.spectrum_utils import check_admin_permission
@@ -53,7 +52,8 @@ async def handle_observe(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
     except Exception as exc:
         lines.append(f"自评: (读失败 {exc})")
 
-    init_audit_log(Path(plugin._plugin_dir))
+    # 传已解析的数据目录本身（不再是插件根目录），否则会把 audit 指针重置回旧目录
+    init_audit_log(plugin._data_dir)
     events = read_recent_audit(12)
     if events:
         lines.append("—— 最近 audit ——")
@@ -72,7 +72,7 @@ async def handle_observe(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bo
     else:
         lines.append("—— audit 暂无（演化/自评跑过后会出现）——")
 
-    inj_path = Path(plugin._plugin_dir) / "data" / "injections.jsonl"
+    inj_path = plugin._data_dir / "injections.jsonl"
     if inj_path.exists():
         try:
             inj_lines = inj_path.read_text(encoding="utf-8").splitlines()

@@ -125,7 +125,7 @@ def test_slice_disabled_differs_from_no_slice(soul_db: Any) -> None:
 def test_capture_failure_is_failed_not_empty(soul_db: Any, tmp_path: Any) -> None:
     """审计日志里有取证失败 → 状态必须是 failed（而不是"没数据"）。"""
     audit = _import_soul_submodule("utils.audit_log")
-    audit.init_audit_log(tmp_path)
+    audit.init_audit_log(tmp_path / "data")
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data" / "audit.jsonl").write_text(
         json.dumps({"ts": "2026-09-17T00:00:00", "type": "evolution_skip",
@@ -143,7 +143,7 @@ def test_capture_failure_is_failed_not_empty(soul_db: Any, tmp_path: Any) -> Non
 def test_llm_failure_is_failed_not_ok(soul_db: Any, tmp_path: Any) -> None:
     """LLM 失败同样必须标 failed。"""
     audit = _import_soul_submodule("utils.audit_log")
-    audit.init_audit_log(tmp_path)
+    audit.init_audit_log(tmp_path / "data")
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data" / "audit.jsonl").write_text(
         json.dumps({"ts": "2026-09-17T00:00:00", "type": "evolution_skip",

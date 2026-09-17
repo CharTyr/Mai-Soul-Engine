@@ -75,6 +75,7 @@ class _Plugin:
             setattr(cfg.injection, key, value)
         self.config = cfg
         self._plugin_dir = Path("/tmp/soul-replyer-view-test")
+        self._data_dir = self._plugin_dir / "data"
         self._wv_service = _WVStub()
         self._wv_config_view = None
 

@@ -185,6 +185,7 @@ def _injector_plugin(tmp_path: Any, *, scope: str, inject_private: bool, groups:
             monitor=SimpleNamespace(monitored_groups=["12345678"], excluded_groups=[]),
         ),
         _plugin_dir=tmp_path,
+        _data_dir=tmp_path / "data",
     )
 
 

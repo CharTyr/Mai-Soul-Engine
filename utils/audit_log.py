@@ -29,9 +29,14 @@ def set_audit_enabled(enabled: bool) -> None:
     _audit_enabled = enabled
 
 
-def init_audit_log(plugin_dir: Path) -> None:
+def init_audit_log(data_dir: Path) -> None:
+    """初始化审计日志。
+
+    Args:
+        data_dir: 已解析的插件数据目录本身（宿主统一目录或 plugin_dir/data），
+            不再是插件根目录——调用方请传 ``plugin._data_dir``。
+    """
     global _audit_file
-    data_dir = plugin_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     _audit_file = data_dir / "audit.jsonl"
 

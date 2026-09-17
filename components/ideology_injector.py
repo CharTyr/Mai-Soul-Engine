@@ -221,7 +221,7 @@ async def _resolve_cached_bot_identity(plugin) -> str:
     return identity
 
 
-def _purge_expired_injection_logs(plugin_dir: Path, *, now: float | None = None) -> list[str]:
+def _purge_expired_injection_logs(data_dir: Path, *, now: float | None = None) -> list[str]:
     """删掉超过保留期的注入日志（含轮转文件）。返回被删的文件名。
 
     注入日志只含元数据（trait id / 策略 / 版本，**不含原始消息文本**），
@@ -229,7 +229,6 @@ def _purge_expired_injection_logs(plugin_dir: Path, *, now: float | None = None)
     """
     import time as _time
 
-    data_dir = plugin_dir / "data"
     if not data_dir.is_dir():
         return []
     cutoff = (_time.time() if now is None else float(now)) - INJECTION_LOG_RETENTION_DAYS * 86400
@@ -244,8 +243,8 @@ def _purge_expired_injection_logs(plugin_dir: Path, *, now: float | None = None)
     return removed
 
 
-async def _record_injection(entry: dict, plugin_dir: Path) -> None:
-    """记录注入日志到 data/injections.jsonl（采样 + 大小轮转 + 保留期）。"""
+async def _record_injection(entry: dict, data_dir: Path) -> None:
+    """记录注入日志到 <data_dir>/injections.jsonl（采样 + 大小轮转 + 保留期）。"""
     global _injection_log_counter
 
     # 采样：每 INJECTION_LOG_EVERY 条写一次
@@ -253,12 +252,12 @@ async def _record_injection(entry: dict, plugin_dir: Path) -> None:
     if _injection_log_counter % INJECTION_LOG_EVERY != 0:
         return
 
-    file_path = plugin_dir / "data" / "injections.jsonl"
+    file_path = data_dir / "injections.jsonl"
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     async with _injection_log_lock:
         # 保留期清理（低频环境下靠它兜底，大小轮转不会触发）
-        _purge_expired_injection_logs(plugin_dir)
+        _purge_expired_injection_logs(data_dir)
 
         # 文件大小检查与轮转
         if file_path.exists() and file_path.stat().st_size > INJECTION_LOG_MAX_BYTES:
@@ -702,7 +701,9 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
 
     session_id: str = kwargs.get("session_id", "") or ""
     stream_id = session_id
-    plugin_dir: Path = plugin._plugin_dir
+    # 日志统一写到已解析的数据目录（宿主统一目录或 plugin_dir/data），
+    # 不要再拼 _plugin_dir/「data」——那会把日志写回旧式源码目录。
+    data_dir: Path = plugin._data_dir
 
     # 用途：分用途投递（方案 §4.1）。Replyer 只收「本次观点 + 表达倾向」，
     # 立场/边界/冲突处理留给 Planner——同一份完整动态层禁止塞两遍，
@@ -727,7 +728,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         )
         if not identified_as_group and not inject_private:
             return await _skip_and_log(
-                plugin_dir, "session kind unknown; private injection disabled",
+                data_dir, "session kind unknown; private injection disabled",
             )
         is_private = False
     else:
@@ -739,13 +740,13 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     # ── 2. 私聊/群聊范围检查 ───────────────────────────────────────
     if is_private and not inject_private:
         return await _skip_and_log(
-            plugin_dir, "private injection disabled",
+            data_dir, "private injection disabled",
         )
 
     if not is_private:
         skip_reason = _check_group_scope(plugin, stream_id, scope)
         if skip_reason is not None:
-            return await _skip_and_log(plugin_dir, skip_reason)
+            return await _skip_and_log(data_dir, skip_reason)
 
     # ── 3. 获取光谱并构建提示词 ─────────────────────────────────────
     spectrum = get_or_create_spectrum("global")
@@ -884,7 +885,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
                 "policy": "disabled",
                 "prompt_version": "v2.4.0",
             },
-            plugin_dir=plugin_dir,
+            data_dir=data_dir,
         )
         return {"success": True, "action": "continue"}
 
@@ -901,7 +902,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             "cooldown_skipped": cooldown_skipped[:20],
             "prompt_version": "v2.4.0",
         },
-        plugin_dir=plugin_dir,
+        data_dir=data_dir,
     )
     if selected and not is_replyer_view:
         # 冷却状态是 Planner 选择用的：replyer 视图不得消耗它，
@@ -958,7 +959,7 @@ def _check_group_scope(plugin, stream_id: str, scope: str) -> str | None:
     return None
 
 
-async def _skip_and_log(plugin_dir: Path, reason: str) -> dict:
+async def _skip_and_log(data_dir: Path, reason: str) -> dict:
     """跳过并记录采样跳过日志。"""
     await _record_injection(
         {
@@ -968,6 +969,6 @@ async def _skip_and_log(plugin_dir: Path, reason: str) -> dict:
             "policy": "disabled",
             "prompt_version": "v2.4.0",
         },
-        plugin_dir=plugin_dir,
+        data_dir=data_dir,
     )
     return {"success": True, "action": "continue"}
