@@ -67,32 +67,35 @@ async def run_queue_once(plugin: Any, limit: int = 3) -> dict[str, int]:
     manager = ThoughtSeedManager.from_plugin_config(plugin)
 
     for op in operations:
-        seed = await manager.get_seed_by_id(op.seed_id)
-        if seed is None:
-            release_seed_operation(op.operation_id, error="种子不存在")
-            stats["skipped"] += 1
-            continue
-
-        status = (seed.get("status") or "") if isinstance(seed, dict) else ""
-        if status != "pending":
-            # 终态（已内化/拒绝）或发酵中（归发酵循环）——不该由本队列处理
-            release_seed_operation(
-                op.operation_id, error=f"种子状态 {status or '未知'} 不归队列处理"
-            )
-            stats["skipped"] += 1
-            continue
-
-        dedup_cfg = {
-            "enabled": bool(plugin.config.thought_cabinet.auto_dedup_enabled),
-            "threshold": float(plugin.config.thought_cabinet.auto_dedup_threshold),
-        }
-
         try:
+            seed = await manager.get_seed_by_id(op.seed_id)
+            if seed is None:
+                release_seed_operation(op.operation_id, error="种子不存在")
+                stats["skipped"] += 1
+                continue
+
+            status = (seed.get("status") or "") if isinstance(seed, dict) else ""
+            if status != "pending":
+                # 终态（已内化/拒绝）或发酵中（归发酵循环）——不该由本队列处理
+                release_seed_operation(
+                    op.operation_id, error=f"种子状态 {status or '未知'} 不归队列处理"
+                )
+                stats["skipped"] += 1
+                continue
+
+            dedup_cfg = {
+                "enabled": bool(plugin.config.thought_cabinet.auto_dedup_enabled),
+                "threshold": float(plugin.config.thought_cabinet.auto_dedup_threshold),
+            }
+
             engine = InternalizationEngine(plugin)
             result = await engine.internalize_seed(seed, dedup=dedup_cfg)
         except Exception as e:  # noqa: BLE001 — 单条失败不影响队列其余条目
             logger.exception("[Soul] 内化操作 %s 执行异常", op.operation_id)
-            release_seed_operation(op.operation_id, error=f"{type(e).__name__}: {e}")
+            try:
+                release_seed_operation(op.operation_id, error=f"{type(e).__name__}: {e}")
+            except Exception:  # noqa: BLE001 — 释放失败也不能中断队列
+                logger.exception("[Soul] 释放操作 %s 失败", op.operation_id)
             stats["retry"] += 1
             continue
 

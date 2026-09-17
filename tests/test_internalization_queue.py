@@ -313,3 +313,39 @@ def test_double_approve_only_enqueues_once(soul_db: Any) -> None:
 
     assert stats["done"] == 1
     assert plugin._engine.internalize_seed.await_count == 1, "同一颗种子只内化一次"
+
+
+def test_run_queue_survives_item_level_config_error(soul_db: Any) -> None:
+    """单条条目的配置读取异常不得中断整轮（逐条隔离）。
+
+    队列跑在后台循环里，一条卡住就等于整队停摆。
+    """
+    _make_seed("seed_q1")
+    _make_seed("seed_q2")
+    q = _queue()
+    plugin = _plugin()
+    asyncio.run(q.enqueue_internalization(plugin, "seed_q1"))
+    asyncio.run(q.enqueue_internalization(plugin, "seed_q2"))
+
+    # 让第一条的 dedup 配置读取炸掉
+    real_cabinet = plugin.config.thought_cabinet
+
+    class _BoomOnce:
+        """只炸第一次的配置视图：第一条失败、第二条照常。"""
+
+        def __init__(self) -> None:
+            self._fired = False
+
+        def __getattr__(self, name: str) -> Any:
+            if name == "auto_dedup_enabled" and not self._fired:
+                self._fired = True
+                raise RuntimeError("配置读取炸了")
+            return getattr(real_cabinet, name)
+
+    plugin.config.thought_cabinet = _BoomOnce()
+
+    with _patch_engine(plugin)[0], _patch_engine(plugin)[1]:
+        stats = asyncio.run(q.run_queue_once(plugin))
+
+    assert stats["retry"] == 1, "炸掉的那条计入重试"
+    assert stats["done"] == 1, "其余条目仍应被处理"
