@@ -17,6 +17,7 @@ from ..models.ideology_model import get_or_create_spectrum, query_active_traits_
 from ..models.self_reflection import DELIVERY_HOOK_APPLIED, mark_snapshot_delivery_state
 from ..prompts.ideology_prompts import build_ideology_prompt
 from ..utils.runtime_mode import resolve_runtime_mode
+from ..utils.stream_kind import STREAM_KIND_PRIVATE, STREAM_KIND_UNKNOWN, resolve_stream_kind
 from ..utils.host_prompt_items import (
     append_block_to_first_system,
     extract_latest_user_text,
@@ -623,14 +624,30 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
 
     session_id: str = kwargs.get("session_id", "") or ""
     stream_id = session_id
-    # 注：宿主 planner hook 载荷不含会话类型字段，目前只能按 session_id 字面量
-    # 推断私聊/群聊（已知设计债，收口需宿主提供显式 chat_type 元数据）。
-    is_private = ":private" in stream_id or "private" in stream_id.lower()
     plugin_dir: Path = plugin._plugin_dir
 
     # 配置字段均来自 pydantic model，直接属性访问
     scope = plugin.config.injection.scope.strip().lower()
     inject_private = plugin.config.injection.inject_private
+
+    # 会话类型走宿主**显式**流列表接口，不猜 session_id 字符串
+    # （旧实现按 "private" 字样推断，宿主改 id 编码就会静默失效）
+    kind = await resolve_stream_kind(plugin, stream_id)
+    if kind == STREAM_KIND_UNKNOWN:
+        # 判定不出会话类型时不猜。放行条件必须来自**显式配置**：
+        # scope=monitored_only 且该流在监控白名单里 → 配置已确认是受管群聊。
+        # 其余情况一律以更严格的那个设置为准（不允许私聊注入就跳过），
+        # 宁可少注入，也不把人格注入到管理员明确排除的会话里。
+        identified_as_group = (
+            scope == "monitored_only" and _check_group_scope(plugin, stream_id, scope) is None
+        )
+        if not identified_as_group and not inject_private:
+            return await _skip_and_log(
+                plugin_dir, "session kind unknown; private injection disabled",
+            )
+        is_private = False
+    else:
+        is_private = kind == STREAM_KIND_PRIVATE
     max_traits = max(0, plugin.config.injection.max_traits)
     fallback_recent_impact = plugin.config.injection.fallback_recent_impact
     cooldown_seconds = max(0, plugin.config.injection.trait_cooldown_seconds)

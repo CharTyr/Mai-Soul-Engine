@@ -64,7 +64,21 @@ class _WVStub:
 
 
 def _plugin(tmp_path: Path, *, mode: str = "apply", enabled: bool = True) -> SimpleNamespace:
+    """构造测试插件。
+
+    必须提供 ``ctx.chat``（宿主的显式流列表接口）——注入器用它判定会话类型，
+    不再猜 session_id 字符串。
+    """
+
+    class _Chat:
+        async def get_group_streams(self, platform: str = "qq") -> list[str]:
+            return ["qq-123-group"]
+
+        async def get_private_streams(self, platform: str = "qq") -> list[str]:
+            return ["qq-999-private"]
+
     return SimpleNamespace(
+        ctx=SimpleNamespace(chat=_Chat()),
         config=SimpleNamespace(
             plugin=SimpleNamespace(enabled=enabled, mode=mode),
             injection=SimpleNamespace(
