@@ -25,7 +25,9 @@ __all__ = [
     "MODE_APPLY",
     "MODE_OBSERVE",
     "MODE_OFF",
+    "MutationBlocked",
     "RuntimeMode",
+    "ensure_mutation_allowed",
     "describe_runtime_mode",
     "resolve_runtime_mode",
 ]
@@ -105,6 +107,26 @@ def resolve_runtime_mode(plugin_config: Any) -> RuntimeMode:
         migrated_from_legacy=migrated,
         invalid_mode=invalid,
     )
+
+
+class MutationBlocked(RuntimeError):
+    """正式人格写入被运行模式拒绝（当前不是 apply）。"""
+
+
+def ensure_mutation_allowed(source: Any, *, action: str = "") -> None:
+    """在正式人格写入点调用；非 apply 直接拒绝。
+
+    `source` 可以是插件实例或 plugin_config —— 判定读的是**调用时的当前配置**，
+    因此「LLM 调用期间切换模式」也能被拦住。入口只检查一次做不到这一点。
+
+    为什么不用「入口检查 + 全局开关」：开关需要有人同步，漏一次就静默放行；
+    而且进程内多插件实例时全局开关是错的。
+    """
+    config = getattr(source, "config", source)
+    resolved = resolve_runtime_mode(config)
+    if not resolved.mutation_allowed:
+        detail = f"（{action}）" if action else ""
+        raise MutationBlocked(f"运行模式 {resolved.mode} 禁止改写正式人格{detail}")
 
 
 def describe_runtime_mode(plugin_config: Any) -> str:

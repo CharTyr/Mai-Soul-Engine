@@ -51,14 +51,29 @@ def _make_seed(seed_id: str = "seed_q1", status: str = "pending") -> None:
 def _plugin(*, llm_result: dict | None = None, raise_exc: Exception | None = None) -> Any:
     """构造插件：内化引擎被替换为可控 mock。"""
     engine = MagicMock()
-    if raise_exc is not None:
-        engine.internalize_seed = AsyncMock(side_effect=raise_exc)
-    else:
-        engine.internalize_seed = AsyncMock(
-            return_value=llm_result
-            if llm_result is not None
-            else {"success": True, "trait_id": "trait_q1", "spectrum_impact": {"sincerity": 3}}
-        )
+    outcome = (
+        llm_result
+        if llm_result is not None
+        else {"success": True, "trait_id": "trait_q1", "spectrum_impact": {"sincerity": 3}}
+    )
+
+    async def _fake_internalize(seed, dedup=None, fermentation_inputs=None, finalize=None):
+        """遵守真实引擎的 finalize 契约：同一事务内调用，按其结果提交或回滚。"""
+        if raise_exc is not None:
+            raise raise_exc
+        if not outcome.get("success"):
+            return outcome
+        if finalize is not None:
+            conn = _import_soul_submodule("models._conn")._get_conn()
+            conn.execute("BEGIN")
+            ok, reason = finalize(conn)
+            if not ok:
+                conn.execute("ROLLBACK")
+                return {"success": False, "finalize_failed": True, "error": reason}
+            conn.commit()
+        return outcome
+
+    engine.internalize_seed = AsyncMock(side_effect=_fake_internalize)
 
     sent: list[str] = []
 
@@ -181,7 +196,7 @@ def test_run_queue_internalizes_and_settles(soul_db: Any) -> None:
     with _patch_engine(plugin)[0], _patch_engine(plugin)[1]:
         stats = asyncio.run(q.run_queue_once(plugin))
 
-    assert stats == {"done": 1, "retry": 0, "skipped": 0}
+    assert stats == {"done": 1, "retry": 0, "skipped": 0, "blocked": 0}
     assert ops.get_seed_operation(op_id).status == "done"
     assert seeds.get_thought_seed_by_id("seed_q1").status == "approved"
 
@@ -233,7 +248,8 @@ def test_run_queue_skips_fermenting_seed(soul_db: Any) -> None:
 
     assert stats["skipped"] == 1
     assert plugin._engine.internalize_seed.await_count == 0, "队列不得内化发酵中的种子"
-    assert ops.get_seed_operation(op_id).status == "failed"
+    # 契约：**不释放**租约。释放会让发酵循环完成后无法终结操作，下一轮重复内化。
+    assert ops.get_seed_operation(op_id).status == "running", "队列不得动发酵中的租约"
 
 
 def test_run_queue_handles_missing_seed(soul_db: Any) -> None:

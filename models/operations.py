@@ -228,6 +228,120 @@ def finish_seed_operation(
         return False
 
 
+def count_failed_operations(seed_id: str, *, operation_type: str = "internalize") -> int:
+    """统计某颗种子的失败次数（用于**有界重试**）。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM soul_seed_operations "
+        "WHERE seed_id = ? AND operation_type = ? AND status = ?",
+        (seed_id, operation_type, STATUS_FAILED),
+    ).fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
+def list_retryable_operations(
+    *,
+    operation_type: str = "internalize",
+    max_attempts: int = 3,
+    limit: int = 10,
+) -> list[str]:
+    """筛出「值得重试」的种子 id。
+
+    条件：有 ``failed`` 记录、失败次数 < ``max_attempts``、且**没有** ``done`` 记录。
+    重试本身走 ``claim_seed_operation``（新建 running 记录），因此幂等保证
+    （done 记录、终态种子）仍由认领路径统一负责，这里只负责「该不该再试」。
+
+    为什么需要它：终结阶段的**瞬时故障**（DB 锁、写盘失败）不应该让管理员的
+    批准意图作废——之前失败即永久放弃，批准就丢了。
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT seed_id, COUNT(*) AS n FROM soul_seed_operations "
+        "WHERE operation_type = ? AND status = ? "
+        "GROUP BY seed_id HAVING n < ? LIMIT ?",
+        (operation_type, STATUS_FAILED, max(1, int(max_attempts)), max(1, int(limit))),
+    ).fetchall()
+    out: list[str] = []
+    for row in rows:
+        seed_id = row["seed_id"]
+        done = conn.execute(
+            "SELECT 1 FROM soul_seed_operations "
+            "WHERE seed_id = ? AND operation_type = ? AND status = ? LIMIT 1",
+            (seed_id, operation_type, STATUS_DONE),
+        ).fetchone()
+        if done is None:
+            out.append(seed_id)
+    return out
+
+
+def finish_seed_operation_in_tx(
+    conn: "sqlite3.Connection",
+    operation_id: str,
+    *,
+    seed_status: str,
+    result_json: str = "",
+    expected_seed_status: str | None = None,
+) -> tuple[bool, str]:
+    """在**调用方已开启的事务内**终结操作（不做 BEGIN/COMMIT）。
+
+    原子性由调用方保证：人格写入 + 种子终态 + 操作终态必须同一个 COMMIT。
+    这是「内化一次生效」的关键——分开提交就会出现
+    「人格已写、操作仍未完成」的半成品，重试时重复施加影响。
+
+    校验（全部在同一事务内，因此不能与并发方交错）：
+    1. 操作仍是当前 ``running`` 租约 → 防止**租约被接管后旧执行者提交**
+    2. 种子状态仍等于 ``expected_seed_status`` → 防止**覆盖管理员在途拒绝**
+
+    Returns:
+        ``(ok, reason)``；ok=False 时调用方必须 ROLLBACK，整笔不写。
+    """
+    if seed_status not in TERMINAL_SEED_STATUSES:
+        return False, f"非法种子终态: {seed_status}"
+
+    row = conn.execute(
+        "SELECT seed_id, status FROM soul_seed_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        return False, "操作不存在（租约已被接管或已清理）"
+    if row["status"] != STATUS_RUNNING:
+        return False, f"操作状态为 {row['status']}，非运行中"
+
+    seed_id = row["seed_id"]
+    if expected_seed_status is not None:
+        cur = conn.execute(
+            "SELECT status FROM soul_thought_seeds WHERE seed_id = ?", (seed_id,)
+        ).fetchone()
+        actual = cur["status"] if cur is not None else None
+        if actual != expected_seed_status:
+            return False, f"种子状态已变为 {actual or '缺失'}（期望 {expected_seed_status}）"
+
+    now_str = _dt_to_str(datetime.now())
+    done = conn.execute(
+        "UPDATE soul_seed_operations "
+        "SET status = ?, result_json = ?, lease_expires_at = '', updated_at = ? "
+        "WHERE operation_id = ? AND status = ?",
+        (STATUS_DONE, result_json, now_str, operation_id, STATUS_RUNNING),
+    )
+    if done.rowcount != 1:
+        return False, "操作终态写入失败"
+
+    if expected_seed_status is not None:
+        settled = conn.execute(
+            "UPDATE soul_thought_seeds SET status = ? WHERE seed_id = ? AND status = ?",
+            (seed_status, seed_id, expected_seed_status),
+        )
+    else:
+        settled = conn.execute(
+            "UPDATE soul_thought_seeds SET status = ? WHERE seed_id = ?",
+            (seed_status, seed_id),
+        )
+    if settled.rowcount != 1:
+        return False, "种子终态写入失败（状态已变）"
+
+    return True, ""
+
+
 def release_seed_operation(operation_id: str, *, error: str = "") -> bool:
     """释放租约（内化失败）：标记 failed，种子保持非终态以便重试。"""
     conn = _get_conn()

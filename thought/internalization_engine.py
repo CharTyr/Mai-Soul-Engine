@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Mapping, Optional
 
+from ..utils.runtime_mode import MutationBlocked, ensure_mutation_allowed
 from ..utils.runtime_resolution import generate_soul_text
 from ..prompts.fermentation_prompts import FERMENTED_INTERNALIZATION_PROMPT
 from .candidate import build_trait_candidate
@@ -65,7 +66,21 @@ class InternalizationEngine:
         """
         self._plugin = plugin
 
-    async def internalize_seed(self, seed: dict, dedup: dict | None = None, fermentation_inputs: list[str] | None = None) -> dict:
+    async def internalize_seed(
+        self,
+        seed: dict,
+        dedup: dict | None = None,
+        fermentation_inputs: list[str] | None = None,
+        finalize: Any = None,
+    ) -> dict:
+        """内化一颗种子。
+
+        Args:
+            finalize: 可选回调 ``(conn) -> (ok, reason)``，在**同一个事务内**、
+                提交之前执行。调用方用它做所有权校验 + 写入自己的终态
+                （如操作租约与种子终态），从而保证「人格 + 终态」一次提交。
+                ok=False 时整笔回滚——绝不允许「人格已写、调用方状态未落」的半成品。
+        """
         from ..utils.trait_tags import normalize_tags
 
         try:
@@ -167,6 +182,10 @@ class InternalizationEngine:
 
             internalization_confidence = candidate.confidence
 
+            # 写入闸门：LLM 阶段可能跨越模式切换，必须在**真正写库前**用当前配置再判一次。
+            # 入口检查挡不住「LLM 在途时被切到 observe」——那正是假成功的高发路径。
+            ensure_mutation_allowed(self._plugin, action=f"内化种子 {seed_info.get('id', '')}")
+
             # Phase 0C：原子化内化 — 光谱 + trait + graph edges 在同一事务中
             # 先完成 LLM 处理后，再统一进入 DB 写入阶段。BEGIN 必须放在所有 DML 之前，
             # 否则 isolation_level='' 下 conn.execute(UPDATE) 会隐式开启事务。
@@ -231,6 +250,19 @@ class InternalizationEngine:
                     commit=False,
                 )
 
+                if finalize is not None:
+                    ok, reason = finalize(conn)
+                    if not ok:
+                        conn.execute("ROLLBACK")
+                        logger.warning(
+                            "内化回滚（终态未落，人格不写）: %s", reason
+                        )
+                        return {
+                            "success": False,
+                            "finalize_failed": True,
+                            "error": reason,
+                        }
+
                 conn.commit()
             except Exception:
                 conn.execute("ROLLBACK")
@@ -247,6 +279,10 @@ class InternalizationEngine:
                 "dedup_similarity": stored.get("dedup_similarity", None),
             }
 
+        # 模式拒绝：结构化的「不写」，不是错误 → 不重试、不判失败
+        except MutationBlocked as e:
+            logger.info(f"内化被运行模式拒绝（已放弃写入）: {e}")
+            return {"success": False, "blocked_by_mode": True, "error": str(e)}
         # 顶层兜底：捕获所有异常以返回结构化错误，不吞没（已 log+exc_info）
         except Exception as e:
             logger.error(f"内化失败: {e}", exc_info=True)

@@ -236,6 +236,7 @@ def _engine(llm_response: dict) -> Any:
     fake_plugin = SimpleNamespace(
         ctx=_Context(),
         config=SimpleNamespace(
+            plugin=SimpleNamespace(enabled=True, mode="apply"),
             worldview=SimpleNamespace(
                 p1_enabled=True,
                 values_max_delta=2,
