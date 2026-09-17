@@ -24,6 +24,12 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
     lines.append(f"Notion同步: {'运行中' if plugin._notion_sync_task else '已停止'}")
     lines.append(f"自评任务: {'运行中' if plugin._self_reflection_task else '已停止'}")
     lines.append(f"发酵任务: {'运行中' if plugin._fermentation_task else '已停止'}")
+    # 监督器状态：区分「对象存在」与「任务真的在跑」（任务崩了不重启就是静默停摆）
+    supervisor = getattr(plugin, "_task_supervisor", None)
+    if supervisor is not None:
+        lines.append(supervisor.describe())
+        if not supervisor.is_healthy():
+            lines.append("⚠️ 有后台任务连续异常结束并已停止重试，请检查日志后重启插件")
     lines.append(f"数据目录: {plugin._data_dir}")
     lines.append(f"数据来源: {'宿主' if plugin._data_dir_source == 'host' else '插件目录'}")
 

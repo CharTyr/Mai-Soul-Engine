@@ -65,6 +65,10 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         self._data_dir: Path = self._plugin_dir / "data"
         self._data_dir_source: str = "plugin_dir"
         self._data_dir_info: dict | None = None  # P1.4: 数据目录解析/迁移详情
+        # 后台任务监督器：区分「在跑」与「已死」，防止任务静默停摆
+        from .utils.task_supervisor import TaskSupervisor
+
+        self._task_supervisor = TaskSupervisor()
         self._evolution_task: asyncio.Task | None = None
         self._notion_sync_task: asyncio.Task | None = None
         self._self_reflection_task: asyncio.Task | None = None
@@ -96,10 +100,26 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             and bool(getattr(config.thought_cabinet, "fermentation_enabled", False)),
         }
 
+    @staticmethod
+    def _task_action(current: Any, should_run: bool) -> str:
+        """后台任务的期望动作：start / restart / stop / keep（纯函数，便于单测）。
+
+        关键：`current is not None` **不等于**任务还活着。协程抛异常退出后
+        Task 对象仍在，旧实现据此认为"运行中"，导致任务静默停摆且不重启。
+        """
+        if should_run:
+            if current is None:
+                return "start"
+            if current.done():
+                return "restart"
+            return "keep"
+        return "stop" if current is not None else "keep"
+
     async def _reconcile_background_tasks(self) -> None:
         """统一管理后台任务生命周期（on_load / on_config_update 共用）。
 
-        根据 _compute_desired_tasks 的结果，启动缺失的任务、停止多余的任务。
+        根据 _compute_desired_tasks 的结果，启动缺失的任务、重启已死亡的任务、
+        停止多余的任务，并把状态记入监督器供 /soul_health 展示。
         """
         desired = self._compute_desired_tasks(self.config)
 
@@ -113,19 +133,53 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         for key, attr_name, loop_attr in task_entries:
             current = getattr(self, attr_name)
-            should_run = desired[key]
+            action = self._task_action(current, desired[key])
 
-            if should_run and current is None:
-                loop_fn = getattr(self, loop_attr)
-                setattr(self, attr_name, asyncio.create_task(loop_fn()))
-                logger.info("[Mai-Soul-Engine] %s 任务已启动", attr_name)
-            elif not should_run and current is not None:
+            if action == "keep":
+                continue
+
+            if action == "stop":
                 current.cancel()
                 try:
                     await current
                 except (asyncio.CancelledError, Exception):
                     pass
                 setattr(self, attr_name, None)
+                self._task_supervisor.note_stopped(key)
+                logger.info("[Mai-Soul-Engine] %s 任务已停止", attr_name)
+                continue
+
+            if action == "restart":
+                # 任务意外结束：记录原因，判断是否还允许重启
+                reason = ""
+                try:
+                    exc = current.exception()
+                    reason = f"{type(exc).__name__}: {exc}" if exc else "任务提前结束"
+                except (asyncio.CancelledError, asyncio.InvalidStateError):
+                    reason = "任务被取消"
+                self._task_supervisor.note_death(key, reason=reason)
+                setattr(self, attr_name, None)
+                if not self._task_supervisor.should_restart(key):
+                    logger.error(
+                        "[Mai-Soul-Engine] %s 连续异常结束已达上限，转为 failed，"
+                        "请人工检查后重启插件（原因: %s）",
+                        attr_name, reason,
+                    )
+                    continue
+                logger.warning(
+                    "[Mai-Soul-Engine] %s 意外结束（%s），正在重启", attr_name, reason,
+                )
+
+            loop_fn = getattr(self, loop_attr)
+            if not self._task_supervisor.start_allowed(key):
+                logger.error(
+                    "[Mai-Soul-Engine] %s 已因连续异常停止重试，跳过启动；"
+                    "请人工检查后重启插件", attr_name,
+                )
+                continue
+            setattr(self, attr_name, asyncio.create_task(loop_fn()))
+            self._task_supervisor.note_started(key)
+            logger.info("[Mai-Soul-Engine] %s 任务已启动", attr_name)
 
     async def on_load(self) -> None:
         """插件加载：初始化数据库、执行旧版迁移、启动周期任务。"""
