@@ -131,3 +131,35 @@ def test_allowed_states_are_enumerated() -> None:
     m = _mode()
     assert set(m.ALL_MODES) == {m.MODE_OFF, m.MODE_OBSERVE, m.MODE_APPLY}
     assert m.MODE_OFF == m.DEFAULT_MODE, "默认必须是 off"
+
+
+# ─── 真实默认值的实际效果（文档必须与之一致） ────────────────────────
+
+
+def test_schema_default_mode_is_off() -> None:
+    """schema 默认 mode = "off"：新装/未显式配置的实例什么都不做。
+
+    注意这意味着"旧配置 enabled=true 且 mode 从未写过"的实例（pydantic 会补
+    默认值 "off"）实际落在 **off**，而不是 observe。要恢复学习但不注入，
+    必须显式写 observe。文档必须按这个真实行为描述。
+    """
+    schema = _import_soul_submodule("plugin_ui_schema")
+    section = schema.PluginSectionConfig()
+    assert section.mode == "off"
+
+    resolved = _mode().resolve_runtime_mode(
+        SimpleNamespace(plugin=SimpleNamespace(mode=section.mode, enabled=True))
+    )
+    assert resolved.mode == "off"
+    assert resolved.injection_enabled is False
+    assert resolved.learning_enabled is False
+    assert resolved.mutation_allowed is False
+
+
+def test_empty_mode_with_legacy_enabled_maps_to_observe() -> None:
+    """mode 为空串（配置文件里真的没有该键）且 enabled=true → observe。"""
+    resolved = _mode().resolve_runtime_mode(
+        SimpleNamespace(plugin=SimpleNamespace(mode="", enabled=True))
+    )
+    assert resolved.mode == "observe"
+    assert resolved.migrated_from_legacy is True
