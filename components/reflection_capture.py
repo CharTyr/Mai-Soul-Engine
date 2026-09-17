@@ -53,6 +53,52 @@ _context_cache: dict[str, tuple[list[str], float]] = {}
 _context_cache_lock = _threading.Lock()
 
 
+# (session_id, reply_message_id) -> (触发消息尾行, 时间戳)
+# replyer 腿在回复生成前观测到真实 items，这里记下"本轮回复在回答什么"；
+# after_response 认领快照时用它做**内容比对**——比"谁更旧"的顺序推断硬得多，
+# 而且不用宿主加字段。进程重启丢失 → 退回旧顺序规则（安全降级）。
+_reply_tail_cache: dict[tuple[str, str], tuple[str, float]] = {}
+_REPLY_TAIL_TTL_SECONDS = 1800.0
+
+
+def cache_reply_tail(
+    session_id: str, reply_message_id: str, prompt_items: list[dict] | None,
+) -> str:
+    """replyer 腿：记下本轮回复的触发消息（尾行），返回归一化后的值。"""
+    import time as _time
+
+    sid = str(session_id or "").strip()
+    rid = str(reply_message_id or "").strip()
+    lines: list[str] = []
+    for content in extract_user_texts(list(prompt_items or []), 1):
+        sanitized = sanitize_text(str(content or ""), max_chars=_CONTEXT_LINE_MAX_CHARS)
+        if sanitized:
+            lines.append(sanitized)
+    tail = lines[-1] if lines else ""
+    if sid and rid and tail:
+        with _context_cache_lock:
+            _reply_tail_cache[(sid, rid)] = (tail, _time.time())
+            if len(_reply_tail_cache) > _CONTEXT_MAX_ENTRIES:
+                for key in list(_reply_tail_cache)[: max(1, len(_reply_tail_cache) // 2)]:
+                    _reply_tail_cache.pop(key, None)
+    return tail
+
+
+def take_reply_tail(session_id: str, reply_message_id: str) -> str:
+    """取回复腿记下的触发尾行（TTL 内），取不到返回空串。"""
+    import time as _time
+
+    key = (str(session_id or "").strip(), str(reply_message_id or "").strip())
+    hit = _reply_tail_cache.get(key)
+    if not hit:
+        return ""
+    tail, ts = hit
+    if (_time.time() - ts) > _REPLY_TAIL_TTL_SECONDS:
+        _reply_tail_cache.pop(key, None)
+        return ""
+    return tail
+
+
 def cache_session_context(session_id: str, prompt_items: list[dict]) -> list[str]:
     """从 before_request 的宿主提示项提取最近用户消息，缓存供 after_response 用。
 
@@ -183,8 +229,12 @@ async def capture_after_response(plugin, source: str, **kwargs: Any) -> dict[str
             create_pending_reflection,
         )
 
-        # FIFO 认领：同会话并发两轮各认领自己的快照；同一 reply 重试复用同一快照
-        snapshot = claim_snapshot_for_response(session_id, reply_message_id)
+        # 认领：同一 reply 重试复用同一快照；有多条候选时用 replyer 腿记下的
+        # **触发消息**做内容比对（比顺序推断硬），证据否定了全部候选就弃权。
+        snapshot = claim_snapshot_for_response(
+            session_id, reply_message_id,
+            reply_tail=take_reply_tail(session_id, reply_message_id),
+        )
         snapshot_id = snapshot.snapshot_id if snapshot else ""
         context_lines: list[str] = []
         if snapshot is not None:

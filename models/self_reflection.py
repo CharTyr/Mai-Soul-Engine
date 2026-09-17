@@ -143,6 +143,50 @@ class SelfReflection:
 # ─── injection_snapshots CRUD ─────────────────────────────────────
 
 
+def _norm_tail(text: str) -> str:
+    """归一化"触发上文尾行"：压空白 + **剥掉"昵称: "前缀**，只比消息内容。
+
+    必须剥前缀：快照侧的行来自 planner 的上下文（带昵称前缀），replyer 侧
+    来自生成请求的 items——**同一条消息两侧的前缀渲染可能不同**，裸比对会漏配
+    （漏配 = 弃权，安全但白丢一次学习机会）。剥掉前缀后两侧都只剩内容，
+    比对才稳。剥的是"短前缀 + 冒号"，消息正文里的冒号不受影响。
+    """
+    import re as _re
+
+    s = _re.sub(r"\s+", " ", str(text or "")).strip()
+    head = _re.match(r"^[^:：\n]{1,24}[:：]\s*", s)
+    if head:
+        s = s[head.end():].strip()
+    return s
+
+
+def _tails_match(a: str, b: str) -> bool:
+    """两条尾行是否指向同一条消息。
+
+    相等 → 是；一方包含另一方且较短者 ≥8 字 → 也算（防一处多带了前缀/后缀）。
+    短消息（"好"）只认同等，避免"好"出现在任何长句里就误配。
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 8 and short in long_
+
+
+def _tail_of_context(context_json: str) -> str:
+    """快照触发上文的**最后一行**（最近一条用户消息）。"""
+    import json as _json_local
+
+    try:
+        data = _json_local.loads(context_json or "[]")
+    except (ValueError, TypeError):
+        return ""
+    if isinstance(data, list) and data:
+        return _norm_tail(str(data[-1]))
+    return ""
+
+
 def create_injection_snapshot(
     stream_id: str,
     session_id: str,
@@ -196,6 +240,7 @@ def claim_snapshot_for_response(
     session_id: str,
     reply_message_id: str = "",
     max_age_seconds: int = SNAPSHOT_MAX_CLAIM_AGE_SECONDS,
+    reply_tail: str = "",
 ) -> InjectionSnapshot | None:
     """为一条回复认领注入快照（FIFO，1:1 归属）。
 
@@ -212,6 +257,16 @@ def claim_snapshot_for_response(
     after_response 没触发，它的快照会滞留；没有窗口限制的话，它会去配很久以后
     另一轮的回复。超过窗口的快照不再被认领（返回 None = 合法降级），
     但保留在表里可审计。
+
+    ``reply_tail``（本轮回复的**触发消息**，取自 replyer 腿真实 items）是内容证据：
+    比"谁更旧"这类顺序推断硬得多，且不需要宿主加字段。判定规则：
+
+    - 恰好一条候选的尾行与它匹配 → 认领这条，**不算歧义**（顺序推断分不清的
+      并发两轮，内容证据能分清）；
+    - 一条都不匹配 → 说明这批候选都不是本轮那一次注入（典型：上一轮没发出回复
+      的滞留快照）→ **弃权**：照旧消费最旧那条但标歧义，下游跳过人格反馈；
+    - 多条匹配 → 分不清 → 标歧义；
+    - 没有内容证据（replyer 腿没观测到）→ 退回旧的顺序规则。
     """
     conn = _get_conn()
     if reply_message_id:
@@ -225,26 +280,34 @@ def claim_snapshot_for_response(
             return _row_to_snapshot(row)
 
     cutoff = _dt_to_str(datetime.now() - timedelta(seconds=int(max_age_seconds)))
-    row = conn.execute(
+    pending = conn.execute(
         "SELECT * FROM soul_injection_snapshots "
         "WHERE session_id = ? AND (consumed_at IS NULL OR consumed_at = '') "
         "AND created_at >= ? "
-        "ORDER BY created_at ASC, rowid ASC LIMIT 1",
+        "ORDER BY created_at ASC, rowid ASC",
         (session_id, cutoff),
-    ).fetchone()
-    if not row:
+    ).fetchall()
+    if not pending:
         return None
 
-    # 配对歧义：窗口内还有别的未认领快照 → 无法确定这条回复对应哪一次注入。
-    # 仍然按 FIFO 消费（否则队列会滞留），但**打上标记**，
-    # 下游据此跳过会改写人格的自评反馈——不允许拿猜出来的关联去改人格。
-    pending_count = conn.execute(
-        "SELECT COUNT(*) AS n FROM soul_injection_snapshots "
-        "WHERE session_id = ? AND (consumed_at IS NULL OR consumed_at = '') "
-        "AND created_at >= ?",
-        (session_id, cutoff),
-    ).fetchone()
-    ambiguous = int(pending_count["n"] or 0) > 1
+    # 默认：顺序规则（FIFO 消费最旧，多于一条即歧义）
+    row = pending[0]
+    ambiguous = len(pending) > 1
+
+    # 有内容证据时优先用它（见 docstring 的判定规则）
+    evidence_tail = _norm_tail(reply_tail)
+    if evidence_tail:
+        matches = [r for r in pending if _tails_match(_tail_of_context(r["context_json"]), evidence_tail)]
+        if len(matches) == 1:
+            row = matches[0]
+            ambiguous = False
+        elif not matches:
+            # 证据否定了全部候选：这批都不是本轮注入 → 弃权（仍然消费以免滞留）
+            row = pending[0]
+            ambiguous = True
+        else:
+            row = matches[0]
+            ambiguous = True
 
     now = _dt_to_str(datetime.now())
     cursor = conn.execute(

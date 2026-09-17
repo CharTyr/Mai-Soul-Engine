@@ -421,6 +421,11 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
             _context_cache.clear()
 
+        async def _clear_reply_tail_cache() -> None:
+            from .components.reflection_capture import _reply_tail_cache
+
+            _reply_tail_cache.clear()
+
         async def _reset_evolution_state() -> None:
             from .components.evolution_task import _bot_filter_warned, reset_aggregation_state
 
@@ -429,6 +434,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
 
         await _step("清注入冷却表", _clear_module_state)
         await _step("清自评上下文缓存", _clear_context_cache)
+        await _step("清回复配对证据缓存", _clear_reply_tail_cache)
         await _step("清演化聚合状态", _reset_evolution_state)
 
         async def _close_database() -> None:
@@ -537,6 +543,21 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         自身按标记幂等，重入不会叠加。
         """
         from .components.ideology_injector import inject_ideology
+
+        # 配对内容证据：自评开着时，先记下本轮回复的触发消息（尾行）。
+        # 放在开关判断**之前**——即使管理员只想配对不要 replyer 注入，
+        # 这条证据也该记；只依赖 self_reflection.enabled。
+        if self.config.self_reflection.enabled:
+            try:
+                from .components.reflection_capture import cache_reply_tail
+
+                cache_reply_tail(
+                    str(kwargs.get("session_id", "") or ""),
+                    str(kwargs.get("reply_message_id", "") or ""),
+                    kwargs.get("items") or [],
+                )
+            except Exception:  # noqa: BLE001 — 证据记录失败不得影响注入
+                logger.debug("[Soul] 记录回复配对证据失败（忽略）")
 
         if not self.config.injection.replyer_injection_enabled:
             return {"success": True, "action": "continue"}
