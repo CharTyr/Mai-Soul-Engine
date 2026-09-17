@@ -16,6 +16,10 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
 
     lines = ["插件健康状态：\n"]
     lines.append(f"引擎开关: {'开启' if plugin.config.plugin.enabled else '关闭'}")
+    # 运行模式是三态（off/observe/apply），一个 enabled 布尔表达不了
+    from ..utils.runtime_mode import describe_runtime_mode
+
+    lines.append(describe_runtime_mode(plugin.config))
     lines.append(f"演化任务: {'运行中' if plugin._evolution_task else '已停止'}")
     lines.append(f"Notion同步: {'运行中' if plugin._notion_sync_task else '已停止'}")
     lines.append(f"自评任务: {'运行中' if plugin._self_reflection_task else '已停止'}")

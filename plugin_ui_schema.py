@@ -68,6 +68,16 @@ class PluginSectionConfig(PluginConfigBase):
             "须与插件默认一致；升级插件后由 Runner 按版本合并配置，请勿随意修改。",
         ),
     )
+    mode: str = Field(
+        default="off",
+        description="运行模式：off（关闭）/ observe（观察）/ apply（应用）",
+        json_schema_extra=_ui(
+            "运行模式",
+            "off：不学习不注入；observe：只学习与生成候选，不改人格、不影响回复；"
+            "apply：真正注入回复并允许改写人格。"
+            "未显式设置时按最小权限处理（旧 enabled=true 只会映射为 observe）。",
+        ),
+    )
 
 
 class AdminConfig(PluginConfigBase):

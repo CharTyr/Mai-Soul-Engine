@@ -37,6 +37,8 @@ def _make_plugin(
 
     return SimpleNamespace(
         config=SimpleNamespace(
+            # 这些用例验证的是 apply 模式下的命令行为；模式闸门单独有测试覆盖
+            plugin=SimpleNamespace(enabled=True, mode="apply"),
             admin=SimpleNamespace(admin_user_id=admin_user_id),
             thought_cabinet=SimpleNamespace(
                 enabled=thought_cabinet_enabled,

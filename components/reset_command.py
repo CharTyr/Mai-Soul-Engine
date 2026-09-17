@@ -25,6 +25,13 @@ async def handle_reset(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
 
+    from ..utils.spectrum_utils import check_mutation_mode
+
+    allowed, mode_err = check_mutation_mode(plugin, "重置灵魂光谱")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
     from ..utils.spectrum_utils import extract_command_actor, extract_command_text
     platform, user_id = extract_command_actor(kwargs)
 

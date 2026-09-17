@@ -96,6 +96,7 @@ def _reset_plugin(sent: list[str]) -> Any:
 
     return SimpleNamespace(
         config=SimpleNamespace(
+            plugin=SimpleNamespace(enabled=True, mode="apply"),
             admin=SimpleNamespace(admin_user_id="qq:3659592968"),
         ),
         ctx=_Ctx(),

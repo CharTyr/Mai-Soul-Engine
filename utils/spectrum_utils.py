@@ -87,6 +87,23 @@ def extract_command_text(kwargs: dict | None) -> str:
     return text.strip() if isinstance(text, str) else ""
 
 
+def check_mutation_mode(plugin: Any, action: str) -> tuple[bool, str]:
+    """运行模式闸门：只有 apply 模式允许改写正式人格。
+
+    observe 模式的意义是「只观察、不改动」，所以接纳/槽位/生命周期/提升这类
+    会改变人格的命令必须被拦下，否则观察模式只是名义上的。
+    """
+    from .runtime_mode import resolve_runtime_mode
+
+    mode = resolve_runtime_mode(getattr(plugin, "config", None))
+    if mode.acceptance_allowed:
+        return True, ""
+    return False, (
+        f"⚠️ 当前运行模式为 {mode.mode}，不允许{action}（不修改已接纳人格）。\n"
+        f'要真正生效，请把配置 [plugin].mode 设为 "apply" 后重试。'
+    )
+
+
 def extract_command_actor(kwargs: dict | None) -> tuple[str, str]:
     """从 SDK2 Command kwargs 解析 platform / user_id。
 

@@ -197,6 +197,7 @@ def _approve_plugin() -> Any:
 
     return SimpleNamespace(
         config=SimpleNamespace(
+            plugin=SimpleNamespace(enabled=True, mode="apply"),
             admin=SimpleNamespace(admin_user_id="qq:admin123"),
             thought_cabinet=SimpleNamespace(
                 enabled=True,

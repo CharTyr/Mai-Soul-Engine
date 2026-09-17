@@ -82,7 +82,11 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
     @staticmethod
     def _compute_desired_tasks(config: MaiSoulEngineConfig) -> dict[str, bool]:
         """纯函数：根据配置计算四个后台任务的期望状态（便于单测）。"""
-        master = bool(config.plugin.enabled)
+        # 学习类任务由运行模式的 learning_enabled 闸门控制：
+        # off 全停；observe/apply 才按各自开关启动（observe 只学习、不改人格）。
+        from .utils.runtime_mode import resolve_runtime_mode
+
+        master = resolve_runtime_mode(config).learning_enabled
         return {
             "evolution": master and bool(config.evolution.evolution_enabled),
             "notion": master and bool(config.notion.enabled),

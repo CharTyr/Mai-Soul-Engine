@@ -16,6 +16,7 @@ from typing import Any
 from ..models.ideology_model import get_or_create_spectrum, query_active_traits_for_injection
 from ..models.self_reflection import DELIVERY_HOOK_APPLIED, mark_snapshot_delivery_state
 from ..prompts.ideology_prompts import build_ideology_prompt
+from ..utils.runtime_mode import resolve_runtime_mode
 from ..utils.host_prompt_items import (
     append_block_to_first_system,
     extract_latest_user_text,
@@ -307,8 +308,13 @@ def _text_relevance_score(trait, text_norm: str) -> tuple[float, list[str]]:
 
 
 def _is_inject_enabled(plugin, prompt_items: list[dict]) -> dict | None:
-    """检查是否应执行注入。返回 None 表示允许注入，或返回终止字典。"""
-    if not plugin.config.plugin.enabled:
+    """检查是否应执行注入。返回 None 表示允许注入，或返回终止字典。
+
+    闸门来自运行模式（``utils.runtime_mode``）：只有 ``apply`` 模式才注入；
+    ``observe`` 会学习但**不影响真实回复**，``off`` 什么都不做。
+    """
+    mode = resolve_runtime_mode(plugin.config)
+    if not mode.injection_enabled:
         return {"success": True, "action": "continue"}
     if not prompt_items:
         return {"success": True, "action": "continue"}

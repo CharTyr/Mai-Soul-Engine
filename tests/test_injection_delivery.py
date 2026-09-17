@@ -63,10 +63,10 @@ class _WVStub:
         return ""
 
 
-def _plugin(tmp_path: Path) -> SimpleNamespace:
+def _plugin(tmp_path: Path, *, mode: str = "apply", enabled: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         config=SimpleNamespace(
-            plugin=SimpleNamespace(enabled=True),
+            plugin=SimpleNamespace(enabled=enabled, mode=mode),
             injection=SimpleNamespace(
                 scope="all",
                 inject_private=False,
@@ -139,8 +139,27 @@ def test_injection_skips_when_no_system_item(tmp_path: Path) -> None:
 def test_injection_skipped_when_plugin_disabled(tmp_path: Path) -> None:
     """插件 disabled → 不注入。"""
     injector = _import_soul_submodule("components.ideology_injector")
-    plugin = _plugin(tmp_path)
-    plugin.config.plugin.enabled = False
+    plugin = _plugin(tmp_path, mode="off", enabled=False)
+
+    result = asyncio.run(injector.inject_ideology(plugin, **_host_kwargs()))
+
+    assert "modified_kwargs" not in result
+
+
+def test_injection_skipped_in_observe_mode(tmp_path: Path) -> None:
+    """观察模式：可以学习，但**不得影响真实回复**。"""
+    injector = _import_soul_submodule("components.ideology_injector")
+    plugin = _plugin(tmp_path, mode="observe")
+
+    result = asyncio.run(injector.inject_ideology(plugin, **_host_kwargs()))
+
+    assert "modified_kwargs" not in result, "observe 模式不得注入回复请求"
+
+
+def test_injection_skipped_for_legacy_enabled_without_mode(tmp_path: Path) -> None:
+    """旧配置 enabled=true 且未写 mode → 不注入（不得隐式生效）。"""
+    injector = _import_soul_submodule("components.ideology_injector")
+    plugin = _plugin(tmp_path, mode="", enabled=True)
 
     result = asyncio.run(injector.inject_ideology(plugin, **_host_kwargs()))
 

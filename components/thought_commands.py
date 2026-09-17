@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Any
 
-from ..utils.spectrum_utils import extract_command_text
+from ..utils.spectrum_utils import check_mutation_mode, extract_command_text
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,11 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     if not ok:
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "批准种子内化")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -285,6 +290,11 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     if not ok:
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "拒绝种子")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -568,6 +578,11 @@ async def handle_trait_set_tags(plugin: Any, stream_id: str, **kwargs: Any) -> t
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
 
+    allowed, mode_err = check_mutation_mode(plugin, "修改 trait 标签")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
@@ -613,6 +628,11 @@ async def handle_trait_merge(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     if not ok:
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "合并 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -678,6 +698,11 @@ async def handle_trait_disable(plugin: Any, stream_id: str, **kwargs: Any) -> tu
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
 
+    allowed, mode_err = check_mutation_mode(plugin, "禁用 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
@@ -718,6 +743,11 @@ async def handle_trait_enable(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
 
+    allowed, mode_err = check_mutation_mode(plugin, "启用 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
@@ -757,6 +787,11 @@ async def handle_trait_delete(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     if not ok:
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "删除 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -803,6 +838,11 @@ async def handle_seed_reject_all(plugin: Any, stream_id: str, **kwargs: Any) -> 
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
 
+    allowed, mode_err = check_mutation_mode(plugin, "批量拒绝种子")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
@@ -845,6 +885,11 @@ async def handle_trait_slot(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
     if not ok:
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "修改槽位")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -918,6 +963,11 @@ async def handle_promote_global(plugin: Any, stream_id: str, **kwargs: Any) -> t
     if not ok:
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "将 trait 提升为全局")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
