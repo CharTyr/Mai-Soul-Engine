@@ -290,6 +290,37 @@ def expire_old_traits(ttl_days: int) -> int:
     return cursor.rowcount
 
 
+def _release_slot_if_contended(conn: sqlite3.Connection, trait_id: str) -> bool:
+    """恢复启用前检查槽位冲突：被他人占用则让出本 trait 的槽。
+
+    唯一索引只覆盖 ``enabled = 1`` 的行，所以「禁用期间保留槽号」是安全的；
+    但重新启用时若该槽已被别的启用 trait 占用就会撞索引。约定不挤走现占用者，
+    改为本次无槽启用（管理员可显式再 `/soul_slot` 指槽）。
+
+    Returns:
+        是否让出了槽位。
+    """
+    row = conn.execute(
+        "SELECT cabinet_slot_no FROM soul_crystallized_traits WHERE trait_id = ?",
+        (trait_id,),
+    ).fetchone()
+    if row is None or row["cabinet_slot_no"] is None:
+        return False
+    slot_no = row["cabinet_slot_no"]
+    occupant = conn.execute(
+        "SELECT 1 FROM soul_crystallized_traits "
+        "WHERE cabinet_slot_no = ? AND enabled = 1 AND deleted = 0 AND trait_id != ?",
+        (slot_no, trait_id),
+    ).fetchone()
+    if occupant is None:
+        return False
+    conn.execute(
+        "UPDATE soul_crystallized_traits SET cabinet_slot_no = NULL WHERE trait_id = ?",
+        (trait_id,),
+    )
+    return True
+
+
 def set_trait_lifecycle_state(
     trait_id: str,
     lifecycle_state: str,
@@ -305,16 +336,24 @@ def set_trait_lifecycle_state(
     返回是否更新成功（rowcount > 0）。
     """
     conn = _get_conn()
-    if enabled is not None:
-        cursor = conn.execute(
-            "UPDATE soul_crystallized_traits SET lifecycle_state = ?, enabled = ? WHERE trait_id = ?",
-            (lifecycle_state, 1 if enabled else 0, trait_id),
-        )
-    else:
-        cursor = conn.execute(
-            "UPDATE soul_crystallized_traits SET lifecycle_state = ? WHERE trait_id = ?",
-            (lifecycle_state, trait_id),
-        )
+    try:
+        if enabled is not None:
+            if enabled:
+                # 恢复启用前让出被抢占的槽，避免撞部分唯一索引
+                _release_slot_if_contended(conn, trait_id)
+            cursor = conn.execute(
+                "UPDATE soul_crystallized_traits SET lifecycle_state = ?, enabled = ? WHERE trait_id = ?",
+                (lifecycle_state, 1 if enabled else 0, trait_id),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE soul_crystallized_traits SET lifecycle_state = ? WHERE trait_id = ?",
+                (lifecycle_state, trait_id),
+            )
+    except sqlite3.IntegrityError:
+        # 约束冲突必须消化为返回值，不能把 sqlite 异常抛给命令层
+        conn.rollback()
+        return False
     if commit:
         conn.commit()
     return cursor.rowcount > 0

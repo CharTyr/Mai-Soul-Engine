@@ -11,7 +11,16 @@ import sqlite3
 
 from ._conn import _dt_to_str, _get_conn, _str_to_dt
 
+# 种子状态机（见 AGENTS.md）：
+#   pending → fermenting → internalized
+#   pending → approved / rejected / expired
+# 终态 = 生命周期结束、可被保留策略回收；pending/fermenting 都不是终态。
+TERMINAL_SEED_STATUSES: tuple[str, ...] = ("approved", "rejected", "expired", "internalized")
+ACTIVE_SEED_STATUSES: tuple[str, ...] = ("pending", "fermenting")
+
 __all__ = [
+    "ACTIVE_SEED_STATUSES",
+    "TERMINAL_SEED_STATUSES",
     "ThoughtSeed",
     "FermentationInput",
     "count_fermenting_seeds",
@@ -191,21 +200,34 @@ def expire_old_pending_seeds(ttl_hours: float) -> int:
 
 
 def count_reviewed_seeds() -> int:
-    """统计已审核种子数量（approved/rejected/expired）。"""
+    """统计**终态**种子数量（approved/rejected/expired/internalized）。
+
+    不含 ``fermenting``：发酵中是在途工作，不是可回收的历史记录。
+    """
     conn = _get_conn()
+    placeholders = ",".join("?" for _ in TERMINAL_SEED_STATUSES)
     row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE status != 'pending'"
+        f"SELECT COUNT(*) as cnt FROM soul_thought_seeds WHERE status IN ({placeholders})",
+        TERMINAL_SEED_STATUSES,
     ).fetchone()
     return int(row["cnt"]) if row else 0
 
 
 def delete_oldest_reviewed_seeds(keep_count: int) -> int:
-    """删除最旧的已审核种子（approved/rejected/expired），保留最近 keep_count 条。"""
+    """删除最旧的终态种子，保留最近 keep_count 条。
+
+    只碰终态（approved/rejected/expired/internalized）：
+    - ``pending`` 是待审队列，不属历史
+    - ``fermenting`` 在途发酵（已有发酵输入），删掉等于丢状态与证据
+    """
     if keep_count <= 0:
         return 0
     conn = _get_conn()
+    placeholders = ",".join("?" for _ in TERMINAL_SEED_STATUSES)
     rows = conn.execute(
-        "SELECT seed_id FROM soul_thought_seeds WHERE status != 'pending' ORDER BY created_at DESC"
+        f"SELECT seed_id FROM soul_thought_seeds WHERE status IN ({placeholders}) "
+        "ORDER BY created_at DESC, rowid DESC",
+        TERMINAL_SEED_STATUSES,
     ).fetchall()
     to_delete = [row["seed_id"] for row in rows[keep_count:]]
     for seed_id in to_delete:
