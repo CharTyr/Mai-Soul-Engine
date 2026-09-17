@@ -91,9 +91,9 @@ enabled = true      # 旧字段，保留兼容
 | T11 槽位恢复 | 禁用→被占→恢复不撞唯一索引，且不挤走现占用者 | `tests/test_trait_slot_recovery.py` |
 | T12 非法输入不写正式状态 | 非法投递态、非法种子终态、未知 operation 均拒绝 | 上述各文件 |
 | T13 模式闸门 | off/observe 不注入、不接纳、不改人格；旧配置不隐式 apply | `tests/test_runtime_mode.py`、`tests/test_mode_gate_commands.py` |
-| T14 任务监督与故障恢复 | 崩溃可发现（不再只看 `is not None`）、自动重启、超限转 failed 并提示人工介入 | `tests/test_task_supervisor.py` |
+| T14 任务监督与故障恢复 | 崩溃可发现（不再只看 `is not None`）、自动重启、超限转 failed 并提示人工介入；稳定运行后的偶发崩溃不累积（1h 窗口） | `tests/test_task_supervisor.py` |
 | T15 命令鉴权与确认 | 真实载荷下 `/soul_reset confirm` 走执行分支；只读命令在 observe 下不受阻 | `tests/test_command_input.py`、`tests/test_mode_gate_commands.py` |
-| T16 迁移与多库 | — | **未实现**（需连真实数据库，待授权） |
+| T16 迁移与多库 | 只读盘点 + 不自动选源 + 风险告警 + 谱系观察；已在真实双库上跑通 | `tests/test_migration_inventory.py`、`migration/inventory.py` |
 | T17 legacy 隔离 | — | **未实现** |
 | T18 日志脱敏 | 代码路径不含凭据；未做专门审计 | **部分** |
 | T19 看板区分状态 | `/soul_health` 输出模式与四闸门 | `components/health_command.py` |
@@ -112,23 +112,59 @@ enabled = true      # 旧字段，保留兼容
 
 ## 5. 已知限制与未完成项
 
-- **Phase D 部分实现**：
-  - 已做：候选优先（`thought/candidate.py`，无效候选拒绝且不写人格）、局部优先演化的
-    开关（`[worldview].local_first_evolution`，**默认关**）、显式晋升（`/soul_promote_global` 已有）
-  - 未做：把「局部优先」设为默认。当前默认仍是全局写入——这是刻意的，因为反转它会
-    改变产品语义，需要操作者决策。
-  - **群切片目前仍是「记录」而非「隔离」**，文档与看板措辞不应把它宣传成隔离机制。
-- **Phase E 部分实现**：
-  - 已做：三模式闸门、任务监督器（崩溃可见 + 重启 + 超限 failed）
-  - 未做：卸载清理的逐项隔离（单个清理步骤失败不应阻断其它步骤）、通知 outbox
-    （发送失败要有重试与去重，而不是静默丢失）
-- **Phase C 剩余**：迁移工具（只读盘点 + 显式选源 + 预演报告）——需要操作者授权后
-  才能连真实数据库。
+- **Phase D 已按方案实现**：
+  - 候选优先（`thought/candidate.py`）：无效候选拒绝且不写人格（越界不静默 clamp）
+  - **局部优先演化为默认**（`[worldview].local_first_evolution` 默认 `true`）：
+    单群输入不足以改写 bot 的全局人格；新观点写入来源群、只影响该群，要全局须
+    显式 `/soul_promote_global`。**要恢复旧行为（观点直接写全局）把该项设为 `false`。**
+    已核对不会撞分层上限（`layer_cap` 是每轮 delta 幅度、`limit_per_layer` 是注入
+    展示条数，都不是 trait 数量上限）。
+  - `/soul_health` 会显示当前作用域，避免「本群没学到」被误判为故障
+  - **群切片仍偏向「记录」而非严格隔离**：注入按 `stream_id == 本群 OR global` 匹配，
+    群内观点不会外溢，但「同一观点的跨群合并」没有实现
+- **Phase E 已按方案实现**：三模式闸门、任务监督器、卸载清理逐项隔离、通知 outbox
+  （发送失败入队重放 + 稳定哈希去重 + 超限转 failed 待查）
 - **schema 版本守卫**：`/soul_health` 显示 schema 版本，但尚未在版本不匹配时拒绝启动。
 - **`session_id` 推断会话类型**：宿主 planner hook 载荷不含会话类型字段，私聊/群聊
   仍按 `session_id` 字面量推断（已在代码标注为设计债，需宿主提供显式元数据）。
 - **`final_request_verified`**：宿主未提供请求后回调，插件侧只能确认「已交回宿主」
   （`hook_applied`），无法自我声明最终请求已包含注入。
+- **快照配对的残余风险**：已核对宿主源码，`planner.before_request` 与
+  `replyer.after_response` 的 payload **没有任何共同请求 id**，配对只能是启发式
+  （FIFO + 同 reply 复用 + 30 分钟陈旧窗口）。若某一轮生成失败且另一轮并发响应，
+  仍可能把一次回复配到相邻轮次的快照上——影响范围限于该次自评的上下文归属。
+  要根治需宿主提供关联 id。
+
+---
+
+## 5.1 复查发现并已修复（第二轮）
+
+- **通知兜底去重键用 `abs(hash(...))`** —— Python 的 hash 受 `PYTHONHASHSEED` 影响、
+  每进程不同，重启后同一条通知被重复入队，去重形同虚设。改用 `sha256` 稳定哈希。
+- **任务监督器 `restart_count` 永不重置** —— 一个每几天崩一次的长期任务，数月后会被
+  永久判 failed（与「连续崩溃」混为一谈）。改为稳定运行 ≥1h 后的崩溃视为新事故。
+- **注入热路径对提示项 `deepcopy`** —— items 可能含历史消息/base64 图片，每次请求白复制
+  一大块。改为只复制顶层 + parts 列表 + 被改的 part（测试用对象同一性钉住）。
+- **迁移框架用「过期的 current」判断** —— 迁移块顺序错位会让 `user_version` 停在中间值，
+  下次启动重跑或跳过迁移。改为每块成功后跟进 `current`，并加增量升级路径测试。
+- **盘点工具表名写成 `soul_spectrum`** —— 真实表是 `soul_ideology_spectrum`，读不到却
+  静默显示「—」。已修正并加「表名单必须与实际 schema 一致」的测试。
+
+---
+
+## 5.2 真实数据预演结果（只读，2026-09-17）
+
+对 basechar 上两份候选做只读盘点（拷副本到本地跑，未改动线上文件）：
+
+- `plugins/CharTyr_Mai-Soul-Engine/data/soul.db`（较小，2026-07-10）
+- `data/plugins/<plugin-id>/mai_soul_engine/soul.db`（较大，2026-07-11）
+
+两者 schema 版本均为 2（升级到当前会走 v3/v4/v5 迁移），都含实质数据，工具已给出告警。
+**谱系观察结论**：后者包含前者的全部 27 个种子（其中 8 个状态已变，pending→rejected），
+且 3 个 trait 在前者中 `enabled=1`、在后者中已 `deleted=1` —— 后者是**同一谱系的后续状态**，
+前者是较早的快照。
+
+选哪一份仍由操作者决定（工具按设计不选源）。
 
 ---
 
