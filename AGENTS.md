@@ -13,7 +13,7 @@
 |----|------|
 | 运行时 | **maibot-plugin-sdk 2.x**，独立 Runner；入口 `plugin.py` + `create_plugin()` |
 | 禁止 | `import src.*`、写宿主 `data/MaiBot.db`、恢复 POST_LLM 注入 |
-| 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有一个 `@HookHandler(mode=OBSERVE)`（`replyer.after_response`，见"自我评价反馈回路"） |
+| 注入 | **两个注入点**，都走 `components/ideology_injector.py`：**planner**（`maisaka.planner.before_request`，主视图——立场/分层/情绪/图谱/自评，**落快照、打冷却**）+ **replyer**（`maisaka.replyer.before_model_request`，只给「与本轮相关的观点 + 表达倾向」，**不落快照、不打冷却**，避免双重注入与同会话多快照歧义）；自评捕获另有 `@HookHandler(mode=OBSERVE)`（`replyer.after_response`，见"自我评价反馈回路"） |
 | 注入载荷 | **宿主传入/回读的是 `items`（Context Item 列表），不是 `messages`**。形状差异统一由 `utils/host_prompt_items.py` 处理。回写键与传入形状不一致时宿主**整份忽略且不报错**——历史上注入全程空转、日志一切正常，就是踩的这个 |
 | 注入合并 | **追加到首个 system item 的最后一个 text part**，保留 `item_schema_version`；无 system item → fail-open 跳过注入，不得凭空 prepend |
 | 宿主返回解包 | `config.get` 被 SDK 解包成**裸值**（用 `utils/host_config.py` 归一）；`llm.generate` / `send.*` / `chat.open_session` **不解包**（读 `success` / `response`）；`render.html2png` 解包成 payload |
