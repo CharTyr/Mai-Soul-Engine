@@ -512,6 +512,33 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
     # ===== HookHandler：意识形态注入 =====
 
     @HookHandler(
+        "maisaka.replyer.before_model_request",
+        name="soul_replyer_injector",
+        description="replyer 请求前注入「本次观点 + 表达倾向」视图（分用途投递）",
+        mode=HookMode.BLOCKING,
+        order=HookOrder.NORMAL,
+        timeout_ms=3000,
+        error_policy=ErrorPolicy.SKIP,
+    )
+    async def soul_replyer_injector(self, **kwargs: Any) -> dict[str, Any]:
+        """分用途投递（方案 §4.1）：replyer 只收观点与表达倾向。
+
+        与 planner 视图的差异：
+        - 内容：不含分层摘要/图谱/自评自查（那是决策材料）
+        - 副作用：**不落快照、不打冷却**（快照锚点与冷却都属于 planner 的
+          before_request；replyer 也写会让「同会话多快照」恒真、把歧义判定打满）
+
+        宿主每次重试都会调用本 hook，且每次传入重建的 items，因此
+        「每次调用各注入一次」是正确的；`append_block_to_first_system`
+        自身按标记幂等，重入不会叠加。
+        """
+        from .components.ideology_injector import inject_ideology
+
+        if not self.config.injection.replyer_injection_enabled:
+            return {"success": True, "action": "continue"}
+        return await inject_ideology(self, _purpose="replyer", **kwargs)
+
+    @HookHandler(
         "maisaka.planner.before_request",
         name="soul_ideology_injector",
         description="在 planner 请求前注入意识形态光谱提示词与相关 trait",

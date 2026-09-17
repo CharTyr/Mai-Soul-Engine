@@ -253,6 +253,35 @@ class InjectionConfig(PluginConfigBase):
         description="私聊注入",
         json_schema_extra=_ui("私聊注入", "是否在私聊回复前也注入光谱提示。"),
     )
+    prompt_token_budget: int = Field(
+        default=800,
+        description="Planner 注入预算（估算 token）",
+        json_schema_extra=_ui(
+            "Planner 注入预算",
+            "估算 token 上限。插件侧拿不到宿主分词器，按保守规则估算"
+            "（中文约 1 token/字）；超预算从低优先级条目开始丢弃并记日志。",
+            placeholder="800",
+        ),
+    )
+    replyer_token_budget: int = Field(
+        default=400,
+        description="Replyer 注入预算（估算 token）",
+        json_schema_extra=_ui(
+            "Replyer 注入预算",
+            "Replyer 只收本次相关观点与表达倾向（不含分层摘要/图谱/自评），"
+            "因此预算通常小于 Planner。",
+            placeholder="400",
+        ),
+    )
+    replyer_injection_enabled: bool = Field(
+        default=True,
+        description="Replyer 侧分用途注入",
+        json_schema_extra=_ui(
+            "Replyer 侧注入",
+            "开启后 replyer 收到「观点 + 表达倾向」视图（与 planner 的分层/立场视图"
+            "分开，禁止同一份完整动态层塞两遍）。",
+        ),
+    )
     max_traits: int = Field(
         default=3,
         ge=0,

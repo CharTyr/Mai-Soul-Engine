@@ -30,6 +30,7 @@ DYNAMIC_LAYER_MARKER = (
 )
 
 STRATEGY_APPENDED = "append_host_system"
+STRATEGY_ALREADY_PRESENT = "already_present"
 STRATEGY_NO_SYSTEM = "skip_no_host_system"
 
 
@@ -164,6 +165,28 @@ def _append_to_message(message: dict, block: str) -> dict:
     return new_message
 
 
+def _already_contains_block(item: dict[str, Any], block: str, kind: str) -> bool:
+    """该 system 项是否已包含同一注入块（按文本包含判断）。
+
+    用「块文本已在项内」而不是「计数」判断：块是确定性拼出来的，
+    同一轮重复调用给出的块完全一致；不同轮的内容会变（选中 trait 不同），
+    因此内容包含是既安全又能挡住重复追加的判据。
+    """
+    probe = block.strip()[:120]
+    if not probe:
+        return False
+    if kind == "item":
+        parts = item.get("parts")
+        texts = [
+            str(p.get("text", ""))
+            for p in (parts if isinstance(parts, list) else [])
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+    else:
+        texts = [str(item.get("content", "") or "")]
+    return any(probe in text for text in texts)
+
+
 def append_block_to_first_system(
     kwargs: dict[str, Any],
     block: str,
@@ -188,6 +211,12 @@ def append_block_to_first_system(
         kind = _item_kind(item)
         if not _is_system(item, kind):
             continue
+
+        # 幂等守卫：同一块已经在这个 system 项里 → 不重复追加。
+        # 宿主在 replyer 每次重试时都会重新调用 hook（items 是重新构造的），
+        # 只要宿主复用 items，没有守卫就会把同一份动态层叠两遍、三遍……
+        if _already_contains_block(item, block, kind):
+            return dict(kwargs), STRATEGY_ALREADY_PRESENT
 
         new_items = list(items)
         if kind == "item":
