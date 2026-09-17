@@ -28,6 +28,7 @@ import threading as _threading
 import time
 from typing import Any
 
+from ..utils.host_prompt_items import extract_user_texts
 from ..utils.spectrum_utils import sanitize_text
 
 logger = logging.getLogger(__name__)
@@ -52,25 +53,21 @@ _context_cache: dict[str, tuple[list[str], float]] = {}
 _context_cache_lock = _threading.Lock()
 
 
-def cache_session_context(session_id: str, messages: list[dict]) -> None:
-    """从 before_request 的 messages 提取最近用户消息，缓存供 after_response 用。
+def cache_session_context(session_id: str, prompt_items: list[dict]) -> None:
+    """从 before_request 的宿主提示项提取最近用户消息，缓存供 after_response 用。
 
     after_response payload 不含触发消息，故在此缓存。空 session_id 不缓存。
-    sanitize_text 在锁外执行（含正则替换，messages 极长时避免阻塞事件循环）。
+    形状差异（Context Item / 旧 messages）由 ``utils.host_prompt_items`` 处理。
+    sanitize_text 在锁外执行（含正则替换，列表极长时避免阻塞事件循环）。
     """
     if not session_id:
         return
     # 锁外：提取 + 脱敏（CPU 密集，不需要锁保护）
     lines: list[str] = []
-    for msg in reversed(messages):
-        if len(lines) >= _CONTEXT_MAX_LINES:
-            break
-        if msg.get("role") == "user":
-            content = str(msg.get("content", "") or "")
-            sanitized = sanitize_text(content, max_chars=_CONTEXT_LINE_MAX_CHARS)
-            if sanitized:
-                lines.append(sanitized)
-    lines.reverse()
+    for content in extract_user_texts(prompt_items, _CONTEXT_MAX_LINES):
+        sanitized = sanitize_text(str(content or ""), max_chars=_CONTEXT_LINE_MAX_CHARS)
+        if sanitized:
+            lines.append(sanitized)
     # 锁内：只做 dict 写入（O(1) 操作，微秒级）
     with _context_cache_lock:
         # 容量控制：超上限删最旧一半

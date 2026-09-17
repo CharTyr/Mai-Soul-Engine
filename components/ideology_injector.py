@@ -15,6 +15,12 @@ from typing import Any
 
 from ..models.ideology_model import get_or_create_spectrum, query_active_traits_for_injection
 from ..prompts.ideology_prompts import build_ideology_prompt
+from ..utils.host_prompt_items import (
+    append_block_to_first_system,
+    extract_latest_user_text,
+    extract_user_texts,
+    read_prompt_items,
+)
 from ..utils.spectrum_utils import chat_config_to_stream_id
 from ..utils.trait_tags import parse_tags_json
 from ..worldview.service import WorldviewService, config_from_plugin
@@ -207,18 +213,16 @@ async def _record_injection(entry: dict, plugin_dir: Path) -> None:
         await asyncio.to_thread(_write_jsonl)
 
 
-# ─── 从 messages 中提取用户消息文本 ─────────────────────────────────
+# ─── 从宿主提示项中提取用户消息文本 ─────────────────────────────────
 
 
-def _extract_user_text(messages: list[dict]) -> str:
-    """从消息列表中提取最后一条用户消息的文本（用于 tag 匹配）。"""
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            return msg.get("content", "") or ""
-    # fallback：取最后一条消息
-    if messages:
-        return messages[-1].get("content", "") or ""
-    return ""
+def _extract_user_text(prompt_items: list[dict]) -> str:
+    """从宿主提示项中提取最后一条用户文本（用于 tag 匹配）。
+
+    兼容 item / 旧 messages 两种形状；逻辑在 ``utils.host_prompt_items``。
+    """
+    texts = extract_user_texts(prompt_items, 1)
+    return texts[0] if texts else ""
 
 
 # ─── 辅助选择器 ─────────────────────────────────────────────────────
@@ -301,11 +305,11 @@ def _text_relevance_score(trait, text_norm: str) -> tuple[float, list[str]]:
     return 0.0, []
 
 
-def _is_inject_enabled(plugin, messages: list[dict]) -> dict | None:
+def _is_inject_enabled(plugin, prompt_items: list[dict]) -> dict | None:
     """检查是否应执行注入。返回 None 表示允许注入，或返回终止字典。"""
     if not plugin.config.plugin.enabled:
         return {"success": True, "action": "continue"}
-    if not messages:
+    if not prompt_items:
         return {"success": True, "action": "continue"}
     return None
 
@@ -560,37 +564,28 @@ def _policy_from_selection(selection_mode: str, picked: list[dict]) -> str:
     return policies.get(selection_mode, "traits+spectrum")
 
 
-# ─── 消息合并 ────────────────────────────────────────────────────────
+# ─── 提示项合并 ──────────────────────────────────────────────────────
 
 
 def _apply_soul_injection_to_messages(
     messages: list[dict],
     injection_block: str,
 ) -> tuple[list[dict] | None, str]:
-    """将 injection_block 安全合并到宿主 messages 中（追加到首条 system）。
+    """【旧形状兼容】把 injection_block 追加到首条 system message。
+
+    宿主现以 Context Item（``items``）传参，`inject_ideology` 直接走
+    ``utils.host_prompt_items.append_block_to_first_system``；本函数仅为
+    历史 messages 形状与既有回归测试保留。
 
     Returns:
-        (new_messages, strategy):
-        - 有首条 system → (复制并追加后的列表, "append_host_system")
-        - 无 system     → (None, "skip_no_host_system")
+        (new_messages, strategy)
     """
-    for i, msg in enumerate(messages):
-        role = msg.get("role", "")
-        if role and role.lower() == "system":
-            # 深复制：复制整个列表及首个 system dict
-            new_messages = [dict(m) for m in messages]
-            sys_content = new_messages[i].get("content", "")
-            sys_suffix = (
-                "\n\n---\n[Mai-Soul 动态层 | 受上方固定人设与表达风格约束，不得覆盖身份事实与 reply_style]\n"
-                f"{injection_block.lstrip()}"
-            )
-            new_messages[i] = {
-                **new_messages[i],
-                "content": sys_content + sys_suffix,
-            }
-            return (new_messages, "append_host_system")
-
-    return (None, "skip_no_host_system")
+    merged, strategy = append_block_to_first_system(
+        {"messages": list(messages)}, injection_block,
+    )
+    if merged is None:
+        return None, strategy
+    return merged["messages"], strategy
 
 
 # ─── 主入口 ─────────────────────────────────────────────────────────
@@ -609,9 +604,10 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     Returns:
         Hook 返回值 dict，包含 modified_kwargs 以修改请求。
     """
-    # ── 1. 配置/消息检查 ───────────────────────────────────────────
-    messages: list[dict] = list(kwargs.get("messages") or [])
-    skip_check = _is_inject_enabled(plugin, messages)
+    # ── 1. 配置/提示项检查 ─────────────────────────────────────────
+    # 宿主以 Context Item（items）传参；形状差异统一由 host_prompt_items 处理。
+    prompt_items: list[dict] = read_prompt_items(kwargs)
+    skip_check = _is_inject_enabled(plugin, prompt_items)
     if skip_check is not None:
         return skip_check
 
@@ -620,6 +616,8 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
 
     session_id: str = kwargs.get("session_id", "") or ""
     stream_id = session_id
+    # 注：宿主 planner hook 载荷不含会话类型字段，目前只能按 session_id 字面量
+    # 推断私聊/群聊（已知设计债，收口需宿主提供显式 chat_type 元数据）。
     is_private = ":private" in stream_id or "private" in stream_id.lower()
     plugin_dir: Path = plugin._plugin_dir
 
@@ -662,7 +660,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
 
     # ── 4. 查询活跃 traits + 选择 ───────────────────────────────────
     traits = query_active_traits_for_injection(stream_id=stream_id, limit=40)
-    text = _extract_user_text(messages)
+    text = _extract_user_text(prompt_items)
     now_ts = time.time()
     await _prune_recent_injection(now_ts)
 
@@ -752,10 +750,10 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             fermenting_hint + "请综合上述倾向与固化观点来组织回复",
         )
 
-    # ── 7. 注入到 messages ─────────────────────────────────────────
-    modified_messages, inject_strategy = _apply_soul_injection_to_messages(messages, injection_block)
-    if modified_messages is None:
-        # 无法安全合并：记录 skip 日志后 continue（不改 messages）
+    # ── 7. 注入到宿主提示项 ────────────────────────────────────────
+    modified_kwargs, inject_strategy = append_block_to_first_system(kwargs, injection_block)
+    if modified_kwargs is None:
+        # 无法安全合并：记录 skip 日志后 continue（不改提示项）
         await _record_injection(
             {
                 "ts": datetime.now().isoformat(),
@@ -787,8 +785,8 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         await _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)
 
     # ── 9. 自评捕获：缓存上下文 + 落注入快照（仅 self_reflection.enabled）──
-    # 缓存始终使用原始 messages（未注入），保持现有语义
-    cache_session_context(session_id, messages)
+    # 缓存始终使用原始提示项（未注入），保持现有语义
+    cache_session_context(session_id, prompt_items)
     maybe_write_injection_snapshot(
         plugin, session_id, stream_id, selected, spectrum_dict, mood_lines, selection_mode,
     )
@@ -796,7 +794,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     return {
         "success": True,
         "action": "continue",
-        "modified_kwargs": {**kwargs, "messages": modified_messages},
+        "modified_kwargs": modified_kwargs,
     }
 
 
