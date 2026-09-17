@@ -451,7 +451,7 @@ async def _check_completion(plugin: Any, seed: Any) -> None:
 
 async def _finalize_fermentation(plugin: Any, seed: Any) -> None:
     """发酵到期后执行最终内化。"""
-    from ..models.seeds import get_fermentation_inputs, mark_seed_internalized
+    from ..models.seeds import get_fermentation_inputs
     from ..thought.internalization_engine import InternalizationEngine
 
     # 获取发酵输入
