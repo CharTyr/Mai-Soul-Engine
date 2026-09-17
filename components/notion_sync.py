@@ -28,7 +28,7 @@ async def run_notion_sync_loop(plugin) -> None:
     Args:
         plugin: MaiSoulEnginePlugin 实例。
     """
-    plugin_dir: Path = plugin._plugin_dir
+    data_dir: Path = plugin._data_dir
     first_run = True
 
     while True:
@@ -42,9 +42,12 @@ async def run_notion_sync_loop(plugin) -> None:
                 await asyncio.sleep(cfg.first_delay_seconds)
             first_run = False
 
-            res = await asyncio.to_thread(sync_notion_frontend, plugin_dir=plugin_dir, cfg=cfg)
+            res = await asyncio.to_thread(sync_notion_frontend, data_dir=data_dir, cfg=cfg)
             logger.debug("[Mai-Soul-Engine] Notion 同步结果: %s", res)
 
+            from ..utils.task_supervisor import note_task_waiting
+
+            note_task_waiting(plugin, "notion", reason="等待下一次 Notion 同步")
             await asyncio.sleep(cfg.sync_interval_seconds)
         except asyncio.CancelledError:
             logger.info("[Mai-Soul-Engine] Notion 前端同步任务已停止")
@@ -76,6 +79,7 @@ def _build_config(plugin) -> NotionFrontendConfig:
         visibility_default=str(nc.visibility_default or "Public").strip() or "Public",
         never_overwrite_user_fields=bool(nc.never_overwrite_user_fields),
         max_rich_text_chars=max(200, int(nc.max_rich_text_chars or 1800)),
+        http_timeout_seconds=max(5, int(nc.http_timeout_seconds or 30)),
         property_map=NotionPropertyMap(
             title=str(nc.property_title or "Name"),
             trait_id=str(nc.property_trait_id or "TraitId"),
@@ -91,10 +95,10 @@ def _build_config(plugin) -> NotionFrontendConfig:
         spectrum_property_map=NotionSpectrumPropertyMap(
             title=str(nc.spectrum_property_title or "Name"),
             scope_id=str(nc.spectrum_property_scope_id or "ScopeId"),
-            economic=str(nc.spectrum_property_economic or "Economic"),
-            social=str(nc.spectrum_property_social or "Social"),
-            diplomatic=str(nc.spectrum_property_diplomatic or "Diplomatic"),
-            progressive=str(nc.spectrum_property_progressive or "Progressive"),
+            economic=str(nc.spectrum_property_economic or "Sincerity"),
+            social=str(nc.spectrum_property_social or "Engagement"),
+            diplomatic=str(nc.spectrum_property_diplomatic or "Closeness"),
+            progressive=str(nc.spectrum_property_progressive or "Directness"),
             value=str(nc.spectrum_property_value or "Value"),
             initialized=str(nc.spectrum_property_initialized or "Initialized"),
             last_evolution=str(nc.spectrum_property_last_evolution or "LastEvolution"),

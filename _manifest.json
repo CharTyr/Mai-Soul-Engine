@@ -1,9 +1,9 @@
 {
   "manifest_version": 2,
-  "id": "chartyr.mai-soul-engine",
-  "version": "2.0.0",
+  "id": "char-tyr.mai-soul-engine",
+  "version": "2.5.0",
   "name": "Mai-Soul-Engine",
-  "description": "通过聊天塑造 MaiBot 三观的人格底座 — 意识形态光谱演化 + 思维阁内化 + 回复注入",
+  "description": "通过聊天塑造 MaiBot 三观的人格底座 — 光谱演化 + 思维阁/12槽 + 可追踪注入 + 自评闭环",
   "author": {
     "name": "CharTyr",
     "url": "https://github.com/CharTyr/Mai-Soul-Engine"
@@ -20,7 +20,7 @@
     "max_version": "1.99.99"
   },
   "sdk": {
-    "min_version": "2.5.0",
+    "min_version": "2.0.0",
     "max_version": "2.99.99"
   },
   "dependencies": [],
@@ -32,12 +32,17 @@
     "chat.get_all_streams",
     "chat.get_stream_by_group_id",
     "chat.get_stream_by_user_id",
-    "config.get"
+    "chat.open_session",
+    "config.get",
+    "send.image",
+    "render.html2png"
   ],
   "i18n": {
     "default_locale": "zh-CN",
     "locales_path": "_locales",
-    "supported_locales": ["zh-CN"]
+    "supported_locales": [
+      "zh-CN"
+    ]
   },
   "plugin_type": "extension",
   "display": {

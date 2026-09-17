@@ -3,6 +3,7 @@ config.toml
 
 # 插件数据目录
 data/
+data.bak/
 
 # Python 缓存
 __pycache__/
@@ -11,3 +12,9 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+config_back/
+
+# deepwork 进度文件（本地会话状态，不提交）
+.slim/
+.spec-workflow/
+config.toml.bak.*

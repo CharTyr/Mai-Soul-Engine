@@ -1,15 +1,22 @@
 # Mai-Soul-Engine 配置模板
 # 复制为 config.toml 后按需修改。config.toml 已加入 .gitignore。
+#
+# ── 配置预设推荐 ──────────────────────────────────────────
+# 轻量（仅光谱注入）：plugin.enabled=true, evolution.enabled=true, thought_cabinet.enabled=false, self_reflection.enabled=false
+# 标准（含思维阁）：   在轻量基础上 thought_cabinet.enabled=true
+# 完整（含自评回路）：  在标准基础上 self_reflection.enabled=true, worldview.p1_enabled=true
 
 # ─── 插件元数据（Runner 必填）────────────────────────────────────────
 [plugin]
 enabled = true
-config_version = "2.0.0"
+config_version = "2.3.0"
 
 # ─── 管理员配置 ─────────────────────────────────────────────────────
 [admin]
 # 管理员用户ID（必填，格式：平台:ID，如 qq:12345678）
 admin_user_id = ""
+# 审计日志开关（关闭后不写 audit.jsonl）
+audit_enabled = true
 
 # ─── 演化设置 ───────────────────────────────────────────────────────
 [evolution]
@@ -27,6 +34,8 @@ direction_resistance = 0.5
 max_messages_per_analysis = 200
 # 每条消息的最大字符数
 max_chars_per_message = 200
+# 多群演化分析的最大并发数（防 LLM 限流）
+max_concurrent_groups = 3
 
 # ─── 监控范围（演化仅针对监控群）────────────────────────────────────
 [monitor]
@@ -38,6 +47,28 @@ excluded_groups = []
 monitored_users = []
 # 可选：群内排除的发言人(如机器人)
 excluded_users = []
+# bot 自身账号(强烈建议填写)，格式：平台:ID。演化时一律排除这些账号发言，防止 bot 自消息污染人设(自指泄漏)
+
+# ─── 自我评价反馈回路（dev 分支新增）─────────────────────────────────
+[self_reflection]
+# 启用后：planner/replyer 决策后捕获回复，定期评价是否符合人设，反馈到光谱演化与下次注入提醒
+enabled = false
+# 评价周期（小时）：多久批量评价一次攒下的回复
+evaluation_interval_hours = 1.0
+# 单周期评价上限：每轮最多评价多少条回复
+max_replies_per_cycle = 20
+# 自评对光谱的影响权重（0=不影响，1=与看别人同等，建议0.5自己评自己有偏差）
+self_reflection_weight = 0.5
+# 相关性门槛（纯闲聊跳过不打分，只有表态/决策才完整评）
+relevance_gate_enabled = true
+# 批次归一化（自评分减本批均值，对冲系统性高估）
+normalize_across_batch = false
+# 待评回复过期（小时）
+pending_max_age_hours = 48
+# 待评队列上限（超过物理删最旧）
+pending_max_rows = 5000
+# 自我观察种子每日上限（0=关闭上限，与群聊种子日上限独立）
+self_observation_daily_cap = 2
 
 # ─── 档位阈值 ───────────────────────────────────────────────────────
 [threshold]
@@ -45,6 +76,27 @@ excluded_users = []
 enable_extreme = false
 # 自定义提示词模板(覆盖默认)
 custom_prompts = {}
+
+# ─── P1 三观生长（dev 分支新增）─────────────────────────────────────
+[worldview]
+# 启用 P1 三观生长（关闭后行为与 main/v2.0 一致）
+p1_enabled = true
+# 价值观层单次演化上限（最慢，映射经济维）
+values_max_delta = 2
+# 世界观层单次演化上限（映射社会/外交维）
+worldview_max_delta = 4
+# 处事观层单次演化上限（较快，映射变革维）
+conduct_max_delta = 6
+# 群聊局部偏移累积比例（0-1）
+local_influence_ratio = 0.35
+# 短期情绪辅助（仅影响语气，不写三观）
+mood_enabled = true
+# 情绪自动归零时间（小时）
+mood_decay_hours = 8.0
+# 在注入中加入情绪语气提示
+mood_inject = true
+# 在注入中加入思想关联摘要
+graph_inject = true
 
 # ─── 注入设置 ───────────────────────────────────────────────────────
 [injection]
@@ -73,6 +125,39 @@ admin_notification_enabled = true
 auto_dedup_enabled = true
 # 自动去重阈值(0-1)
 auto_dedup_threshold = 0.78
+# 种子过期时间（小时），超过此时间的 pending 种子自动标记 expired，0=永不过期
+seed_ttl_hours = 168.0
+# 已审核种子保留条数（approved/rejected/expired），超出删最旧的
+reviewed_keep_count = 200
+# trait 过期天数，长期未被强化的 active trait 超过后自动 expired 并停止注入，0=永不过期
+trait_ttl_days = 90
+# 种子去重相似度阈值(0-1)，新种子与已有待审种子相似度超过此值则跳过，0=不去重
+seed_dedup_threshold = 0.82
+# 聚合种子通知冷却时间（分钟），防止短时多次通知轰炸管理员，0=不冷却
+admin_notification_cooldown_minutes = 30
+# 内化单轴最大变化值（默认±10）
+max_internalize_delta = 10
+
+# ─── 发酵设置（v2.4.0 新增）───
+# 启用种子发酵：批准后不立即内化，持续收集相关群聊输入，逐步形成结论
+fermentation_enabled = false
+# 发酵窗口（小时）：种子批准后持续收集群聊输入的时间
+fermentation_window_hours = 12.0
+# 发酵检查间隔（分钟）：多久检查一次发酵中种子
+fermentation_check_interval_minutes = 30.0
+# 关联度阈值：群聊消息与种子关联度超过此值才收录，0=全部收录
+fermentation_relevance_threshold = 0.5
+# 最大发酵输入数：单种子最多收集多少条
+fermentation_max_inputs = 20
+# 最小发酵输入数：窗口到期时若不足此数自动延长，0=不延长
+# ⚠️ 0=关闭最少证据门槛（到期将直接内化，等同弱化发酵，不推荐）
+fermentation_min_inputs = 3
+# 最大延长次数：输入不足时最多延长几次
+fermentation_max_extensions = 2
+# 发酵后单轴最大变化值（比即时内化更大，默认±15）
+fermented_max_internalize_delta = 15
+# 每群每天种子上限（0=不限制）
+seed_daily_cap_per_group = 1
 
 # ─── API 设置（可选）────────────────────────────────────────────────
 # Soul 数据 @API 组件，供 WebUI 或其他插件查询光谱/traits/种子。
@@ -131,11 +216,24 @@ property_updated_at = "UpdatedAt"
 # 光谱数据库字段名映射
 spectrum_property_title = "Name"
 spectrum_property_scope_id = "ScopeId"
-spectrum_property_economic = "Economic"
-spectrum_property_social = "Social"
-spectrum_property_diplomatic = "Diplomatic"
-spectrum_property_progressive = "Progressive"
+spectrum_property_economic = "Sincerity"
+spectrum_property_social = "Engagement"
+spectrum_property_diplomatic = "Closeness"
+spectrum_property_progressive = "Directness"
 spectrum_property_value = "Value"
 spectrum_property_initialized = "Initialized"
 spectrum_property_last_evolution = "LastEvolution"
 spectrum_property_updated_at = "UpdatedAt"
+
+# ─── 状态卡片渲染（可选）──────────────────────────────────────────
+# /soul_dashboard 等命令把 Soul 引擎状态渲染成图片卡片（Host 无头浏览器）。
+# 关闭或渲染失败时自动回退为纯文本。
+[render]
+# 启用卡片图片渲染
+card_enabled = true
+# 渲染视口宽度（像素）
+viewport_width = 1100
+# 图片清晰度倍率
+device_scale_factor = 2.0
+# 渲染超时（毫秒），超时回退纯文本
+render_timeout_ms = 60000

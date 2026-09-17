@@ -1,0 +1,356 @@
+"""种子操作租约与幂等终结（单赢家认领）。
+
+**为什么需要**：内化要调 LLM（几十秒），不能在数据库事务里做。原实现是
+「先内化 → 成功后才标种子终态」，于是并发批准或崩后重试会让同一颗种子
+被内化两次，光谱影响施加两遍。
+
+**做法**：
+1. LLM 调用**之前**先认领租约（``claim_seed_operation``）。同一
+   ``(seed_id, operation_type)`` 只允许一条 ``running``（部分唯一索引兜底），
+   所以并发时只有一条能进入内化。
+2. 成功后在**同一事务**里提交「操作结果 + 种子终态」（``finish_seed_operation``）。
+   重复终结幂等返回 False。
+3. 失败释放租约（``release_seed_operation``），种子保持非终态，可重试。
+4. 进程崩溃留下的 ``running`` 记录在租约过期后可被抢占重试，不会永久卡死。
+
+租约 + 幂等终结替代不了跨 LLM 调用的长事务——那是做不到的；它保证的是
+「同一颗种子同时只有一个内化在跑，且结果只落一次」。
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+from ._conn import _dt_to_str, _get_conn, _str_to_dt
+from .seeds import TERMINAL_SEED_STATUSES
+
+__all__ = [
+    "list_recent_operations",
+    "list_running_operations",
+    "DEFAULT_LEASE_SECONDS",
+    "SeedOperation",
+    "claim_seed_operation",
+    "get_seed_operation",
+    "finish_seed_operation",
+    "release_seed_operation",
+]
+
+# 默认租约：必须大于一次内化的最坏耗时（含 2 次 LLM 调用），
+# 但要短到崩溃后能较快恢复。取 10 分钟。
+DEFAULT_LEASE_SECONDS = 600
+
+STATUS_RUNNING = "running"
+STATUS_DONE = "done"
+STATUS_FAILED = "failed"
+
+
+@dataclass
+class SeedOperation:
+    """一条种子操作记账。"""
+
+    operation_id: str = ""
+    seed_id: str = ""
+    operation_type: str = "internalize"
+    status: str = STATUS_RUNNING
+    attempt: int = 1
+    lease_expires_at: str = ""
+    result_json: str = ""
+    error: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+def _row_to_operation(row: Any) -> SeedOperation:
+    return SeedOperation(
+        operation_id=row["operation_id"],
+        seed_id=row["seed_id"],
+        operation_type=row["operation_type"],
+        status=row["status"],
+        attempt=int(row["attempt"] or 1),
+        lease_expires_at=row["lease_expires_at"] or "",
+        result_json=row["result_json"] or "",
+        error=row["error"] or "",
+        created_at=_str_to_dt(row["created_at"]),
+        updated_at=_str_to_dt(row["updated_at"]),
+    )
+
+
+def get_seed_operation(operation_id: str) -> SeedOperation | None:
+    """按 operation_id 取操作记录。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM soul_seed_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    return _row_to_operation(row) if row else None
+
+
+def list_running_operations(
+    limit: int = 10,
+    *,
+    operation_type: str = "internalize",
+) -> list[SeedOperation]:
+    """按入队顺序取仍在 ``running`` 的操作（队列消费入口，FIFO）。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM soul_seed_operations "
+        "WHERE status = ? AND operation_type = ? "
+        "ORDER BY created_at ASC, rowid ASC LIMIT ?",
+        (STATUS_RUNNING, operation_type, int(limit)),
+    ).fetchall()
+    return [_row_to_operation(r) for r in rows]
+
+
+def list_recent_operations(limit: int = 10) -> list[SeedOperation]:
+    """按时间倒序取最近的操作（供管理员查询状态）。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM soul_seed_operations ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()
+    return [_row_to_operation(r) for r in rows]
+
+
+def claim_seed_operation(
+    seed_id: str,
+    *,
+    operation_type: str = "internalize",
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> str | None:
+    """认领一颗种子的操作租约。
+
+    成功返回新的 ``operation_id``；以下情况返回 None（调用方应放弃本次内化）：
+    - 已有未过期的 ``running`` 租约（并发批准 / 正在跑）
+    - 该种子已存在 ``done`` 记录（已经内化过，防重复施加影响）
+    - 已终态的种子（approved/rejected/expired/internalized）
+
+    租约过期的 ``running`` 记录会被抢占（新 operation_id，attempt+1）。
+    """
+    conn = _get_conn()
+    now = datetime.now()
+    now_str = _dt_to_str(now)
+    expires_str = _dt_to_str(now + timedelta(seconds=max(0, lease_seconds)))
+
+    # 已内化过 → 不再认领（幂等）
+    settled = conn.execute(
+        "SELECT 1 FROM soul_seed_operations "
+        "WHERE seed_id = ? AND operation_type = ? AND status = ? LIMIT 1",
+        (seed_id, operation_type, STATUS_DONE),
+    ).fetchone()
+    if settled is not None:
+        return None
+
+    # 种子已是终态 → 不再认领
+    seed_row = conn.execute(
+        "SELECT status FROM soul_thought_seeds WHERE seed_id = ?", (seed_id,),
+    ).fetchone()
+    if seed_row is not None and seed_row["status"] in TERMINAL_SEED_STATUSES:
+        return None
+
+    operation_id = f"op_{uuid.uuid4().hex[:16]}"
+    try:
+        conn.execute(
+            "INSERT INTO soul_seed_operations "
+            "(operation_id, seed_id, operation_type, status, attempt, "
+            " lease_expires_at, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+            (operation_id, seed_id, operation_type, STATUS_RUNNING, expires_str, now_str, now_str),
+        )
+        conn.commit()
+        return operation_id
+    except Exception:
+        # 撞唯一索引 = 已有 running 租约；下面尝试抢占过期租约
+        conn.rollback()
+
+    try:
+        cursor = conn.execute(
+            "UPDATE soul_seed_operations "
+            "SET operation_id = ?, attempt = attempt + 1, lease_expires_at = ?, "
+            "    updated_at = ?, error = '' "
+            "WHERE seed_id = ? AND operation_type = ? AND status = ? "
+            "  AND (lease_expires_at = '' OR lease_expires_at < ?)",
+            (operation_id, expires_str, now_str, seed_id, operation_type, STATUS_RUNNING, now_str),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        return None
+    return operation_id if cursor.rowcount == 1 else None
+
+
+def finish_seed_operation(
+    operation_id: str,
+    *,
+    seed_status: str,
+    result_json: str = "",
+) -> bool:
+    """幂等终结：同一事务提交操作结果 + 种子终态。
+
+    仅当操作仍为 ``running`` 时生效；重复调用返回 False（不会二次施加影响）。
+    ``seed_status`` 必须是合法终态，否则拒绝写入。
+    """
+    if seed_status not in TERMINAL_SEED_STATUSES:
+        return False
+
+    conn = _get_conn()
+    now_str = _dt_to_str(datetime.now())
+    try:
+        conn.execute("BEGIN")
+        row = conn.execute(
+            "SELECT seed_id, status FROM soul_seed_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        if row is None or row["status"] != STATUS_RUNNING:
+            conn.execute("ROLLBACK")
+            return False
+
+        cursor = conn.execute(
+            "UPDATE soul_seed_operations "
+            "SET status = ?, result_json = ?, lease_expires_at = '', updated_at = ? "
+            "WHERE operation_id = ? AND status = ?",
+            (STATUS_DONE, result_json, now_str, operation_id, STATUS_RUNNING),
+        )
+        if cursor.rowcount != 1:
+            conn.execute("ROLLBACK")
+            return False
+
+        conn.execute(
+            "UPDATE soul_thought_seeds SET status = ? WHERE seed_id = ?",
+            (seed_status, row["seed_id"]),
+        )
+        conn.execute("COMMIT")
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+
+
+def count_failed_operations(seed_id: str, *, operation_type: str = "internalize") -> int:
+    """统计某颗种子的失败次数（用于**有界重试**）。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM soul_seed_operations "
+        "WHERE seed_id = ? AND operation_type = ? AND status = ?",
+        (seed_id, operation_type, STATUS_FAILED),
+    ).fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
+def list_retryable_operations(
+    *,
+    operation_type: str = "internalize",
+    max_attempts: int = 3,
+    limit: int = 10,
+) -> list[str]:
+    """筛出「值得重试」的种子 id。
+
+    条件：有 ``failed`` 记录、失败次数 < ``max_attempts``、且**没有** ``done`` 记录。
+    重试本身走 ``claim_seed_operation``（新建 running 记录），因此幂等保证
+    （done 记录、终态种子）仍由认领路径统一负责，这里只负责「该不该再试」。
+
+    为什么需要它：终结阶段的**瞬时故障**（DB 锁、写盘失败）不应该让管理员的
+    批准意图作废——之前失败即永久放弃，批准就丢了。
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT seed_id, COUNT(*) AS n FROM soul_seed_operations "
+        "WHERE operation_type = ? AND status = ? "
+        "GROUP BY seed_id HAVING n < ? LIMIT ?",
+        (operation_type, STATUS_FAILED, max(1, int(max_attempts)), max(1, int(limit))),
+    ).fetchall()
+    out: list[str] = []
+    for row in rows:
+        seed_id = row["seed_id"]
+        done = conn.execute(
+            "SELECT 1 FROM soul_seed_operations "
+            "WHERE seed_id = ? AND operation_type = ? AND status = ? LIMIT 1",
+            (seed_id, operation_type, STATUS_DONE),
+        ).fetchone()
+        if done is None:
+            out.append(seed_id)
+    return out
+
+
+def finish_seed_operation_in_tx(
+    conn: "sqlite3.Connection",
+    operation_id: str,
+    *,
+    seed_status: str,
+    result_json: str = "",
+    expected_seed_status: str | None = None,
+) -> tuple[bool, str]:
+    """在**调用方已开启的事务内**终结操作（不做 BEGIN/COMMIT）。
+
+    原子性由调用方保证：人格写入 + 种子终态 + 操作终态必须同一个 COMMIT。
+    这是「内化一次生效」的关键——分开提交就会出现
+    「人格已写、操作仍未完成」的半成品，重试时重复施加影响。
+
+    校验（全部在同一事务内，因此不能与并发方交错）：
+    1. 操作仍是当前 ``running`` 租约 → 防止**租约被接管后旧执行者提交**
+    2. 种子状态仍等于 ``expected_seed_status`` → 防止**覆盖管理员在途拒绝**
+
+    Returns:
+        ``(ok, reason)``；ok=False 时调用方必须 ROLLBACK，整笔不写。
+    """
+    if seed_status not in TERMINAL_SEED_STATUSES:
+        return False, f"非法种子终态: {seed_status}"
+
+    row = conn.execute(
+        "SELECT seed_id, status FROM soul_seed_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        return False, "操作不存在（租约已被接管或已清理）"
+    if row["status"] != STATUS_RUNNING:
+        return False, f"操作状态为 {row['status']}，非运行中"
+
+    seed_id = row["seed_id"]
+    if expected_seed_status is not None:
+        cur = conn.execute(
+            "SELECT status FROM soul_thought_seeds WHERE seed_id = ?", (seed_id,)
+        ).fetchone()
+        actual = cur["status"] if cur is not None else None
+        if actual != expected_seed_status:
+            return False, f"种子状态已变为 {actual or '缺失'}（期望 {expected_seed_status}）"
+
+    now_str = _dt_to_str(datetime.now())
+    done = conn.execute(
+        "UPDATE soul_seed_operations "
+        "SET status = ?, result_json = ?, lease_expires_at = '', updated_at = ? "
+        "WHERE operation_id = ? AND status = ?",
+        (STATUS_DONE, result_json, now_str, operation_id, STATUS_RUNNING),
+    )
+    if done.rowcount != 1:
+        return False, "操作终态写入失败"
+
+    if expected_seed_status is not None:
+        settled = conn.execute(
+            "UPDATE soul_thought_seeds SET status = ? WHERE seed_id = ? AND status = ?",
+            (seed_status, seed_id, expected_seed_status),
+        )
+    else:
+        settled = conn.execute(
+            "UPDATE soul_thought_seeds SET status = ? WHERE seed_id = ?",
+            (seed_status, seed_id),
+        )
+    if settled.rowcount != 1:
+        return False, "种子终态写入失败（状态已变）"
+
+    return True, ""
+
+
+def release_seed_operation(operation_id: str, *, error: str = "") -> bool:
+    """释放租约（内化失败）：标记 failed，种子保持非终态以便重试。"""
+    conn = _get_conn()
+    now_str = _dt_to_str(datetime.now())
+    cursor = conn.execute(
+        "UPDATE soul_seed_operations "
+        "SET status = ?, error = ?, lease_expires_at = '', updated_at = ? "
+        "WHERE operation_id = ? AND status = ?",
+        (STATUS_FAILED, error[:500], now_str, operation_id, STATUS_RUNNING),
+    )
+    conn.commit()
+    return cursor.rowcount == 1

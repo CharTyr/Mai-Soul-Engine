@@ -9,28 +9,60 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import sqlite3
 from datetime import datetime
 from typing import Any
 
 from ..models.ideology_model import (
-    create_evolution_history,
+    apply_spectrum_deltas,
     get_or_create_group_evolution,
     get_or_create_spectrum,
 )
-from ..prompts.ideology_prompts import EVOLUTION_ANALYSIS_PROMPT
-from ..utils.audit_log import log_evolution
+from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
+from ..utils.audit_log import log_evolution, log_evolution_cycle, log_evolution_skip
+from ..utils.runtime_resolution import (
+    generate_soul_text,
+    resolve_host_bot_self_ids,
+    resolve_monitored_group_stream,
+)
 from ..utils.spectrum_utils import (
-    apply_resistance,
-    chat_config_to_stream_id,
-    is_user_monitored,
+    filter_messages_for_evolution,
     parse_chat_id,
     match_chat,
     sanitize_text,
-    smooth_delta,
-    update_spectrum_value,
 )
 
 logger = logging.getLogger(__name__)
+
+_bot_filter_warned: set[str] = set()
+# 聚合种子通知冷却：记录上次通知时间戳（秒），用于 cooldown 检查
+_last_aggregated_notification_ts: float = 0.0
+# 连续演化失败计数器 — 超阈值时私信管理员
+_consecutive_evolution_failures: int = 0
+# 本轮演化产生的种子通知收集列表（每轮开始时清空）
+# 多群并行时多个 _analyze_group 协程同时 append，用 asyncio.Lock 保护
+_pending_seed_notifications: list[tuple[str, str, str]] = []
+_pending_seed_lock = asyncio.Lock()
+
+
+def reset_aggregation_state() -> None:
+    """重置聚合通知的模块级状态，供 on_unload 调用防插件重载间泄漏。"""
+    global _last_aggregated_notification_ts, _consecutive_evolution_failures
+    _last_aggregated_notification_ts = 0.0
+    _consecutive_evolution_failures = 0
+    _pending_seed_notifications.clear()
+
+
+def _warn_no_bot_filter(stream_id: str) -> None:
+    """每个群只警告一次：bot 自身账号与 excluded_users 都未配置，自消息会污染演化池。"""
+    if stream_id in _bot_filter_warned:
+        return
+    _bot_filter_warned.add(stream_id)
+    logger.warning(
+        "群%s：宿主 bot.qq_account 为空且 excluded_users 未配置，bot 自身消息可能混入演化分析池"
+        "导致人设自指。建议在配置中填入 bot 账号（格式 平台:ID，如 qq:12345678）。",
+        stream_id,
+    )
 
 
 async def run_evolution_loop(plugin) -> None:
@@ -43,12 +75,30 @@ async def run_evolution_loop(plugin) -> None:
         plugin: MaiSoulEnginePlugin 实例。
     """
     logger.debug("演化循环已启动")
+    global _consecutive_evolution_failures
+    global _consecutive_evolution_failures
 
     while True:
         try:
-            interval_hours = float(plugin.config.evolution.evolution_interval_hours or 1.0)
+            interval_hours = plugin.config.evolution.evolution_interval_hours
             logger.debug("演化循环等待 %s 小时", interval_hours)
+            from ..utils.task_supervisor import note_task_waiting
+
+            note_task_waiting(plugin, "evolution", reason="等待下一轮演化间隔")
             await asyncio.sleep(interval_hours * 3600)
+
+            # 先重放通知 outbox：演化/发酵产生的通知若之前发送失败，在这里补发
+            try:
+                from ..utils.notify import drain_notifications
+
+                stats = await drain_notifications(plugin)
+                if stats["sent"] or stats["failed"]:
+                    logger.info(
+                        "通知 outbox 重放: 发出 %s / 待重试 %s / 放弃 %s",
+                        stats["sent"], stats["retry"], stats["failed"],
+                    )
+            except Exception as e:  # noqa: BLE001 — 重放失败不影响演化
+                logger.warning("通知 outbox 重放失败: %s: %s", type(e).__name__, e)
 
             if not plugin.config.evolution.evolution_enabled:
                 logger.debug("演化已禁用，跳过本轮")
@@ -59,7 +109,16 @@ async def run_evolution_loop(plugin) -> None:
                 logger.debug("光谱未初始化，跳过本轮")
                 continue
 
-            evolution_rate = int(plugin.config.evolution.evolution_rate or 5)
+            # P0-4：过期长期未强化的 active trait
+            trait_ttl_days = plugin.config.thought_cabinet.trait_ttl_days
+            if trait_ttl_days > 0:
+                from ..models.ideology_model import expire_old_traits
+
+                expired = expire_old_traits(trait_ttl_days)
+                if expired:
+                    logger.info("过期 %s 个超龄 active trait (TTL=%s天)", expired, trait_ttl_days)
+
+            evolution_rate = plugin.config.evolution.evolution_rate
             monitored_groups = list(plugin.config.monitor.monitored_groups or [])
             excluded_groups = list(plugin.config.monitor.excluded_groups or [])
             logger.debug("演化参数: rate=%s, groups=%s", evolution_rate, monitored_groups)
@@ -80,19 +139,106 @@ async def run_evolution_loop(plugin) -> None:
                 logger.debug("监控群组全部被排除，跳过本轮")
                 continue
 
-            for group_config_id in groups_to_analyze:
-                logger.debug("开始分析群组: %s", group_config_id)
-                await _analyze_group(plugin, group_config_id, evolution_rate)
+            analyzed = 0
+            skipped = 0
+            seeds_before = 0
+            try:
+                from ..models.ideology_model import count_pending_thought_seeds
+
+                seeds_before = int(count_pending_thought_seeds() or 0)
+            except (sqlite3.Error, ValueError, TypeError):
+                seeds_before = 0
+
+            # 多群并行分析（Semaphore 限流防 LLM 限流）
+            max_concurrent = int(getattr(plugin.config.evolution, "max_concurrent_groups", 3) or 3)
+            semaphore = asyncio.Semaphore(max(1, max_concurrent))
+
+            async def _analyze_with_sem(gid: str) -> str:
+                async with semaphore:
+                    logger.debug("开始分析群组: %s", gid)
+                    return await _analyze_group(plugin, gid, evolution_rate)
+
+            results = await asyncio.gather(
+                *[_analyze_with_sem(g) for g in groups_to_analyze],
+                return_exceptions=True,
+            )
+            analyzed = sum(1 for r in results if r == "success")
+            skipped = sum(1 for r in results if r == "skipped")
+
+            seeds_after = seeds_before
+            try:
+                from ..models.ideology_model import count_pending_thought_seeds
+
+                seeds_after = int(count_pending_thought_seeds() or 0)
+            except (sqlite3.Error, ValueError, TypeError):
+                pass
+
+            await log_evolution_cycle(
+                groups_planned=len(groups_to_analyze),
+                groups_analyzed=analyzed,
+                groups_skipped=skipped,
+                seeds_created=max(0, seeds_after - seeds_before),
+                interval_hours=float(getattr(plugin.config.evolution, "evolution_interval_hours", 0) or 0),
+            )
+
+            # 演化成功，重置连续失败计数器
+            _consecutive_evolution_failures = 0
+
+            # U-UX-6: 聚合种子通知 — 本轮所有新种子合并为一条通知发送给管理员
+            if (
+                plugin.config.thought_cabinet.admin_notification_enabled
+                and _pending_seed_notifications
+            ):
+                try:
+                    # 清空由 _send_aggregated_seed_notification 在**交付成功后**负责；
+                    # 这里无条件 clear 会把「没管理员/冷却中」时未交付的内容丢掉。
+                    await _send_aggregated_seed_notification(plugin)
+                except (RuntimeError, ValueError, OSError):
+                    logger.exception("[SeedNotify] 聚合通知发送失败")
+
+            # P1.5：自评反馈 → 光谱修正（仅 self_reflection.enabled）
+            if plugin.config.self_reflection.enabled:
+                try:
+                    from .reflection_feedback import apply_self_reflection_spectrum_correction
+
+                    apply_self_reflection_spectrum_correction(plugin, evolution_rate)
+                except Exception:
+                    logger.exception("[SelfReflection] 光谱修正失败（apply_self_reflection_spectrum_correction 内部异常类型不确定，保留兜底）")
 
         except asyncio.CancelledError:
             logger.info("灵魂光谱演化任务已停止")
             break
+        # 顶层兜底：确保演化循环不因意外异常退出，已 log+exc_info
         except Exception as e:
-            logger.error("灵魂光谱演化任务出错: %s", e, exc_info=True)
+            _consecutive_evolution_failures += 1
+            logger.error(
+                "灵魂光谱演化任务出错 (连续失败 %s 次): %s",
+                _consecutive_evolution_failures, e, exc_info=True,
+            )
+            if _consecutive_evolution_failures >= 5:
+                try:
+                    admin_id = plugin.config.admin.admin_user_id
+                    if admin_id:
+                        from ..utils.spectrum_utils import parse_user_id
+
+                        platform, user_id = parse_user_id(admin_id)
+                        stream = await plugin.ctx.chat.get_stream_by_user_id(
+                            platform=platform, user_id=user_id
+                        )
+                        if stream:
+                            stream_id = stream.get("stream_id", "") if isinstance(stream, dict) else str(stream)
+                            if stream_id:
+                                await plugin.ctx.send.text(
+                                    f"⚠️ 演化任务已连续失败 {_consecutive_evolution_failures} 次，请检查日志。",
+                                    stream_id,
+                                )
+                except (RuntimeError, ValueError, OSError):
+                    logger.exception("发送演化失败通知给管理员时出错")
+                _consecutive_evolution_failures = 0
             await asyncio.sleep(60)
 
 
-async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> None:
+async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> str:
     """分析单个群组的消息并更新光谱。
 
     Args:
@@ -101,7 +247,11 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         evolution_rate: 单次演化最大变化值。
     """
     try:
-        stream_id = chat_config_to_stream_id(group_config_id)
+        stream_id = await resolve_monitored_group_stream(plugin, group_config_id)
+        if not stream_id:
+            logger.warning("监控群无法解析到当前宿主会话: %s", group_config_id)
+            await log_evolution_skip(group_config_id, "stream_not_found")
+            return "skipped"
 
         record = get_or_create_group_evolution(group_id=stream_id)
         last_time = record.last_analyzed
@@ -114,9 +264,10 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 start_time=str(last_time.timestamp()),
                 end_time=str(now.timestamp()),
             )
-        except Exception:
+        except (RuntimeError, ValueError, OSError) as exc:
             logger.exception("获取群%s消息失败", stream_id)
-            return
+            await log_evolution_skip(stream_id, "fetch_messages_failed", detail=str(exc))
+            return "skipped"
 
         # 新 SDK 返回的消息列表，每条是 dict
         if not isinstance(messages_raw, list):
@@ -127,32 +278,31 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
 
         if len(messages) < 5:
             logger.debug("群%s消息不足5条，跳过分析", stream_id)
-            return
+            await log_evolution_skip(stream_id, "messages_lt_5", message_count=len(messages))
+            return "skipped"
 
-        max_messages = int(plugin.config.evolution.max_messages_per_analysis or 200)
-        max_chars = int(plugin.config.evolution.max_chars_per_message or 200)
+        max_messages = plugin.config.evolution.max_messages_per_analysis
+        max_chars = plugin.config.evolution.max_chars_per_message
 
+        # Bot identity is owned by the Host (bot.qq_account), never duplicated
+        # in plugin configuration.
+        host_bot_self_ids = await resolve_host_bot_self_ids(plugin)
         monitor_config = {
             "monitored_users": list(plugin.config.monitor.monitored_users or []),
             "excluded_users": list(plugin.config.monitor.excluded_users or []),
+            "bot_self_id": host_bot_self_ids,
         }
 
-        filtered_messages = []
-        for m in messages:
-            user_info = m.get("user_info", {}) if isinstance(m, dict) else {}
-            msg_platform = str(user_info.get("platform", "") or "")
-            msg_user_id = str(user_info.get("user_id", "") or "")
+        # 过滤发言者：bot 自身消息短路排除（防自指泄漏），再过 monitored/excluded
+        messages = filter_messages_for_evolution(messages, monitor_config)
 
-            # 跳过不受监控的用户
-            if not is_user_monitored(msg_platform, msg_user_id, monitor_config):
-                continue
-
-            filtered_messages.append(m)
-
-        messages = filtered_messages
+        # 配置卫生提醒：bot 自身账号与排除列表都为空时，自消息会污染演化池
+        if not monitor_config["bot_self_id"] and not monitor_config["excluded_users"]:
+            _warn_no_bot_filter(stream_id)
         if len(messages) < 5:
             logger.debug("群%s过滤后消息不足5条，跳过分析", stream_id)
-            return
+            await log_evolution_skip(stream_id, "filtered_messages_lt_5", message_count=len(messages))
+            return "skipped"
 
         msg_lines = []
         for m in messages[:max_messages]:
@@ -171,24 +321,23 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
 
         if not msg_text:
             logger.debug("群%s消息内容为空，跳过分析", stream_id)
-            return
-
-        prompt = EVOLUTION_ANALYSIS_PROMPT.format(rate=evolution_rate, messages=msg_text)
+            await log_evolution_skip(stream_id, "empty_message_text", message_count=len(messages))
+            return "skipped"
 
         thought_cabinet_enabled = bool(plugin.config.thought_cabinet.enabled)
         logger.debug("思维阁启用状态: %s", thought_cabinet_enabled)
-        if thought_cabinet_enabled:
-            from ..prompts.thought_prompts import ENHANCED_EVOLUTION_PROMPT
-
-            prompt = ENHANCED_EVOLUTION_PROMPT.format(rate=evolution_rate, messages=msg_text)
+        prompt = ENHANCED_EVOLUTION_PROMPT.format(rate=evolution_rate, messages=msg_text)
 
         # 调用新 SDK 的 LLM 接口
         logger.debug("发送LLM请求，prompt长度: %s", len(prompt))
         try:
-            llm_result = await plugin.ctx.llm.generate(prompt)
-        except Exception:
+            llm_result = await generate_soul_text(plugin, prompt)
+        except (RuntimeError, ValueError, OSError, asyncio.TimeoutError) as exc:
             logger.exception("LLM 请求失败")
-            return
+            await log_evolution_skip(
+                stream_id, "llm_failed", message_count=len(messages), detail=str(exc)
+            )
+            return "skipped"
 
         response = ""
         if isinstance(llm_result, dict):
@@ -198,7 +347,8 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
         logger.debug("LLM响应长度: %s", len(response))
 
         if not response:
-            return
+            await log_evolution_skip(stream_id, "llm_empty_response", message_count=len(messages))
+            return "skipped"
 
         try:
             response = response.strip()
@@ -206,78 +356,97 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
                 response = response.split("\n", 1)[1].rsplit("```", 1)[0]
             result = _json.loads(response)
 
-            if thought_cabinet_enabled and "spectrum_deltas" in result:
+            if "spectrum_deltas" in result:
                 deltas = result["spectrum_deltas"]
-                thought_seeds = result.get("thought_seeds", [])
-                await _process_thought_seeds(plugin, thought_seeds, stream_id)
+                if thought_cabinet_enabled:
+                    thought_seeds = result.get("thought_seeds", [])
+                    await _process_thought_seeds(plugin, thought_seeds, stream_id, msg_lines)
             else:
                 deltas = result
         except (_json.JSONDecodeError, ValueError):
             logger.warning("无法解析LLM响应: %s", response)
-            return
+            await log_evolution_skip(
+                stream_id,
+                "llm_parse_failed",
+                message_count=len(messages),
+                detail=(response or "")[:240],
+            )
+            return "skipped"
 
         spectrum = get_or_create_spectrum("global")
 
         before = {
-            "economic": spectrum.economic,
-            "social": spectrum.social,
-            "diplomatic": spectrum.diplomatic,
-            "progressive": spectrum.progressive,
+            "sincerity": spectrum.sincerity,
+            "engagement": spectrum.engagement,
+            "closeness": spectrum.closeness,
+            "directness": spectrum.directness,
         }
 
-        ema_alpha = float(plugin.config.evolution.ema_alpha or 0.3)
-        resistance = float(plugin.config.evolution.direction_resistance or 0.5)
+        ema_alpha = plugin.config.evolution.ema_alpha
+        resistance = plugin.config.evolution.direction_resistance
 
-        raw_deltas = {
-            "economic": max(-evolution_rate, min(evolution_rate, int(deltas.get("economic", 0)))),
-            "social": max(-evolution_rate, min(evolution_rate, int(deltas.get("social", 0)))),
-            "diplomatic": max(-evolution_rate, min(evolution_rate, int(deltas.get("diplomatic", 0)))),
-            "progressive": max(-evolution_rate, min(evolution_rate, int(deltas.get("progressive", 0)))),
-        }
+        from ..worldview.service import WorldviewService, config_from_plugin
 
-        resisted_deltas = {}
-        new_dirs = {}
-        for dim in ["economic", "social", "diplomatic", "progressive"]:
-            last_dir = int(getattr(spectrum, f"last_{dim}_dir", 0))
-            adj_delta, new_dir = apply_resistance(raw_deltas[dim], last_dir, resistance)
-            resisted_deltas[dim] = adj_delta
-            new_dirs[dim] = new_dir
-
-        smoothed_deltas = {
-            "economic": smooth_delta(spectrum.economic, resisted_deltas["economic"], ema_alpha),
-            "social": smooth_delta(spectrum.social, resisted_deltas["social"], ema_alpha),
-            "diplomatic": smooth_delta(spectrum.diplomatic, resisted_deltas["diplomatic"], ema_alpha),
-            "progressive": smooth_delta(spectrum.progressive, resisted_deltas["progressive"], ema_alpha),
-        }
-
-        spectrum.economic = update_spectrum_value(spectrum.economic, smoothed_deltas["economic"])
-        spectrum.social = update_spectrum_value(spectrum.social, smoothed_deltas["social"])
-        spectrum.diplomatic = update_spectrum_value(spectrum.diplomatic, smoothed_deltas["diplomatic"])
-        spectrum.progressive = update_spectrum_value(spectrum.progressive, smoothed_deltas["progressive"])
-        spectrum.last_economic_dir = new_dirs["economic"]
-        spectrum.last_social_dir = new_dirs["social"]
-        spectrum.last_diplomatic_dir = new_dirs["diplomatic"]
-        spectrum.last_progressive_dir = new_dirs["progressive"]
-        spectrum.last_evolution = now
-        spectrum.updated_at = now
-        spectrum.save()
-
-        after = {
-            "economic": spectrum.economic,
-            "social": spectrum.social,
-            "diplomatic": spectrum.diplomatic,
-            "progressive": spectrum.progressive,
-        }
-
-        create_evolution_history(
-            timestamp=now,
-            group_id=stream_id,
-            economic_delta=smoothed_deltas["economic"],
-            social_delta=smoothed_deltas["social"],
-            diplomatic_delta=smoothed_deltas["diplomatic"],
-            progressive_delta=smoothed_deltas["progressive"],
-            reason=f"分析了{len(messages)}条消息",
+        wv = WorldviewService(config_from_plugin(plugin))
+        raw_deltas = wv.apply_layer_caps_to_deltas(
+            {
+                "sincerity": int(deltas.get("sincerity", 0) or 0),
+                "engagement": int(deltas.get("engagement", 0) or 0),
+                "closeness": int(deltas.get("closeness", 0) or 0),
+                "directness": int(deltas.get("directness", 0) or 0),
+            },
+            evolution_rate,
         )
+
+        # 写入闸门：非 apply 模式**不写正式人格**（只分析、只记日志）。
+        # 必须在写库前用当前配置判定——后台循环可能在运行中被切模式。
+        from ..utils.runtime_mode import MutationBlocked, ensure_mutation_allowed
+
+        try:
+            ensure_mutation_allowed(plugin, action=f"群 {stream_id} 演化")
+        except MutationBlocked as exc:
+            logger.info("[Soul] 演化跳过写入（%s）: %s", stream_id, exc)
+            await log_evolution_skip(
+                stream_id, "mode_not_apply", message_count=len(messages), detail=str(exc)
+            )
+            return "skipped"
+
+        # 幂等批次：人格影响 + 切片/情绪 + **游标推进**在同一事务。
+        # 此前分开提交：游标写失败会重放同一时间窗，光谱被重复施加。
+        from ..models._conn import _get_conn
+
+        conn = _get_conn()
+        conn.execute("BEGIN")
+        try:
+            # 经统一光谱闸门写入（v2.3.0 收口：resistance + EMA + save + history）
+            smoothed_deltas = apply_spectrum_deltas(
+                "evolution",
+                raw_deltas,
+                smooth_alpha=ema_alpha,
+                resistance=resistance,
+                max_per_axis=evolution_rate,
+                group_id=stream_id,
+                reason=f"分析了{len(messages)}条消息",
+                commit=False,
+            )
+            spectrum = get_or_create_spectrum("global")
+
+            after = {
+                "sincerity": spectrum.sincerity,
+                "engagement": spectrum.engagement,
+                "closeness": spectrum.closeness,
+                "directness": spectrum.directness,
+            }
+
+            wv.record_local_slice(stream_id, smoothed_deltas, len(messages), commit=False)
+            wv.nudge_mood_from_deltas(smoothed_deltas, commit=False)
+
+            record.last_analyzed = now
+            record.save(commit=False)
+            conn.commit()
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
         await log_evolution(
             group_id=stream_id,
@@ -288,74 +457,212 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> N
             message_count=len(messages),
         )
 
-        record.last_analyzed = now
-        record.save()
+        # P-EVO-1b: 极值告警 — 光谱任一轴在极区间时 log.warning
+        spectrum = get_or_create_spectrum("global")
+        for dim in ("sincerity", "engagement", "closeness", "directness"):
+            val = int(getattr(spectrum, dim))
+            if val <= 10 or val >= 90:
+                logger.warning(
+                    "[SpectrumGuard] %s 极值告警: %s=%d（可能跑偏）",
+                    stream_id, dim, val,
+                )
 
         logger.info(
-            "群%s演化完成: e=%s, s=%s, d=%s, p=%s",
+            "群%s演化完成: 真诚=%s, 投入=%s, 亲近=%s, 直率=%s",
             stream_id,
-            smoothed_deltas["economic"],
-            smoothed_deltas["social"],
-            smoothed_deltas["diplomatic"],
-            smoothed_deltas["progressive"],
+            smoothed_deltas["sincerity"],
+            smoothed_deltas["engagement"],
+            smoothed_deltas["closeness"],
+            smoothed_deltas["directness"],
         )
 
+        return "success"
+
+    # 顶层兜底：单个群分析失败不阻断其他群
     except Exception as e:
         logger.error("分析群%s时出错: %s", group_config_id, e, exc_info=True)
+        return "failed"
 
 
-async def _process_thought_seeds(plugin, seeds: list, stream_id: str) -> None:
-    """处理 LLM 返回的思维种子。"""
+async def _process_thought_seeds(plugin, seeds: list, stream_id: str, msg_lines: list[str]) -> list[str]:
+    """处理 LLM 返回的思维种子。
+
+    Args:
+        msg_lines: 发送给 LLM 的原始消息行列表，用于提取上下文窗口。
+
+    Returns:
+        本轮创建的种子 ID 列表。
+    """
     from ..thought.seed_manager import ThoughtSeedManager
 
     logger.debug("处理思维种子: 收到 %s 个", len(seeds))
     if not seeds:
-        return
+        return []
 
-    config = {
-        "max_seeds": int(plugin.config.thought_cabinet.max_seeds or 20),
-        "min_trigger_intensity": float(plugin.config.thought_cabinet.min_trigger_intensity or 0.7),
-        "admin_user_id": str(plugin.config.admin.admin_user_id or ""),
-    }
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
+    created_ids: list[str] = []
 
-    for seed_data in seeds[:2]:
-        seed_id = await manager.create_seed(seed_data, stream_id=stream_id)
+    for seed_data in seeds[:1]:  # v2.4.0: 每轮最多 1 个种子（稀有化）
+        # v2.4.0: 每群每天种子上限检查
+        daily_cap = int(getattr(plugin.config.thought_cabinet, "seed_daily_cap_per_group", 1))
+        if daily_cap > 0:
+            from ..models.ideology_model import count_seeds_created_today
+            today_count = count_seeds_created_today(stream_id)
+            if today_count >= daily_cap:
+                logger.info("群%s今日种子已达上限%d/%d，跳过", stream_id, today_count, daily_cap)
+                break
+        seed_id = await manager.create_seed(seed_data, stream_id=stream_id, context_messages=msg_lines)
         if seed_id:
             logger.info("群%s创建思维种子: %s", stream_id, seed_id)
+            created_ids.append(seed_id)
+            # 收集到聚合通知列表（不再单独通知）
             if plugin.config.thought_cabinet.admin_notification_enabled:
-                await _notify_admin_seed(plugin, manager, seed_id, seed_data)
+                async with _pending_seed_lock:
+                    _pending_seed_notifications.append(
+                        (seed_id, seed_data.get("type", "未知"), seed_data.get("event", "")[:80])
+                    )
+
+    return created_ids
 
 
-async def _notify_admin_seed(plugin, manager, seed_id: str, seed_data: dict) -> None:
-    """向管理员私聊发送思维种子通知。"""
+async def notify_admin_seed(plugin, manager, seed_id: str) -> bool:
+    """向管理员私聊发送思维种子通知（含原始对话上下文）。
+
+    Returns True when a notification text was handed to send.text.
+    """
     from ..utils.spectrum_utils import parse_user_id
 
-    admin_config_id = str(plugin.config.admin.admin_user_id or "")
+    admin_config_id = plugin.config.admin.admin_user_id
     if not admin_config_id:
-        return
+        logger.warning("admin_user_id 未配置，跳过种子通知 seed=%s", seed_id)
+        return False
 
     platform, user_id = parse_user_id(admin_config_id)
     if not platform or not user_id:
-        return
+        logger.warning("admin_user_id 无法解析，跳过种子通知 seed=%s raw=%s", seed_id, admin_config_id)
+        return False
+
+    # 从数据库取存储的种子数据（含上下文窗口）
+    seed_data = await manager.get_seed_by_id(seed_id)
+    if not seed_data:
+        logger.warning("无法找到种子 %s，跳过通知", seed_id)
+        return False
 
     # 通过新 SDK 的 chat API 获取管理员的 stream_id
     try:
         admin_stream_id = await plugin.ctx.chat.get_stream_by_user_id(
             platform=platform, user_id=user_id
         )
-    except Exception:
-        logger.exception("获取管理员 stream_id 失败，无法发送种子通知")
-        return
+    except (RuntimeError, ValueError, OSError):
+        logger.exception("获取管理员 stream_id 失败，无法发送种子通知 seed=%s", seed_id)
+        return False
 
     if not admin_stream_id:
-        logger.warning("未找到管理员的聊天流，无法发送种子通知")
-        return
+        logger.warning(
+            "未找到管理员聊天流，无法发送种子通知 seed=%s admin=%s:%s",
+            seed_id,
+            platform,
+            user_id,
+        )
+        return False
 
     try:
         await plugin.ctx.send.text(
             text=manager.format_seed_notification(seed_id, seed_data),
             stream_id=admin_stream_id,
         )
-    except Exception:
-        logger.exception("发送思维种子通知失败")
+        logger.info("已发送思维种子通知 seed=%s admin_stream=%s", seed_id, admin_stream_id)
+        return True
+    except (RuntimeError, ValueError, OSError):
+        logger.exception("发送思维种子通知失败 seed=%s", seed_id)
+        return False
+
+
+# Backward-compatible private alias used by this module.
+async def _notify_admin_seed(plugin, manager, seed_id: str) -> bool:
+    return await notify_admin_seed(plugin, manager, seed_id)
+
+
+async def _send_aggregated_seed_notification(plugin) -> bool:
+    """向管理员发送本轮聚合种子通知。
+
+    将 _pending_seed_notifications 中收集的种子合并为一条通知，
+    受 admin_notification_cooldown_minutes 冷却控制。
+    """
+    import time as _time
+
+    from ..utils.spectrum_utils import parse_user_id
+
+    global _last_aggregated_notification_ts
+
+    cooldown = plugin.config.thought_cabinet.admin_notification_cooldown_minutes
+    now = _time.time()
+    if cooldown > 0 and _last_aggregated_notification_ts > 0:
+        elapsed = (now - _last_aggregated_notification_ts) / 60.0
+        if elapsed < cooldown:
+            logger.debug(
+                "聚合种子通知冷却中（已过 %.1f / %s 分钟），跳过本轮",
+                elapsed, cooldown,
+            )
+            return False
+
+    admin_config_id = plugin.config.admin.admin_user_id
+    if not admin_config_id:
+        logger.warning("admin_user_id 未配置，跳过聚合种子通知")
+        return False
+
+    platform, user_id = parse_user_id(admin_config_id)
+    if not platform or not user_id:
+        logger.warning("admin_user_id 无法解析，跳过聚合种子通知 raw=%s", admin_config_id)
+        return False
+
+    try:
+        admin_stream_id = await plugin.ctx.chat.get_stream_by_user_id(
+            platform=platform, user_id=user_id
+        )
+    except (RuntimeError, ValueError, OSError):
+        logger.exception("获取管理员 stream_id 失败，跳过聚合种子通知")
+        return False
+
+    if not admin_stream_id:
+        logger.warning("未找到管理员聊天流，跳过聚合种子通知 admin=%s:%s", platform, user_id)
+        return False
+
+    total = len(_pending_seed_notifications)
+    display = _pending_seed_notifications[:10]
+    lines: list[str] = []
+    for sid, stype, sevent in display:
+        lines.append(f"• {stype}：{sevent}（/soul_seed {sid}）")
+    if total > 10:
+        lines.append(f"…等共 {total} 个")
+
+    text = (
+        f"🧠 本轮演化产生 {total} 个新思维种子：\n"
+        + "\n".join(lines)
+        + "\n\n用 /soul_seed <ID> 查看详情，/soul_approve <ID> 批准内化。"
+    )
+
+    # 走 outbox：失败不再是"一行日志就没了"，而是入队重放（种子被批准前不能丢）
+    from ..utils.notify import send_or_queue
+
+    # now 是 time.time() 浮点（用于冷却计算），**不是** datetime——
+    # 直接 strftime 会 AttributeError，通知根本发不出去（且静默进不了 outbox）。
+    from datetime import datetime as _dt
+
+    now_hour = _dt.fromtimestamp(now).strftime("%Y%m%d%H")
+    dedupe_key = f"seeds:{now_hour}:{','.join(sid for sid, _, _ in display)}"
+    sent = await send_or_queue(
+        plugin, text, admin_stream_id, dedupe_key=dedupe_key,
+    )
+    # 内容已交付（直发成功 或 已落 outbox）→ 移除本次消费的条目。
+    # 早退路径（无管理员 / 冷却中 / 找不到 stream）**不走到这里**，
+    # 待发内容保留到下一轮——否则种子通知会被静默丢掉。
+    consumed = set(id(x) for x in display)
+    _pending_seed_notifications[:] = [x for x in _pending_seed_notifications if id(x) not in consumed]
+
+    if sent:
+        _last_aggregated_notification_ts = now
+        logger.info("已发送聚合种子通知（%s 个） admin_stream=%s", total, admin_stream_id)
+    else:
+        logger.warning("聚合种子通知转入 outbox 待重放（%s 个）", total)
+    return sent

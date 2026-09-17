@@ -1,5 +1,198 @@
 # Changelog
 
+## [2.5.0] — Phase 0 正确性 + 12 槽接入 + 插件侧 H1/H2
+
+相对 v2.4.0 发酵基线的生产打磨版本。**不建全量 v3 表**；测试 **600** 项。
+
+### 用户可感知
+
+- **思想默认属于 Bot 全局**：新内化 trait `stream_id=global`，来源群记 `origin_stream_id`；A 群形成的观点可在 B 群相关话题被召回（存量群锁 trait 不自动改写）。
+- **注入更可追踪**：tag → 关键词补位 → tagless → fallback；`activation_reason` 可在 `/soul_inspect`/dashboard 展示。
+- **人设优先**：Soul 动态层追加到宿主首条 system；无 system 则 fail-open。
+- **思维阁 12 槽（MVP）**：`/soul_slot <id> <1-12|clear>`；有槽观点注入优先；dashboard 显示占用。
+- **自我观察日上限**：`self_observation_daily_cap` 默认 2，与群聊种子 cap 独立。
+- **发酵更诚实**：LLM 失败不丢窗口；证据不足不强制内化。
+- **总开关可信**：`plugin.enabled=false` 停注入+四后台任务；热更可启停发酵；`api.enabled` 默认关。
+- **数据目录**：优先宿主 `ctx.paths.data_dir/mai_soul_engine`（backup 迁移）。
+
+### 开发侧
+
+- 演化三态 success/skipped/failed；光谱硬 clamp。
+- 自评 raw/normalized/consumed + 跨 session 修正；`relevance_gate` 接线。
+- `_reconcile_background_tasks` 统一生命周期。
+- 内化光谱+trait+边单事务；schema `user_version` + `soul_schema_migrations`。
+- **H1 插件侧**：`get_stream` 失败回退 `chat.open_session`（不改宿主）。
+- **H2 插件侧**：`config.get` 读 personality/reply_style → 内化 prompt 基底。
+- `CONFIG_VERSION` / manifest → **2.5.0**。
+
+### 2.5.0 补丁（产品半闭环）
+
+- 内化成功建议 `/soul_slot`（推荐空槽号）；发酵完成通知管理员含槽位建议。
+- Dashboard 思维阁 **12 格一览**（空/占用）。
+- 群锁 trait 列表标 `[仅群]`；`/soul_promote_global <id>` 提升为全局（保留 origin）。
+- `fermentation_min_inputs=0` 配置警告；data_dir 迁移失败时 `/soul_health` 标 degraded。
+
+### 第四轮返工（正确性复审修复）
+
+复审给出 18 条直接反例（全部先转成回归测试、确认对旧代码为红，再修实现），逐项修复：
+
+- **观察模式原来真的会改人格**：模式闸门下沉到**写库那一刻**（`ensure_mutation_allowed` 读调用时配置，被拦抛 `MutationBlocked`）——入口检查挡不住「LLM 在途时被切到 observe」。区分「模式拒绝」与「业务失败」。
+- **内化一次生效**：所有权校验 + 种子 CAS + 人格写入 + 终态落库在**同一 COMMIT**，校验不过整笔回滚；终结失败走**有界重试**而不是直接 failed（保住管理员批准意图）。根因之一：`models/p1.py` 写函数内部的 `conn.commit()` 会**提前结束外层事务**，让回滚变空操作——已加 `commit=False`。
+- **「局部优先」此前是假的**：`apply_spectrum_deltas` 硬编码写 global，开关看着生效实际没生效；现在作用域一路传到最底层，关系判定候选集也限同作用域（局部证据不得强化/改写全局观点）。
+- **演化批次幂等**：光谱 + 切片 + 情绪 + **游标推进**包成同一 COMMIT（含游标——否则重放批次会重复施加影响）。
+- **`/soul_reset` 严格确认**：整串精确匹配、确认绑定操作者+会话+300s、执行前重新鉴权与查模式、文案写明重置范围。
+- **通知闭环**：`claim_notification` 原子认领（pending→sending）防并发重放；直发成功按去重键结清历史待发；发送失败/早退不得清空待发。
+- **任务监督接成真实闭环**：五态 `running/waiting/backoff/failed/stopped`、退避 5s→300s、30s 巡检、`_unloading` 期间禁止重新拉起；五个真实循环在等待间隔打 `waiting`。
+- **候选校验收紧**：未知光谱轴**拒绝**（不再是告警后丢弃）；证据引用必须来自本次输入；模型不得自选 `global`。
+- **配对歧义**（schema v6）：同会话多条未认领快照 → 标 `pairing_ambiguous`，**阻断会改人格的自评反馈**（不确定就不改人格）。
+- **回复分用途投递**：新增 replyer 侧注入（`maisaka.replyer.before_model_request`）——只给「与本轮相关的观点 + 表达倾向」，**不落快照、不打冷却**（快照锚点只能 planner 落；冷却按轮计）；`append_block_to_first_system` 加幂等标记守卫（宿主每次重试都会调 hook）。
+- **token 预算**：`utils/token_budget.py` 保守估算（CJK 1 token/字）+ 稳定裁剪，顺序即优先级。**是估算不是精确用量**。
+- **作用域字段**：快照记 `bot_identity`（v7，宿主 `bot.qq_account`）+ `platform`（v8）——平台由**配置声明平台列表**（`plugin.platforms`，默认 qq）按平台探测宿主流列表得出，**不猜 session_id 字符串**；探不到留空。
+- **看板区分八种状态**（T19）：未初始化 / 关闭 / 无候选 / 无切片 / 取证失败 / LLM 失败 / 注入未验证 / 后台停止，各自独立文案与标记，不再都渲染成一种空。
+- **隐私与保留**（T18）：注入日志只记元数据（不含原始对话与会话标识），加**保留期 TTL**（14 天，此前只按大小轮转＝低频环境永不清理）。
+- **离线回放**（T20）：新增 `tools/replay.py`——候选/接纳/注入/配对四阶段走**真实代码路径**，同输入两次回放逐字节相同，覆盖反例/刷屏/多账号歧义/长期无证据；记录逐条标注「LLM 是固定 fixture」，**不得当真实模型表现**。
+- **迁移鲁棒性**（T16）：WAL 库补迁移不丢行、损坏库显式报错且原文件逐字节不变、迁移中断不推进版本+账本记 failed+可重试、重复迁移幂等；新增迁移必须登记到 `_MIGRATION_ARTIFACTS`（不登记测试报错）。
+- **配对补强（内容证据，第五轮）**：replyer 腿记下本轮「在回答哪条消息」，认领快照时与候选的触发上文做**内容比对**（剥「昵称:」前缀）：唯一命中即精确认领（并发两轮也能分开）、全不命中即弃权——堵住「滞留单条快照被误配给下一轮回复、拿别人的人格反馈改光谱」的漏洞；无证据退回顺序规则。**不需要宿主加字段**。
+- **合并 PR #3**（@riesaexe）：附属数据与日志（audit.jsonl / injections.jsonl / Notion 状态文件）跟随统一持久化目录，堵住「库在新、日志在旧」；补回归 `test_data_dir_aux_copy.py`（3 条）。
+- **新增测试文件**：`test_review_regressions.py`（18 条复审反例）、`test_migration_robustness.py`、`test_legacy_import_personality.py`、`test_privacy_and_retention.py`、`test_replay_harness.py`、`test_low_flow_no_loss.py`（T06）、`test_task_lifecycle_hotupdate.py`（T14）、`test_dashboard_states.py`（T19）、`test_token_budget.py`、`test_purpose_split_delivery.py`。测试 272 → **586**（后续迭代与 PR #3 合并后累计 **600**）。
+
+### 宿主零改动约束下的已知限制
+
+- **planner ↔ replyer 无请求级关联**：两侧 payload 没有共同请求标识（已核实宿主源码），且「不得修改宿主任何代码」。插件侧已补到：replyer 重试按 `reply_message_id` 精确复用 + **内容证据**（replyer 腿真实 items 的触发消息尾行 ↔ 候选快照触发上文，剥前缀比对；唯一命中即精确认领、全不命中即弃权）+ 无证据时退回顺序规则（最旧未认领 / 多条未认领即标歧义）。标歧义即阻断会改人格的自评反馈。**请求级绑定不可达——属已知限制，不是待办**。
+- 平台字段只能来自配置声明 + 宿主流列表探测；宿主不返回平台，插件侧不猜字符串。
+
+### 已知债务（非阻塞）
+
+- 存量群锁 trait 跨群不可见，需管理员知悉或手动处理。
+- 槽位无自动入槽建议，不手动 `/soul_slot` 则优先效果弱。
+- 关键词 2-gram 精度有限；冷却仍为硬过滤。
+- T06 低流量子项、T14 热更路径、T19 看板空态**已补测**（见上）。
+- 真实端到端未跑（按用户要求冻结：不启用、不重启、不群播）；离线回放用固定 fixture，**不代表真实模型表现**。
+
+
+## [2.3.0] — dev 分支（自我评价反馈回路）
+
+### 用户可感知
+
+- **自我评价反馈回路**（`[self_reflection].enabled`，默认关）：补上插件最大的缺口——此前只单向"告诉 bot 是谁"（注入），从不检查"bot 表现得像不像自己"。开启后：replyer 每次回复后捕获输出，定期让 LLM 评价"这次回复是否符合人设"，评价结果两路反馈——①校准光谱（自评偏离 ×权重，gentle：weight=0.5→每周期±1，1.0→±2，需净偏离≥3 次才触发）②下次注入时提醒 bot"你近期在 X 场景偏 Y"。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
+- **`/soul_reflect [N]`**（管理员）：查看近期自我评价记录——待评队列、评价统计（已评/跳过/偏离轴分布）、最近 N 条自评详情（一致性分/偏离轴/原因）。
+- **`/soul_dashboard`** 新增"自我评价"块：待评计数、评价统计、近期偏离摘要。
+- **相关性门槛**（`relevance_gate_enabled`，默认开）：纯闲聊社交回复（哈哈/表情/附和）跳过不打分，只有表态/决策的回复才完整评价——避免"哈哈"被误判成"你不够真诚"。
+- **bot 自消息泄漏修复**（P0 前置）：此前 bot 自己在群里说的话会混入"看别人"的演化分析池（`excluded_users` 默认空），形成不受控自指。新增 `[monitor].bot_self_id` 配置，演化时一律排除 bot 自身消息。
+
+### 开发侧
+
+- **P0 泄漏修复**：`utils/spectrum_utils.py` 新增 `is_bot_self_message` + `filter_messages_for_evolution`（bot 自身短路优先于 `monitored_users` 白名单）；`evolution_task` 改用该函数 + 每群一次告警；`[monitor].bot_self_id` 配置 + `excluded_users` hint 升级。单独提交 `f58b41b`。
+- **数据模型**：`models/self_reflection.py` 新增 3 表——`soul_injection_snapshots`（before_request 注入快照，配对用）、`soul_pending_reflections`（待评队列，TTL+上限+expired 状态防堆积）、`soul_self_reflections`（评价结果）；`_conn.py` 建表 + `idx_pending_created` 索引；shim 重导出。
+- **捕获层**：`components/reflection_capture.py` 一个 `@HookHandler(mode=OBSERVE, error_policy=SKIP)`——`maisaka.replyer.after_response`，零干扰不改写输出；before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回配对（1:N）；snapshot 仅 `enabled` 时写防膨胀；context 缓存缺失=合法降级。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。**懒导入 models 避开预存循环导入**（`_conn→worldview→service→ideology_model→history→_conn`）。
+- **评价层**：`components/reflection_evaluator.py` 独立异步消费协程（`plugin._self_reflection_task`，`on_unload` cancel）；`prompts/self_reflection_prompts.py` 批量评价 prompt——**不给完整光谱+trait"标准答案"**（防评估与注入共享判断框架→系统性高分），只给抽象倾向 + **对立视角**（挑剔外部观察者）+ 相关性门槛三档**具体判例**；可选批次归一化（`normalize_across_batch`，自评分减本批均值对冲高估）；显著偏离的 substantive 回复生成 `self_observation` 种子走 `/soul_approve` 人工审批（默认全人工审批，防自指跑偏）。
+- **双路反馈**：`components/reflection_feedback.py`——①演化路 `apply_self_reflection_spectrum_correction`：自评偏离折算光谱 delta，dead zone（净偏离≥3 才修正）+ magnitude 受 `self_reflection_weight` 缩放（0.5→±1，1.0→±2）防自指闭环，直接应用原始 delta（经 EMA smooth_delta 会被归零）；②planner 反馈路 `build_recent_reflection_summary`：聚合近期自评为一行，`ideology_injector._build_injection_block` 按 selection_mode 分场景注入（有 trait→trait 块下方"低优先级自查"；无 trait→光谱后"补充参考"）。
+- **统一光谱写入闸门**：`models/spectrum.py::apply_spectrum_deltas(source, deltas, ...)` 收口三回路（群演化/内化/自评）的散装光谱写入，clamp→resistance→smooth→update→save→history 一条链，演化历史 reason 现统一带 `[evolution]`/`[internalize]`/`[self_reflection]` 标记可区分来源；内化现也写历史（此前不写，可观测性增量）。
+- **配置**：新增 `[self_reflection]` 段（enabled/evaluation_interval_hours/max_replies_per_cycle/self_reflection_weight/relevance_gate_enabled/normalize_across_batch/pending_max_age_hours/pending_max_rows）；`CONFIG_VERSION` 升至 `2.3.0`，manifest 同步 `2.3.0`，`config_template.toml` 同步。
+- **自指风险护栏**：OBSERVE 不改写输出 / 评价异步批量有 dead zone / weight<1 / strengthened trait 豁免 / self_observation trait 默认全人工审批 / 评估 prompt 不给标准答案+对立视角 / 批次归一化可选。
+- **测试**：新增 5 个测试文件共 47 项——`test_bot_self_filter.py`(8) + `test_self_reflection_model.py`(12) + `test_reflection_capture.py`(11) + `test_reflection_evaluator.py`(10) + `test_reflection_feedback.py`(11) + `test_spectrum_gate.py`(10)，共 110 项插件测试全通过。
+
+## [2.2.0] — dev 分支（Soul 引擎状态可视化卡片）
+
+### 用户可感知
+
+- **`/soul_dashboard` 全状态可视化卡片**：一条命令把 Soul 引擎当前全部状态渲染成一张图片卡片发到聊天——社交光谱四轴（真诚/投入/亲近/直率）、三观分层 trait 计数（价值观/世界观/处事观）、六态生命周期分布（有效/已强化/已过期/矛盾/弱化/修正）、短期情绪、本群局部偏移、待审思维种子、思想图谱边数、最近演化记录、功能开关一览。管理员无需查 DB/调 API 即可总览 bot 人格状态。
+- **`/soul_trait <id>` 详情卡片**：单个 trait 的完整信息可视化——分层/生命周期徽章、置信度、tags、问题、观点、光谱影响、证据、思想关联边（含矛盾/弱化/修正关系）。此前纯文本版只展示 `derived_from`/`supports` 两种边，**漏了 `contradicted_by`/`weakened_by`/`revised_by`**，现已修复，5 种边全展示。
+- **`/soul_inspect <文本>` 命中预览卡片**（管理员）：输入一段文本，模拟"如果 bot 现在要回复这句话，会命中哪些 trait、按什么优先级选中、哪些被跳过及原因"——干跑注入选择逻辑，**不实际注入**。诊断"bot 看到这句话会调用哪些人格"。
+- 渲染关闭（`[render].card_enabled=false`）或宿主无头浏览器不可用时，三个命令均自动降级为同内容的纯文本。
+
+### 开发侧
+
+- **数据聚合**：`components/dashboard_data.py` 的 `collect_dashboard_data(plugin, stream_id)` 聚合 Soul 引擎全部状态为固定结构 dict（数据契约）；图谱边用 `(from,to,relation)` 三元组去重计数；空库/未初始化也能聚合（各计数 0、`initialized=false`）。
+- **卡片渲染**：`components/dashboard_renderer.py` 的 `DashboardRenderer` 用内联 HTML/CSS（`#soul-dashboard`/`#soul-trait`/`#soul-inspect` 三个根容器、CJK 字体栈、`allow_network=false`、无外部依赖）经 `ctx.render.html2png` 渲染成 PNG；三个卡片共用 `_wrap_html` CSS 底座（深色靛紫/青绿调性）；`build_dashboard_text`/`build_trait_text`/`build_inspect_text` 为纯文本降级版。
+- **命令接线**：`components/dashboard_command.py`（dashboard）+ `handle_trait_detail` 改造（trait，含边展示遗漏修复）+ `components/inspect_command.py`（inspect，干跑 `_select_traits`/`_in_cooldown`/`_trait_quality_score` 不实际注入）；统一 `card_enabled` 判断 + 渲染失败/超时降级文本 + `send.image` 异常捕获具体类型（`OSError`/`RuntimeError`）非裸 except。
+- **配置**：新增 `[render]` 段（`card_enabled`/`viewport_width`/`device_scale_factor`/`render_timeout_ms`）；`CONFIG_VERSION` 升至 `2.2.0`，`config_template.toml` 同步。
+- **技术决策**：SDK 无插件前端页面注册机制（WebUI 只能生成配置表单），故用 `ctx.render.html2png`（宿主无头浏览器）+ `ctx.send.image` 实现可视化，零宿主改动。参考同仓 `plugins/chat_summary/renderer.py` 的已验证范式。
+- **测试**：新增 `tests/test_dashboard_data.py`（3 项）+ `tests/test_dashboard_renderer.py`（4 项）+ `tests/test_trait_card.py`（5 项，含 5 种边类型回归保护）+ `tests/test_inspect_card.py`（5 项），共 48 项插件测试。
+
+### 视觉重构（开发侧）
+
+- 三卡片（dashboard/trait/inspect）视觉风格按 `DESIGN-raycast.md` 重构为 **Raycast 暗色开发工具风格**：四级表面梯（`#07080a`→`#0d0d0d`→`#101111`→`#121212`）+ hairline 1px 边框（`#242728`）+ **去除所有 drop-shadow**（深度只靠表面色阶）；圆角收紧到 4–16px；Inter 字体 + `ss03` stylistic set（`allow_network=False` 不引外链，字体栈 `"Inter", system-ui, "Noto Sans CJK SC", "Microsoft YaHei"` 保留 CJK fallback）；生命周期六态映射到 Raycast 语义色（有效/强化→green、过期→yellow、矛盾→red、弱化→orange、修正→blue，soft 底+实色 chip）；每卡片顶部一条红色斜条 hero stripe（`#ff5757`→`#a1131a`，遵守 one-band rule）；列表用 command-palette-row 风格。**纯视觉重构，数据契约/根容器 id/降级逻辑/测试断言均不变**，68 项测试全通过。
+
+## [2.1.0] — dev 分支（P1 三观生长 + 光谱重构）
+
+### 用户可感知
+
+- **光谱四维重构**：从政治光谱（经济/社会/文化/变革）换为群聊社交轴——真诚度、投入度、亲密度、直率度。这些是 MaiBot 在群聊里真实会经历、会被塑造的倾向，而非宏观政治立场。
+- `/soul_setup` 问卷 20 题全部重写，围绕群聊社交场景（装腔作势、冷场、熟人玩笑、有话直说等）。
+- `/soul_status` 显示改为社交轴，并额外显示：本群局部偏移、短期情绪、固化观点分层统计。
+- 光谱演化速度因三观分层而变化：价值观层（真诚度）最慢，处事观层（亲密度/直率度）较快，避免被短期聊天带歪。
+- 注入回复时带「三观分层摘要」与「短期情绪语气」，回复风格更贴合长期人格。
+- 新增 API `soul.get_worldview`：返回分层统计、情绪状态、本群切片（脱敏）。
+
+### 思维阁强化（用户可感知）
+
+- 种子审核通知新增「原始对话上下文」：除 LLM 摘录的证据片段外，附带触发该种子的真实群聊片段（evidence 前后各 2 条），管理员审核时能看到真实对话而非二次总结。
+- 种子审核后不再删除：批准/拒绝改为标记状态，保留种子→trait 的可追溯审计链。
+- 自动卫生清理：超期未审的种子自动过期；长期未被强化的固化观点自动停用，避免陈旧观点持续影响人格。
+- 注入更聪明：高置信度、已强化的观点优先注入；无标签的观点也能按影响力被注入（此前几乎不可见）；分层摘要不再与详细观点重复。
+- 同话题种子去重：同一群聊反复讨论同一话题不再重复产生待审种子。
+
+### 思维阁强化（开发侧）
+
+- 种子上下文窗口：`soul_thought_seeds` 新增 `context_json` 列（就地迁移）；`seed_manager._match_evidence_to_context` 用 difflib 把 LLM evidence 模糊匹配回原始消息行，取 ±2 条窗口（每行截断 200 字，最多 10 行）。
+- 种子审计链（P0）：`update_seed_status` 替代删除；approve→`approved`、reject→`rejected`；`_cleanup_old_reviewed_seeds` 保留最近 `reviewed_keep_count`(默认200) 条已审种子。
+- 种子 TTL（P0）：`expire_old_pending_seeds` 将超过 `seed_ttl_hours`(默认168h) 的 pending 种子标记 `expired`，演化循环每轮自动执行。
+- trait 生命周期（P0）：`expire_old_traits` 将超过 `trait_ttl_days`(默认90) 且未被强化的 `active` trait 标记 `expired` 并 `enabled=0`；`strengthened` 不受影响。
+- 内化上下文（P1）：`INTERNALIZATION_PROMPT` 新增 evidence/context/intensity/confidence/potential_impact 字段，内化 LLM 基于真实片段形成观点，复用种子的预期光谱影响。
+- 注入选择（P1+P2）：无 tag trait 按影响分补位填满 `max_traits`（新增 `tag_hit+tagless`/`tagless_fill` 模式）；二级排序加质量分（confidence + 生命周期加权）；`build_layer_trait_summary` 支持 `exclude_trait_ids` 与详细注入块去重。
+- 种子去重（P2）：`_is_duplicate_pending_seed` 用本地 difflib 对同群 pending 种子按 type+event+reasoning 签名去重（阈值 `seed_dedup_threshold` 默认0.82，不调 LLM）。
+- 新增配置：`seed_ttl_hours` / `reviewed_keep_count` / `trait_ttl_days` / `seed_dedup_threshold`。
+- 种子类型字典 `THOUGHT_TYPES` 对齐社交轴；approve/reject 路径配置改为读取而非硬编码。
+- 修复 `__init__` 中 `or 默认值` 误把合法 `0.0` 替换为默认值的 bug。
+
+### 开发侧
+
+- **光谱重构**：`IdeologySpectrum` 字段 economic/social/diplomatic/progressive → sincerity/engagement/closeness/directness；DB 列就地 `RENAME COLUMN` 迁移（幂等，SQLite ≥3.25）；演化历史与切片表同步重命名。
+- 提示词：`prompts/ideology_prompts.py` 四组档位文案全部重写为社交轴；`EVOLUTION_ANALYSIS_PROMPT` 与 `thought_prompts.py` 同步。
+- 问卷：`questions/setup_questions.py` 20 题重写为群聊社交场景。
+- 数据层：新增表 `soul_context_slices` / `soul_mood_state` / `soul_thought_edges`；`soul_crystallized_traits` 新增 `ideology_layer` / `lifecycle_state` 列（就地迁移，幂等）。
+- 新模块 `worldview/`：`constants.py`（层/lifecycle 枚举与归一化、维→层映射）、`service.py`（`WorldviewService`：分层限速、群切片、情绪衰减、分层注入摘要、思想图谱注册）。
+- 配置：`plugin_ui_schema.py` 新增 `[worldview]` 节；`config_version` 升至 `2.1.0`，`normalize_plugin_config` 自动补齐。
+- 演化：`evolution_task` 接入 `apply_layer_caps_to_deltas` / `record_local_slice` / `nudge_mood_from_deltas`。
+- 内化：`internalization_engine` 归层、写 lifecycle（合并升级为 `strengthened`）、注册 `derived_from` / `supports` 图谱边。
+- 注入：`ideology_injector` 叠加分层摘要、情绪语气、图谱来源提示。
+- API：`soul.get_traits` 返回 `ideology_layer` / `lifecycle_state`；新增 `soul.get_worldview`。
+- Notion：光谱属性默认名改为 Sincerity/Engagement/Closeness/Directness。
+- 兼容：`[worldview].p1_enabled = false` 时分层/切片/情绪关闭，行为与 v2.0 一致（四维已是社交轴）。
+- 测试：宿主仓新增 `pytests/test_mai_soul_p1_model.py`（4 项），manifest 门禁改为跟随分支版本，legacy_import 测试同步新列名。
+
+### 重构与加固（开发侧）
+
+- **数据层拆分**：`models/ideology_model.py`（1006 行单体）按实体拆为 `_conn.py`/`spectrum.py`/`history.py`/`seeds.py`/`traits.py`/`p1.py` 六个子模块；`ideology_model.py` 保留为重导出 shim（`import *` + `__getattr__` 委托动态变量），40+ 处历史导入零破坏。
+- **`update_seed_status` 原子守卫**：新增 `expected_status="pending"` 参数，默认仅当当前状态为 `pending` 才更新，避免竞态下复活已过期/已审核种子；所有现有 2 参调用自动获得守卫。
+- **`_cleanup_excess_seeds` 改标 expired**：pending 超 `max_seeds` 时不再物理删除最旧种子，改为 `update_seed_status(.., "expired")`，保留被挤掉种子的审计记录。
+- **消除 `or` fallback 反模式**：全量清除配置字段侧 `int/float(... or 默认)`（会吞掉合法 `0`/`0.0`，如 `max_traits=0` 被改成 3、`trait_ttl_days=0` 被改成 90）；改为直接属性访问（pydantic 字段必然存在）。残留的 `dict.get(k,0) or 0`/`dbfield or 0` 是 None 守卫且默认值=0（0 被保留），非反模式。
+- **`ThoughtSeedManager.from_plugin_config` 工厂**：收敛 4 处重复的配置 dict 构造（evolution_task + thought_commands 三处）。
+- **注入热路径优化**（`before_request` 每条消息触发）：`WorldviewConfigView`/`WorldviewService` 缓存到 `plugin._wv_config_view`/`_wv_service`（`on_load` 构造、`on_config_update` 重建）；`build_layer_trait_summary` 复用已查 traits 避免二次 SQL；冷却筛选从 per-trait 改为一次批量过滤；`inject_ideology`（290 行）拆为 `_should_inject`/`_select_traits`/`_build_injection_block` 等子函数；`threading.Lock` → `asyncio.Lock`；注入日志采样（每 10 条）+ 5MB 轮转 + `asyncio.to_thread` 异步写。
+- **`getattr` → 直接属性访问**：`ideology_injector`/`worldview/service` 中对 dataclass/pydantic 字段的冗余 `getattr(.., default) or default` 全部改为直接访问。
+- **`except` 收窄**：`ideology_injector`/`evolution_task`/`thought_commands`/`internalization_engine`/`seed_manager` 中裸 `except Exception` 改为具体异常类型（顶层循环恢复保留并加注释）。
+- **杂项**：`spectrum_utils.py` 的 `import re` 上移到文件顶部；`worldview/constants.py` 的 `LIFECYCLE_STATES` 补文档说明预留枚举（`weakened`/`revised`/`contradicted` 尚无写入路径，injector 已预置降权分，保留而非删除）。
+
+### 内省矛盾检测与剩余加固（开发侧）
+
+- **trait 生命周期矛盾检测**：`_find_dedup_target` 重命名为 `_classify_trait_relation`，复用同一次 LLM 调用（零额外 token）扩展输出 5 种关系（none/duplicate/contradicted/weakened/revised）。`_upsert_crystallized_trait` 按 relation 分支处理：duplicate→merge 强化（现有）；contradicted→旧 trait 标 `contradicted`+`enabled=0`+写 `contradicted_by` 边+建新 active；weakened→旧 trait 标 `weakened`+写 `weakened_by` 边+建新；revised→旧 trait 标 `revised`+写 `revised_by` 边+建新。**防误报三重**：置信度阈值（contradicted≥0.70、weakened/revised≥0.60，低于降级 none）；`strengthened` trait 豁免（prompt 注明仅可判 duplicate）；可回滚（`/soul_trait_enable` 重新启用，`/soul_trait <id>` 展示关系边可追溯）。`_trait_quality_score` 补 `contradicted: -1.0` 降权。至此 `LIFECYCLE_STATES` 6 个状态全部有写入路径。
+- **全局 trait 标记显式化**：新增 `GLOBAL_STREAM = "global"` 常量（`worldview/constants.py`）。trait 表从用空串 `""` 表全局改为显式 `"global"`，消除"未设置/异常空值"与"有意的全局作用域"的歧义。`init_db` 迁移自动把存量 `""` trait 归一为 `"global"`（幂等）；`create_crystallized_trait`/`query_crystallized_traits` 传入空串自动归一；`query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配。
+- **图谱边批量查询**：`models/p1.py` 新增 `list_thought_edges_for_traits(trait_ids)`，一次 SQL 查所有边按 trait_id 分组；`worldview/service.py` 的 `build_graph_hint` 从 per-trait N+1 改为批量调用。保留单数版 `list_thought_edges_for_trait` 供 `/soul_trait <id>` 详情使用。
+- **`set_trait_lifecycle_state` setter**：`models/traits.py` 新增，用于矛盾检测标记旧 trait 状态（可选同时改 `enabled`），不改 DB schema。
+- **@API 访问控制加固**：`api_health` 补上缺失的 `api.enabled` 守卫（7 个 API 现全部一致）；唯一写接口 `api_set_spectrum` 接入 `log_api_set_spectrum` 审计（记录社交轴 before/after）；文档化安全模型（无网络暴露面，`public=False` + `api.enabled` 双层控制，插件层不自行实现网络认证）。
+- **插件内测试**：新建 `tests/` 目录（28 项），覆盖种子状态原子守卫、`set_trait_lifecycle_state`、全局标记归一+迁移、批量边查询、`_trait_quality_score` 6 态降权、`_cleanup_excess_seeds` 标 expired、矛盾 trait 注入排除。从宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q` 运行。
+
+### 矛盾检测代码审查修复（开发侧）
+
+经 oracle 代码审查后修复 3 个正确性问题：
+- **非原子写入顺序（P0）**：`_upsert_crystallized_trait` 的 contradicted/weakened/revised 分支调换顺序——先建新 trait，成功后再标记旧 trait，避免"旧 trait 已禁用但新 trait 创建失败"的不可逆语义丢失。
+- **图谱边对注入不可见（P0）**：`build_graph_hint` 原只展示 `derived_from`/`supports`，新增的 `contradicted_by`/`weakened_by`/`revised_by` 边被静默丢弃；现补上三种关系的中文标签展示（矛盾于/弱化于/修正自）。
+- **strengthened 豁免无代码层兜底（P0）**：`_classify_trait_relation` 原仅靠 prompt 文字约束 LLM 不矛盾 strengthened trait；现加代码层校验，即使 LLM 不遵守也强制降级 none。
+- **矛盾检测候选集遗漏全局 trait（P1）**：`_classify_trait_relation` 候选查询从 `query_crystallized_traits`（精确匹配 stream_id）改为 `query_active_traits_for_injection`（含 `GLOBAL_STREAM` 匹配），使群级新观点能与全局观点比对矛盾。
+- **`from_plugin_config` 迁移补全（P1）**：`handle_seed_detail`/`handle_seed_reject_all` 两处遗留的手拼 config dict 改为工厂方法。
+- **测试补强**：新增 `test_classify_trait_relation.py`（mock LLM，3 项），锁住 strengthened 代码层兜底、候选过滤、关系透传。`LIFECYCLE_STATES` docstring 更新为"6 态全部有写入路径"。
+
 ## [2.0.0] — 2026-06-26
 
 ### 用户可感知

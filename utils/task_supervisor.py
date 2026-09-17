@@ -1,0 +1,230 @@
+"""后台任务监督：状态可见、崩溃可恢复、超限转 failed。
+
+**解决的问题**：`_reconcile_background_tasks` 原先只判断任务对象是否为 None。
+后台协程一旦抛异常退出，Task 对象仍在（不为 None），于是既不会被重启
+（该学的永久停摆），`/soul_health` 又仍显示「运行中」（假绿）。
+
+**边界**：这里不试图给每个后台循环加逐轮埋点（那需要改 4 个循环模块），
+只盯着真正会静默出事的信号——**任务意外结束**。重启有上限，超限转 failed
+并要求人工介入，避免"崩了重启、重启又崩"刷屏。
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+from dataclasses import dataclass, field
+
+__all__ = [
+    "HEALTHY_RUN_SECONDS",
+    "TASK_NAMES",
+    "STATUS_BACKOFF",
+    "STATUS_FAILED",
+    "STATUS_RUNNING",
+    "STATUS_STOPPED",
+    "STATUS_WAITING",
+    "TaskState",
+    "TaskSupervisor",
+]
+
+# 与 plugin.py 的 task_entries 对齐
+TASK_NAMES: tuple[str, ...] = (
+    "evolution",
+    "notion",
+    "reflection",
+    "fermentation",
+    "internalization",
+)
+
+STATUS_STOPPED = "stopped"      # 主动停止（配置关闭 / 卸载）
+STATUS_RUNNING = "running"      # 在跑
+STATUS_WAITING = "waiting"      # 期望运行但尚未启动（被卸载守卫/首次启动挡住）
+STATUS_BACKOFF = "backoff"      # 意外结束，正在退避，到期后重启
+STATUS_RESTARTING = "restarting"  # 兼容旧值：等价于 backoff（无退避时直接重启）
+STATUS_FAILED = "failed"        # 连续异常超限，等人工介入
+
+# 默认重启上限：连续异常结束超过该次数即判 failed，等人工介入。
+DEFAULT_MAX_RESTARTS = 5
+BACKOFF_BASE_SECONDS = 5.0     # 首次重启延迟
+BACKOFF_MAX_SECONDS = 300.0    # 退避上限（5 分钟）
+
+# 一次运行稳定持续超过该时长后崩溃，视为新的偶发事故而非"连续崩溃"
+HEALTHY_RUN_SECONDS = 3600.0
+
+
+@dataclass
+class TaskState:
+    """单个后台任务的监督状态。"""
+
+    name: str
+    status: str = STATUS_STOPPED
+    restart_count: int = 0
+    last_death_reason: str = ""
+    last_change_at: float = field(default_factory=time.time)
+    started_at: float = 0.0
+    last_success_at: float = 0.0    # 最近一次「确实干成了活」
+    next_retry_at: float = 0.0      # 退避后的下次重启时刻
+    heartbeat_at: float = 0.0       # 最近一次心跳（循环每轮打点）
+
+
+class TaskSupervisor:
+    """后台任务状态机（进程内，不持久化）。"""
+
+    def __init__(self, max_restarts: int = DEFAULT_MAX_RESTARTS) -> None:
+        self._max_restarts = max(1, int(max_restarts))
+        self._states: dict[str, TaskState] = {
+            name: TaskState(name=name) for name in TASK_NAMES
+        }
+
+    # ── 查询 ───────────────────────────────────────────────────────
+
+    def state_of(self, name: str) -> TaskState:
+        """取任务状态；未登记的名字给一个临时 stopped 状态（不抛异常）。"""
+        state = self._states.get(name)
+        if state is None:
+            state = TaskState(name=name)
+            self._states[name] = state
+        return state
+
+    def should_restart(self, name: str) -> bool:
+        """是否还允许自动重启。"""
+        state = self.state_of(name)
+        if state.restart_count >= self._max_restarts:
+            state.status = STATUS_FAILED
+            return False
+        return True
+
+    def start_allowed(self, name: str) -> bool:
+        """是否允许（重新）启动该任务。
+
+        与 ``should_restart`` 的区别：这里也拦住「任务对象已是 None 的新一轮
+        start」。否则判 failed 之后，下一次 reconcile 看到 None 又会把它拉起来，
+        「达到上限等人工介入」就成了空话。
+        """
+        state = self.state_of(name)
+        return state.status != STATUS_FAILED and state.restart_count < self._max_restarts
+
+    def is_healthy(self) -> bool:
+        """没有任务处于 failed → 健康（供 /soul_health 判 degraded）。"""
+        return all(s.status != STATUS_FAILED for s in self._states.values())
+
+    def describe(self) -> str:
+        """给看板用的一行汇总（含最后成功时间与下次重试时刻）。"""
+        import datetime as _dt
+
+        def _fmt(ts: float) -> str:
+            return _dt.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M:%S") if ts else "—"
+
+        parts = []
+        for s in self._states.values():
+            line = f"{s.name}={s.status}"
+            if s.restart_count:
+                line += f"(重启{s.restart_count})"
+            if s.last_success_at:
+                line += f" 最后成功={_fmt(s.last_success_at)}"
+            if s.status in (STATUS_BACKOFF, STATUS_RESTARTING) and s.next_retry_at:
+                line += f" 下次重试={_fmt(s.next_retry_at)}"
+            parts.append(line)
+        return "后台任务: " + " | ".join(parts)
+
+    # ── 状态迁移 ───────────────────────────────────────────────────
+
+    def note_started(self, name: str, *, started_at: float | None = None) -> None:
+        """任务已启动（含重启成功）。记录启动时刻，用于判断是否为「长期稳定后偶发崩溃」。"""
+        state = self.state_of(name)
+        state.status = STATUS_RUNNING
+        now = time.time()
+        state.started_at = now if started_at is None else float(started_at)
+        state.last_change_at = now
+
+    def note_stopped(self, name: str) -> None:
+        """任务被**主动**停止（配置关闭/卸载）——不计入异常重启。"""
+        state = self.state_of(name)
+        state.status = STATUS_STOPPED
+        state.last_change_at = time.time()
+
+    def note_death(self, name: str, *, reason: str = "", now: float | None = None) -> None:
+        """任务**意外**结束（异常或提前 return）。
+
+        若这次运行已经稳定持续了 ``HEALTHY_RUN_SECONDS`` 以上，视为**新的偶发事故**，
+        重启计数重新从 1 开始——否则一个每几天崩一次的任务会在几个月后被永久判
+        failed（这与"连续崩溃"是两码事）。短时间内的连环崩溃照旧累积。
+        """
+        state = self.state_of(name)
+        current = time.time() if now is None else float(now)
+        ran_for = current - state.started_at if state.started_at else 0.0
+        if ran_for >= HEALTHY_RUN_SECONDS:
+            state.restart_count = 0
+        state.restart_count += 1
+        state.last_death_reason = str(reason)[:300]
+        state.status = (
+            STATUS_FAILED
+            if state.restart_count >= self._max_restarts
+            else STATUS_BACKOFF
+        )
+        state.last_change_at = current
+        state.next_retry_at = current + self.restart_delay(name)
+
+    def restart_delay(self, name: str) -> float:
+        """指数退避：5s → 10s → 20s …（上限 5 分钟）。
+
+        连环崩溃时不该每 5 秒就猛撞一次；退避给外部依赖（DB/网络）恢复时间。
+        """
+        state = self.state_of(name)
+        n = max(1, state.restart_count)
+        return min(BACKOFF_BASE_SECONDS * (2 ** (n - 1)), BACKOFF_MAX_SECONDS)
+
+    def note_success(self, name: str, *, now: float | None = None) -> None:
+        """任务**确实完成了一轮工作**时打点（不是「还活着」，是「干成了」）。"""
+        state = self.state_of(name)
+        t = time.time() if now is None else float(now)
+        state.last_success_at = t
+        state.heartbeat_at = t
+
+    def note_waiting(self, name: str, *, reason: str = "") -> None:
+        """期望运行但尚未启动（卸载守卫挡住、首次启动前、退避外的阻塞）。
+
+        与 stopped 的区别：stopped 是**不需要**跑；waiting 是**该跑但还没跑起来**。
+        看板上两者混同会让人以为任务正常。
+        """
+        state = self.state_of(name)
+        state.status = STATUS_WAITING
+        if reason:
+            state.last_death_reason = str(reason)[:300]
+        state.last_change_at = time.time()
+
+    def note_heartbeat(self, name: str, *, now: float | None = None) -> None:
+        """循环每轮打点（用于判断任务是否卡死，与「干成了」区分）。"""
+        state = self.state_of(name)
+        state.heartbeat_at = time.time() if now is None else float(now)
+
+    def ready_to_restart(self, name: str, *, now: float | None = None) -> bool:
+        """退避是否已到期（到期才允许重启）。"""
+        state = self.state_of(name)
+        if not state.next_retry_at:
+            return True
+        return (time.time() if now is None else float(now)) >= state.next_retry_at
+
+    def reset(self, name: str) -> None:
+        """清空某任务的重启计数（例如配置变更后由操作者重新启用）。"""
+        state = self.state_of(name)
+        state.restart_count = 0
+        state.last_death_reason = ""
+        state.status = STATUS_STOPPED
+        state.last_change_at = time.time()
+
+
+def note_task_waiting(plugin: Any, key: str, *, reason: str = "") -> None:
+    """循环进入**等待间隔**时打点。
+
+    模块级循环函数拿不到 supervisor 引用，用它做薄封装。
+    观测代码必须**绝不**影响业务循环：没有 supervisor（测试桩）时静默跳过，
+    打点异常也只记 debug。
+    """
+    supervisor = getattr(plugin, "_task_supervisor", None)
+    if supervisor is None:
+        return
+    try:
+        supervisor.note_waiting(key, reason=reason)
+    except Exception:  # noqa: BLE001 — 观测失败不得影响业务循环
+        logger.debug("note_task_waiting(%s) 失败（已忽略）", key)

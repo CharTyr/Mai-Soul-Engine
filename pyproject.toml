@@ -1,0 +1,28 @@
+[project]
+name = "mai-soul-engine"
+version = "2.5.0"
+description = "MaiBot 插件：bot 自身认知与三观演化（光谱 / 思维阁 trait / 注入 / 自我反思）"
+requires-python = ">=3.10"
+dependencies = []
+
+# 插件运行时由 MaiBot 宿主提供依赖（maibot_sdk 等），此处只声明**测试**所需。
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pillow>=10.0",
+    "maibot-plugin-sdk>=2.8.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 测试以 importlib 导入 `plugins.CharTyr_Mai-Soul-Engine.*`（目录名含连字符），
+# 由 tests/conftest.py 自行把宿主根加入 sys.path，故无需 pythonpath 配置。
+addopts = "-q"
+filterwarnings = [
+    "error::DeprecationWarning:plugins.*",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

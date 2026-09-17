@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import re
 from typing import Any
+
+from ..utils.spectrum_utils import check_mutation_mode, extract_command_text
 
 logger = logging.getLogger(__name__)
 
@@ -15,33 +18,109 @@ logger = logging.getLogger(__name__)
 async def handle_seeds_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """查看待审核的思维种子（管理员）。"""
     from ..thought.seed_manager import ThoughtSeedManager
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
-
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以查看思维种子"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    ok, err = check_admin_permission(plugin, kwargs, "查看思维种子")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    config = {
-        "max_seeds": plugin.config.thought_cabinet.max_seeds,
-        "min_trigger_intensity": plugin.config.thought_cabinet.min_trigger_intensity,
-        "admin_user_id": admin_user_id,
-    }
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seeds = await manager.get_pending_seeds()
 
     msg = manager.format_seeds_list(seeds)
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== 种子详情 =====
+
+
+async def handle_seed_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """查看单个思维种子完整详情（管理员）。"""
+    from ..thought.seed_manager import ThoughtSeedManager
+    from ..utils.spectrum_utils import check_admin_permission
+
+    ok, err = check_admin_permission(plugin, kwargs, "查看思维种子")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    text = extract_command_text(kwargs)
+    match = re.match(r"^/soul_seed\s+(\w+)\s*$", str(text))
+    if not match:
+        msg = "用法: /soul_seed <种子ID>"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    seed_id = match.group(1)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
+    seed = await manager.get_seed_by_id(seed_id)
+
+    if not seed:
+        msg = f"未找到种子 {seed_id}"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    lines = [f"🧠 种子详情 {seed_id}", ""]
+    lines.append(f"状态: {seed.get('status', '')}")
+    if seed.get("stream_id"):
+        lines.append(f"来源: {seed['stream_id']}")
+    lines.append(f"类型: {seed.get('type', '')}")
+    lines.append(f"强度: {seed.get('intensity', 0):.2f}  置信度: {seed.get('confidence', 0):.2f}")
+    lines.append(f"创建于: {seed.get('created_at', '')}")
+    lines.append("")
+    lines.append(f"事件: {seed.get('event', '')}")
+    reasoning = seed.get("reasoning", "")
+    if reasoning:
+        lines.append(f"检测原因: {reasoning}")
+    impact = seed.get("potential_impact", {}) or {}
+    impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
+    if impact_str:
+        lines.append(f"预期影响: {impact_str}")
+
+    evidence = seed.get("evidence", []) or []
+    if evidence:
+        lines.append("")
+        lines.append("证据片段:")
+        lines.extend([f"- {x}" for x in evidence])
+
+    context = seed.get("context", []) or []
+    if context:
+        lines.append("")
+        lines.append("原始对话上下文:")
+        lines.extend([f"│ {x}" for x in context])
+
+    if seed.get("status") == "pending":
+        lines.append("")
+        lines.append(f"/soul_approve {seed_id} - 批准  |  /soul_reject {seed_id} - 拒绝")
+    elif seed.get("status") == "fermenting":
+        # v2.4.0: 发酵进度
+        from ..models.seeds import count_fermentation_inputs, get_fermentation_inputs
+        fi_count = count_fermentation_inputs(seed_id)
+        max_inputs = int(getattr(plugin.config.thought_cabinet, "fermentation_max_inputs", 20))
+        lines.append("")
+        lines.append(f"发酵中: 已收集 {fi_count}/{max_inputs} 条输入")
+        if fi_count > 0:
+            recent_inputs = get_fermentation_inputs(seed_id)
+            lines.append("最近发酵输入:")
+            for fi in recent_inputs[-3:]:  # 展示最近 3 条
+                preview = fi.message_text[:60].replace("\n", " ")
+                lines.append(f"  │ {preview}{'...' if len(fi.message_text) > 60 else ''} (关联度: {fi.relevance_score:.2f})")
+        lines.append("")
+        lines.append(f"/soul_reject {seed_id} - 取消发酵")
+
+    msg = "\n".join(lines)
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True
 
@@ -52,19 +131,17 @@ async def handle_seeds_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
 async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """批准思维种子内化（管理员）。"""
     from ..thought.seed_manager import ThoughtSeedManager
-    from ..thought.internalization_engine import InternalizationEngine
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    ok, err = check_admin_permission(plugin, kwargs, "审核思维种子")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以审核思维种子"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    allowed, mode_err = check_mutation_mode(plugin, "批准种子内化")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -72,7 +149,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         return True, msg, True
 
     # 从文本中提取种子 ID
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_approve\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_approve <种子ID>"
@@ -81,8 +158,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 
     seed_id = match.group(1)
 
-    config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": admin_user_id}
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seed = await manager.get_seed_by_id(seed_id)
 
     if not seed:
@@ -95,40 +171,49 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    engine = InternalizationEngine(plugin)
-    dedup_cfg = {
-        "enabled": bool(plugin.config.thought_cabinet.auto_dedup_enabled),
-        "threshold": float(plugin.config.thought_cabinet.auto_dedup_threshold),
-    }
-    result = await engine.internalize_seed(seed, dedup=dedup_cfg)
+    # v2.4.0: 发酵模式 — 批准后进入 fermenting 状态，不立即内化
+    fermentation_enabled = bool(getattr(plugin.config.thought_cabinet, "fermentation_enabled", False))
 
-    if result["success"]:
-        await manager.delete_seed(seed_id)
-        impact = result["spectrum_impact"]
-        impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
-        trait_id = result.get("trait_id", "")
-        merged = bool(result.get("merged", False))
-        similarity = result.get("dedup_similarity", None)
-        trait_line = f"\ntrait_id: {trait_id}" if trait_id else ""
-        if merged:
-            sim_text = ""
-            try:
-                if similarity is not None:
-                    sim_text = f" (similarity={float(similarity):.2f})"
-            except Exception:
-                sim_text = ""
-            trait_line = f"\ntrait_id: {trait_id}（已合并）{sim_text}"
+    if fermentation_enabled:
+        from ..models.seeds import mark_seed_fermenting
+        ok = mark_seed_fermenting(seed_id)
+        if ok:
+            window_h = float(getattr(plugin.config.thought_cabinet, "fermentation_window_hours", 12.0))
+            msg = (
+                f"✅ 种子 {seed_id} 已批准，进入发酵阶段\n\n"
+                f"将在 ~{window_h:.0f} 小时内持续收集相关群聊输入，\n"
+                f"到期后自动触发最终内化形成结论。\n\n"
+                f"可用 /soul_seed {seed_id} 查看发酵进度"
+            )
+            await plugin.ctx.send.text(msg, stream_id)
+            return True, msg, True
+        else:
+            msg = f"❌ 种子 {seed_id} 状态转换失败"
+            await plugin.ctx.send.text(msg, stream_id)
+            return True, msg, True
+
+    # 旧行为：命令里直接调 LLM 内化——但插件给 LLM 的超时是 120s，
+    # 宿主给命令的 RPC 超时是 60s，慢一点就会出现"命令报超时、内化其实已成功"。
+    # 现在改成：命令只认领并把操作放进队列，立刻回 operation_id，后台按预算执行。
+    from ..thought.internalization_queue import enqueue_internalization
+
+    operation_id = await enqueue_internalization(plugin, seed_id)
+    if not operation_id:
         msg = (
-            f"✅ 种子 {seed_id} 已批准内化{trait_line}\n\n"
-            f"固化观点: {result['thought'][:100]}...\n\n"
-            f"光谱影响: {impact_str or '无'}"
+            f"⏳ 种子 {seed_id} 已有进行中的内化操作（或已内化过），本次跳过。\n"
+            f"用 /soul_op 查看最近操作；若上一次进程中断，租约到期后可重试。"
         )
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
-    else:
-        msg = f"❌ 种子 {seed_id} 内化失败: {result['error']}"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+
+    msg = (
+        f"🧾 种子 {seed_id} 已进入内化队列\n"
+        f"operation_id: {operation_id}\n\n"
+        f"内化在后台执行（通常几十秒），完成后会通知你。\n"
+        f"用 /soul_op {operation_id} 查看状态。"
+    )
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
 
 
 # ===== 种子拒绝 =====
@@ -137,18 +222,17 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """拒绝并删除思维种子（管理员）。"""
     from ..thought.seed_manager import ThoughtSeedManager
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    ok, err = check_admin_permission(plugin, kwargs, "审核思维种子")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以审核思维种子"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    allowed, mode_err = check_mutation_mode(plugin, "拒绝种子")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -156,7 +240,7 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         return True, msg, True
 
     # 从文本中提取种子 ID
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_reject\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_reject <种子ID>"
@@ -165,8 +249,7 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
     seed_id = match.group(1)
 
-    config = {"max_seeds": 20, "min_trigger_intensity": 0.7, "admin_user_id": admin_user_id}
-    manager = ThoughtSeedManager(config)
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
     seed = await manager.get_seed_by_id(seed_id)
 
     if not seed:
@@ -174,14 +257,21 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    if seed.get("status") != "pending":
-        msg = f"种子 {seed_id} 不在待审核状态"
+    if seed.get("status") not in ("pending", "fermenting"):
+        msg = f"种子 {seed_id} 已审核或已内化，无法拒绝"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    await manager.delete_seed(seed_id)
+    # v2.4.0: 拒绝 fermenting 种子时清理发酵输入
+    if seed.get("status") == "fermenting":
+        from ..models.seeds import delete_fermentation_inputs
+        deleted = delete_fermentation_inputs(seed_id)
+        if deleted:
+            logger.info("清理种子 %s 的 %d 条发酵输入", seed_id, deleted)
+
+    manager.mark_seed_status(seed_id, "rejected")
     logger.info(f"管理员拒绝思维种子: {seed_id}")
-    msg = f"✅ 种子 {seed_id} 已拒绝并删除"
+    msg = f"✅ 种子 {seed_id} 已拒绝"
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True
 
@@ -191,19 +281,13 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
 async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """查看已固化的 traits（管理员，可按群过滤）。"""
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
     from ..models.ideology_model import query_crystallized_traits
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
-
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以查看 traits"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    ok, err = check_admin_permission(plugin, kwargs, "查看思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
@@ -211,7 +295,7 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         return True, msg, True
 
     # 从文本中提取可选的 stream_id 过滤条件
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_traits(?:\s+(\S+))?\s*$", str(text))
     filter_stream_id = match.group(1).strip() if match and match.group(1) else None
 
@@ -232,22 +316,27 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
     for t in traits:
         status = "enabled" if t.enabled else "disabled"
-        lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}")
+        slot_tag = f" #slot{t.cabinet_slot_no}" if t.cabinet_slot_no is not None else ""
+        scope_tag = ""
+        sid = (t.stream_id or "").strip()
+        if sid and sid != "global":
+            scope_tag = " [仅群]"
+        lines.append(f"- {t.trait_id} [{status}] stream={t.stream_id or '-'} name={t.name}{slot_tag}{scope_tag}")
         try:
             from ..utils.trait_tags import parse_tags_json
 
             tags = parse_tags_json(t.tags_json)
-        except Exception:
+        except (ValueError, TypeError):
             tags = []
         try:
-            from ..utils.trait_evidence import parse_evidence_json
+            from ..utils.trait_evidence import parse_trait_evidence_json
 
-            evidence_count = len(parse_evidence_json(t.evidence_json))
-        except Exception:
+            evidence_count = len(parse_trait_evidence_json(t.evidence_json))
+        except (ValueError, TypeError):
             evidence_count = 0
         try:
             confidence = float(t.confidence or 0) / 100.0
-        except Exception:
+        except (TypeError, ValueError):
             confidence = 0.0
         if tags:
             lines.append(f"  tags: {', '.join(tags)}")
@@ -269,32 +358,175 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     return True, msg, True
 
 
-# ===== Trait 设置 Tags =====
+# ===== Trait 详情 =====
 
 
-async def handle_trait_set_tags(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
-    """设置指定 trait 的 tags（管理员，逗号或空格分隔）。"""
-    from ..utils.spectrum_utils import match_user
-    from ..models.ideology_model import get_crystallized_trait_by_id
-    from ..utils.trait_tags import dumps_tags_json, parse_tags_json
+async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """查看单个 trait 完整详情（管理员）。"""
+    from ..utils.spectrum_utils import check_admin_permission
+    from ..models.ideology_model import get_crystallized_trait_by_id, list_thought_edges_for_trait
+    from ..utils.trait_tags import parse_tags_json
+    from ..utils.trait_evidence import parse_trait_evidence_json
+    from ..worldview.constants import LAYER_LABEL_ZH, LIFECYCLE_LABEL_ZH
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
-
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以设置 trait tags"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    ok, err = check_admin_permission(plugin, kwargs, "查看思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
+    match = re.match(r"^/soul_trait\s+(\w+)\s*$", str(text))
+    if not match:
+        msg = "用法: /soul_trait <trait_id>"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_id = match.group(1)
+    trait = get_crystallized_trait_by_id(trait_id)
+    if not trait:
+        msg = f"未找到 trait {trait_id}"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    import json as _json
+
+    # ── 组装 trait 详情数据契约（供卡片渲染 / 文本降级共用） ──
+    layer_label = LAYER_LABEL_ZH.get(trait.ideology_layer, trait.ideology_layer)
+    lifecycle_label = LIFECYCLE_LABEL_ZH.get(trait.lifecycle_state, trait.lifecycle_state)
+
+    # 光谱影响：仅保留非 0 项
+    try:
+        impact_raw = _json.loads(trait.spectrum_impact_json or "{}")
+    except (ValueError, TypeError):
+        impact_raw = {}
+    spectrum_impact = {k: int(v) for k, v in impact_raw.items() if isinstance(v, (int, float)) and v != 0} if isinstance(impact_raw, dict) else {}
+
+    # 证据：每条取 event/reasoning，去换行，截断 100 字
+    evidence_list: list[str] = []
+    for ev in parse_trait_evidence_json(trait.evidence_json or "[]")[:5]:
+        if isinstance(ev, dict):
+            ev_text = ev.get("event", "") or ev.get("reasoning", "") or str(ev)
+        else:
+            ev_text = str(ev)
+        ev_text = ev_text.replace("\n", " ").strip()
+        if len(ev_text) > 100:
+            ev_text = ev_text[:100] + "..."
+        if ev_text:
+            evidence_list.append(ev_text)
+
+    # 思想关联边：映射全部 5 种关系类型（含矛盾/弱化/修正，此前文本版遗漏）
+    edge_label_map = {
+        "derived_from": "源自种子",
+        "supports": "支撑",
+        "contradicted_by": "矛盾于",
+        "weakened_by": "弱化于",
+        "revised_by": "修正自",
+    }
+    edges_list: list[dict] = []
+    for e in list_thought_edges_for_trait(trait_id, limit=6):
+        label = edge_label_map.get(e.relation_type)
+        if not label:
+            continue  # 未知关系类型跳过，不崩
+        if e.relation_type == "derived_from":
+            target = (e.source_ref or "")[:12]
+        else:
+            target = (e.to_trait_id or "")[:12]
+        edges_list.append({"relation_type": e.relation_type, "label": label, "target": target})
+
+    stream_raw = (trait.stream_id or "").strip()
+    scope_label = "全局"
+    if stream_raw and stream_raw != "global":
+        scope_label = f"仅群:{stream_raw[:12]}"
+
+    data = {
+        "trait_id": trait.trait_id,
+        "name": trait.name,
+        "enabled": bool(trait.enabled),
+        "ideology_layer": trait.ideology_layer,
+        "layer_label": layer_label,
+        "lifecycle_state": trait.lifecycle_state,
+        "lifecycle_label": lifecycle_label,
+        "confidence": float(trait.confidence or 0) / 100.0,
+        "stream_id": trait.stream_id,
+        "scope_label": scope_label,
+        "created_at": trait.created_at.strftime("%Y-%m-%d %H:%M:%S") if trait.created_at else None,
+        "tags": parse_tags_json(trait.tags_json or "[]"),
+        "question": trait.question or "",
+        "thought": trait.thought or "",
+        "spectrum_impact": spectrum_impact,
+        "evidence": evidence_list,
+        "edges": edges_list,
+        "cabinet_slot_no": trait.cabinet_slot_no,
+    }
+
+    # ── 出图：card_enabled 且渲染成功则发图，否则降级文本 ──
+    from .dashboard_renderer import DashboardRenderer, build_trait_text
+
+    if plugin.config.render.card_enabled:
+        renderer = DashboardRenderer(
+            plugin.ctx,
+            plugin.config.render.viewport_width,
+            plugin.config.render.device_scale_factor,
+            plugin.config.render.render_timeout_ms,
+        )
+        image_base64, error_reason = await renderer.render_trait(data)
+        if image_base64:
+            try:
+                await plugin.ctx.send.image(image_base64, stream_id)
+                return True, "已生成 trait 详情卡片", True
+            except (OSError, RuntimeError) as exc:
+                logger.exception("发送 trait 详情卡片图片失败: %s", exc)
+                fallback_text = (
+                    f"卡片渲染失败，以下为文本状态：\n{build_trait_text(data)}\n"
+                    "可尝试 /soul_status 查看文本状态"
+                )
+                await plugin.ctx.send.text(fallback_text, stream_id)
+                return True, "trait 详情(文本)", True
+        # 渲染返回空串——降级文本
+        reason = error_reason or "卡片渲染失败"
+        fallback_text = (
+            f"{reason}，以下为文本状态：\n{build_trait_text(data)}\n"
+            "可尝试 /soul_status 查看文本状态"
+        )
+        await plugin.ctx.send.text(fallback_text, stream_id)
+        return True, "trait 详情(文本)", True
+
+    # 配置关闭卡片——纯文本
+    text_out = build_trait_text(data)
+    await plugin.ctx.send.text(text_out, stream_id)
+    return True, "trait 详情(文本)", True
+
+
+# ===== Trait 设置 Tags =====
+
+
+async def handle_trait_set_tags(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """设置指定 trait 的 tags（管理员，逗号或空格分隔）。"""
+    from ..utils.spectrum_utils import check_admin_permission
+    from ..models.ideology_model import get_crystallized_trait_by_id
+    from ..utils.trait_tags import dumps_tags_json, parse_tags_json
+
+    ok, err = check_admin_permission(plugin, kwargs, "修改思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "修改 trait 标签")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_set_tags\s+(\w+)\s+(.+?)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_set_tags <trait_id> <tag1 tag2 / tag1,tag2>"
@@ -325,28 +557,27 @@ async def handle_trait_set_tags(plugin: Any, stream_id: str, **kwargs: Any) -> t
 
 async def handle_trait_merge(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """合并两个 trait（把 source 合并进 target，并软删除 source）。"""
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
     from ..models.ideology_model import get_crystallized_trait_by_id
     from ..utils.trait_tags import dumps_tags_json, parse_tags_json
-    from ..utils.trait_evidence import dumps_evidence_json, parse_evidence_json
+    from ..utils.trait_evidence import dumps_trait_evidence_json, parse_trait_evidence_json
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    ok, err = check_admin_permission(plugin, kwargs, "合并思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以合并 trait"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    allowed, mode_err = check_mutation_mode(plugin, "合并 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_merge\s+(\w+)\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_merge <source_trait_id> <target_trait_id>"
@@ -376,9 +607,9 @@ async def handle_trait_merge(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
     merged_tags = list(dict.fromkeys([*target_tags, *source_tags]))
     target.tags_json = dumps_tags_json(merged_tags)
 
-    target_evidence = parse_evidence_json(target.evidence_json)
-    source_evidence = parse_evidence_json(source.evidence_json)
-    target.evidence_json = dumps_evidence_json([*target_evidence, *source_evidence])
+    target_evidence = parse_trait_evidence_json(target.evidence_json)
+    source_evidence = parse_trait_evidence_json(source.evidence_json)
+    target.evidence_json = dumps_trait_evidence_json([*target_evidence, *source_evidence])
 
     target.confidence = max(int(target.confidence or 0), int(source.confidence or 0))
     target.save()
@@ -397,26 +628,25 @@ async def handle_trait_merge(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 
 async def handle_trait_disable(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """禁用指定 trait（管理员）。"""
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
     from ..models.ideology_model import get_crystallized_trait_by_id
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    ok, err = check_admin_permission(plugin, kwargs, "禁用思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以禁用 trait"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    allowed, mode_err = check_mutation_mode(plugin, "禁用 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_disable\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_disable <trait_id>"
@@ -443,26 +673,25 @@ async def handle_trait_disable(plugin: Any, stream_id: str, **kwargs: Any) -> tu
 
 async def handle_trait_enable(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """启用指定 trait（管理员）。"""
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
     from ..models.ideology_model import get_crystallized_trait_by_id
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    ok, err = check_admin_permission(plugin, kwargs, "启用思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以启用 trait"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    allowed, mode_err = check_mutation_mode(plugin, "启用 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_enable\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_enable <trait_id>"
@@ -489,26 +718,25 @@ async def handle_trait_enable(plugin: Any, stream_id: str, **kwargs: Any) -> tup
 
 async def handle_trait_delete(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """删除指定 trait（管理员，软删除）。"""
-    from ..utils.spectrum_utils import match_user
+    from ..utils.spectrum_utils import check_admin_permission
     from ..models.ideology_model import get_crystallized_trait_by_id
 
-    admin_user_id = plugin.config.admin.admin_user_id
-    message = kwargs.get("message") or {}
-    platform = message.get("platform", "")
-    user_info = message.get("user_info") or {}
-    user_id = str(user_info.get("user_id", ""))
+    ok, err = check_admin_permission(plugin, kwargs, "删除思维特质")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
 
-    if not match_user(platform, user_id, admin_user_id):
-        msg = "只有管理员可以删除 trait"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    allowed, mode_err = check_mutation_mode(plugin, "删除 trait")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
 
     if not plugin.config.thought_cabinet.enabled:
         msg = "思维阁系统未启用"
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_delete\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_delete <trait_id>"
@@ -527,5 +755,245 @@ async def handle_trait_delete(plugin: Any, stream_id: str, **kwargs: Any) -> tup
     trait.save()
 
     msg = f"✅ trait {trait_id} 已删除"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== 批量拒绝种子 =====
+
+
+async def handle_seed_reject_all(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """批量拒绝所有待审核种子（管理员）。
+
+    只提供批量拒绝，不提供批量批准——批准会触发大量 LLM 内化调用，
+    应逐个人工判断。
+    """
+    from ..thought.seed_manager import ThoughtSeedManager
+    from ..utils.spectrum_utils import check_admin_permission
+
+    ok, err = check_admin_permission(plugin, kwargs, "审核思维种子")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "批量拒绝种子")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    manager = ThoughtSeedManager.from_plugin_config(plugin)
+    seeds = await manager.get_pending_seeds()
+
+    if not seeds:
+        msg = "当前没有待审核的思维种子"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    count = 0
+    for seed in seeds:
+        if manager.mark_seed_status(seed["seed_id"], "rejected"):
+            count += 1
+
+    logger.info(f"管理员批量拒绝 {count} 个思维种子")
+    msg = f"✅ 已批量拒绝 {count} 个待审核种子"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== Trait 槽位管理 =====
+
+
+async def handle_trait_slot(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """设置/清空 trait 思维阁槽位 1-12（管理员）。
+
+    用法：
+        /soul_slot <trait_id> <1-12>   — 占槽
+        /soul_slot <trait_id> clear    — 清空槽
+        /soul_slot                      — 显示用法
+    """
+    from ..utils.spectrum_utils import check_admin_permission
+    from ..models.traits import get_crystallized_trait_by_id, set_trait_slot
+
+    ok, err = check_admin_permission(plugin, kwargs, "管理思维阁槽位")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "修改槽位")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    text = extract_command_text(kwargs)
+    match = re.match(r"^/soul_slot\s+([\w-]{8,})\s+(\d+|clear)\s*$", str(text))
+    if not match:
+        msg = (
+            "用法:\n"
+            "  /soul_slot <trait_id> <1-12>   — 将 trait 放入指定思维阁槽位\n"
+            "  /soul_slot <trait_id> clear    — 清空该 trait 的槽位\n\n"
+            "槽位 1-12，同槽换位会自动释放原占槽 trait。"
+        )
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_id = match.group(1)
+    slot_arg = match.group(2)
+
+    # 检查 trait 存在
+    trait = get_crystallized_trait_by_id(trait_id)
+    if not trait:
+        msg = f"未找到 trait {trait_id}"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_name = trait.name or trait_id
+
+    if slot_arg == "clear":
+        ok = set_trait_slot(trait_id, None)
+        if ok:
+            msg = f"✅ {trait_name}({trait_id}) 槽位已清空"
+        else:
+            msg = f"❌ 清空槽位失败"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    # slot_arg is a number string
+    try:
+        slot_no = int(slot_arg)
+    except (ValueError, TypeError):
+        msg = f"❌ 无效槽位号: {slot_arg}，允许 1-12 或 clear"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    if slot_no < 1 or slot_no > 12:
+        msg = f"❌ 槽位号 {slot_no} 超出范围，允许 1-12"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    ok = set_trait_slot(trait_id, slot_no)
+    if ok:
+        msg = f"✅ {trait_name}({trait_id}) 已放入槽位 {slot_no}"
+    else:
+        msg = f"❌ 设置槽位失败（trait 不存在或已删除）"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== Trait 全局化 =====
+
+
+async def handle_promote_global(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """将群锁 trait 提升为全局作用域（管理员）。"""
+    from ..utils.spectrum_utils import check_admin_permission
+    from ..models.traits import get_crystallized_trait_by_id, promote_trait_to_global
+
+    ok, err = check_admin_permission(plugin, kwargs, "提升 trait 作用域")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    allowed, mode_err = check_mutation_mode(plugin, "将 trait 提升为全局")
+    if not allowed:
+        await plugin.ctx.send.text(mode_err, stream_id)
+        return True, mode_err, True
+
+    if not plugin.config.thought_cabinet.enabled:
+        msg = "思维阁系统未启用"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    text = extract_command_text(kwargs)
+    match = re.match(r"^/soul_promote_global\s+([\w-]{8,})\s*$", str(text))
+    if not match:
+        msg = "用法: /soul_promote_global <trait_id>"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    trait_id = match.group(1)
+    trait = get_crystallized_trait_by_id(trait_id)
+    if not trait:
+        msg = f"未找到 trait {trait_id}"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    stream_raw = (trait.stream_id or "").strip()
+    if not stream_raw or stream_raw == "global":
+        msg = f"trait {trait_id} 已是全局作用域，无需提升"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    ok = promote_trait_to_global(trait_id)
+    if ok:
+        msg = f"✅ trait {trait_id}（{trait.name}）已提升为全局作用域\n来源群 {stream_raw} 已记录为 origin_stream_id"
+    else:
+        msg = f"❌ 提升失败（trait 不存在或已删除）"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== 内化操作状态查询 =====
+
+
+async def handle_op_status(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """查看内化队列/操作状态（管理员，只读）。
+
+    命令侧只入队并立即返回，所以需要一个入口回答"我批准的那颗种子到底怎么样了"。
+    """
+    from ..models.operations import get_seed_operation, list_recent_operations
+    from ..utils.spectrum_utils import check_admin_permission, extract_command_text
+
+    ok, err = check_admin_permission(plugin, kwargs, "查看内化操作")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    text = extract_command_text(kwargs)
+    tokens = text.split()
+    op_id = tokens[1] if len(tokens) > 1 else ""
+
+    if op_id:
+        record = get_seed_operation(op_id)
+        if record is None:
+            msg = f"未找到操作 {op_id}"
+            await plugin.ctx.send.text(msg, stream_id)
+            return True, msg, True
+        lines = [
+            f"操作 {record.operation_id}",
+            f"种子: {record.seed_id}",
+            f"状态: {record.status}",
+            f"尝试: {record.attempt}",
+        ]
+        if record.lease_expires_at:
+            lines.append(f"租约到期: {record.lease_expires_at}")
+        if record.result_json:
+            lines.append(f"结果: {record.result_json[:200]}")
+        if record.error:
+            lines.append(f"错误: {record.error[:200]}")
+        msg = "\n".join(lines)
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    records = list_recent_operations(limit=10)
+    if not records:
+        msg = "最近没有内化操作记录"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    lines = ["最近内化操作（新→旧）："]
+    for r in records:
+        lines.append(f"• {r.operation_id}  {r.seed_id}  {r.status}  尝试{r.attempt}")
+    lines.append("")
+    lines.append("用 /soul_op <operation_id> 查看单条详情。")
+    msg = "\n".join(lines)
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True

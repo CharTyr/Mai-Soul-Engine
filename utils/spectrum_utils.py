@@ -1,10 +1,9 @@
+import re
+from typing import Any
+
+
 def update_spectrum_value(current: int, delta: int) -> int:
-    new_value = current + delta
-    if new_value > 100:
-        new_value = 100 - (new_value - 100)
-    elif new_value < 0:
-        new_value = 0 - new_value
-    return max(0, min(100, new_value))
+    return max(0, min(100, current + delta))
 
 
 def format_spectrum_display(spectrum: dict) -> str:
@@ -13,10 +12,10 @@ def format_spectrum_display(spectrum: dict) -> str:
         return f"{'━' * pos}●{'━' * (10 - pos)}"
 
     lines = [
-        f"经济观: 公平 {bar(spectrum.get('economic', 50))} 效率 ({spectrum.get('economic', 50)})",
-        f"社会观: 自由 {bar(spectrum.get('social', 50))} 秩序 ({spectrum.get('social', 50)})",
-        f"文化观: 开放 {bar(spectrum.get('diplomatic', 50))} 本土 ({spectrum.get('diplomatic', 50)})",
-        f"变革观: 变化 {bar(spectrum.get('progressive', 50))} 传统 ({spectrum.get('progressive', 50)})",
+        f"真诚度: 真诚直率 {bar(spectrum.get('sincerity', 50))} 重视场面 ({spectrum.get('sincerity', 50)})",
+        f"投入度: 克制怕消耗 {bar(spectrum.get('engagement', 50))} 热情投入 ({spectrum.get('engagement', 50)})",
+        f"亲密度: 保持距离 {bar(spectrum.get('closeness', 50))} 容易亲近 ({spectrum.get('closeness', 50)})",
+        f"直率度: 含蓄绕弯 {bar(spectrum.get('directness', 50))} 有话直说 ({spectrum.get('directness', 50)})",
     ]
     return "\n".join(lines)
 
@@ -65,6 +64,72 @@ def match_user(platform: str, user_id: str, config_id: str) -> bool:
     if cfg_platform and cfg_platform != platform:
         return False
     return cfg_user_id == user_id
+
+
+def extract_command_text(kwargs: dict | None) -> str:
+    """从 SDK2 Command kwargs 提取命令原始文本。
+
+    宿主 ``invoke_args``（``component_query.py:522``）把命令文本放在**顶层**
+    ``text``（= ``message.processed_plain_text``）；``message`` 字典里
+    **没有** ``text`` 键（见 ``PluginMessageUtils._session_message_to_dict``）。
+    旧写法 ``(kwargs["message"]).get("text")`` 恒为空，确认类命令永远等不到确认。
+    """
+    raw = kwargs or {}
+    if not isinstance(raw, dict):
+        return ""
+    text = raw.get("text")
+    if not isinstance(text, str) or not text.strip():
+        message = raw.get("message")
+        if isinstance(message, dict):
+            fallback = message.get("processed_plain_text")
+            if isinstance(fallback, str):
+                text = fallback
+    return text.strip() if isinstance(text, str) else ""
+
+
+def check_mutation_mode(plugin: Any, action: str) -> tuple[bool, str]:
+    """运行模式闸门：只有 apply 模式允许改写正式人格。
+
+    observe 模式的意义是「只观察、不改动」，所以接纳/槽位/生命周期/提升这类
+    会改变人格的命令必须被拦下，否则观察模式只是名义上的。
+    """
+    from .runtime_mode import resolve_runtime_mode
+
+    mode = resolve_runtime_mode(getattr(plugin, "config", None))
+    if mode.acceptance_allowed:
+        return True, ""
+    return False, (
+        f"⚠️ 当前运行模式为 {mode.mode}，不允许{action}（不修改已接纳人格）。\n"
+        f'要真正生效，请把配置 [plugin].mode 设为 "apply" 后重试。'
+    )
+
+
+def extract_command_actor(kwargs: dict | None) -> tuple[str, str]:
+    """从 SDK2 Command kwargs 解析 platform / user_id。
+
+    宿主 invoke_args 同时提供顶层 ``platform`` / ``user_id``，以及
+    ``message={platform, message_info:{user_info:{user_id}}}``。
+    旧写法只读 ``message.user_info`` 在 SDK2 下永远为空，导致管理员鉴权全失败。
+    """
+    raw = kwargs or {}
+    message = raw.get("message") or {}
+    if not isinstance(message, dict):
+        message = {}
+
+    platform = str(message.get("platform") or raw.get("platform") or "").strip()
+
+    user_info = message.get("user_info")
+    if not isinstance(user_info, dict) or not str(user_info.get("user_id") or "").strip():
+        message_info = message.get("message_info") or {}
+        if isinstance(message_info, dict):
+            user_info = message_info.get("user_info") or {}
+        else:
+            user_info = {}
+    if not isinstance(user_info, dict):
+        user_info = {}
+
+    user_id = str(user_info.get("user_id") or raw.get("user_id") or "").strip()
+    return platform, user_id
 
 
 def match_chat(platform: str, chat_id: str, chat_type: str, config_id: str) -> bool:
@@ -119,6 +184,70 @@ def is_user_monitored(platform: str, user_id: str, config: dict) -> bool:
     return False
 
 
+def check_admin_permission(plugin: Any, kwargs: dict | None, action_desc: str = "执行此操作") -> tuple[bool, str]:
+    """统一管理员鉴权。返回 (passed, error_msg)。
+
+    passed=False 时 error_msg 是给用户的拒绝消息；
+    passed=True 时 error_msg 为空串。
+    用法：
+        ok, err = check_admin_permission(plugin, kwargs, "查看思维种子")
+        if not ok:
+            await plugin.ctx.send.text(err, stream_id)
+            return True, err, True
+    """
+    admin_user_id = plugin.config.admin.admin_user_id
+    actor = extract_command_actor(kwargs)
+    if not match_user(actor[0], actor[1], admin_user_id):
+        return False, f"只有管理员可以{action_desc}"
+    return True, ""
+
+
+def is_bot_self_message(platform: str, user_id: str, bot_self_ids: list[str]) -> bool:
+    """判断某条消息是否来自 bot 自身（演化分析时排除自消息，防自指泄漏）。
+
+    bot_self_ids 由宿主 ``bot.qq_account`` 解析，格式同 excluded_users（平台:ID）。
+    空列表 = 未配置，返回 False（不排除，由 excluded_users 兜底）。
+    """
+    for bid in bot_self_ids or []:
+        if match_user(platform, user_id, bid):
+            return True
+    return False
+
+
+def filter_messages_for_evolution(messages: list[dict], monitor_config: dict) -> list[dict]:
+    """过滤群消息的发言者，用于演化分析。
+
+    过滤顺序：bot 自身短路排除 → is_user_monitored（excluded_users / monitored_users）。
+    bot 自身检查**优先于**白名单，避免 monitored_users 非空时反而把 bot 放进分析池。
+    命令消息（以 ``/`` 开头）的过滤由调用方在调用前完成，本函数只管发言者。
+    """
+    bot_self_ids = monitor_config.get("bot_self_id", [])
+    filtered: list[dict] = []
+    for m in messages:
+        user_info = m.get("user_info", {}) if isinstance(m, dict) else {}
+        msg_platform = str(user_info.get("platform", "") or "")
+        msg_user_id = str(user_info.get("user_id", "") or "")
+        if is_bot_self_message(msg_platform, msg_user_id, bot_self_ids):
+            continue
+        if not is_user_monitored(msg_platform, msg_user_id, monitor_config):
+            continue
+        filtered.append(m)
+    return filtered
+
+
+# ─── 命令反馈 helper ────────────────────────────────────────────────
+
+
+def _ok(msg: str) -> tuple[bool, str, bool]:
+    """命令成功返回。"""
+    return True, msg, True
+
+
+def _err(msg: str) -> tuple[bool, str, bool]:
+    """命令错误返回（前缀 ❌）。"""
+    return True, f"❌ {msg}", True
+
+
 # EMA平滑
 def ema_update(current: float, new_value: float, alpha: float = 0.3) -> float:
     """指数移动平均，alpha越大新值权重越高"""
@@ -150,9 +279,9 @@ def apply_resistance(delta: int, last_dir: int, resistance: float = 0.5) -> tupl
 
 
 # 隐私脱敏
-import re
-
-
+# 覆盖的 PII 类型：URL、Email、@提及、手机号（含+86）、身份证号（18位）、
+# QQ群号（带关键词前缀）、≥7位连续数字串（覆盖无前缀 QQ 号/手机号）。
+# 5-6位纯数字无前缀时不匹配，避免误伤年份/年龄/计数等正常数字。
 def sanitize_text(text: str, max_chars: int = 500) -> str:
     """过滤敏感信息"""
     s = (text or "").replace("\n", " ").replace("\r", " ").strip()

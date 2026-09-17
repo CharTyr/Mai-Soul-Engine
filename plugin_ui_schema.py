@@ -2,6 +2,8 @@
 
 maibot_sdk 生成的 Schema 中，Dashboard 只展示 ``hint`` 与 ``label``，
 不会渲染 ``description``。请通过 ``json_schema_extra`` 填写说明。
+
+i18n 状态：仅 zh-CN，所有用户可见文本硬编码中文。见 _locales/README.md。
 """
 
 from __future__ import annotations
@@ -9,8 +11,9 @@ from __future__ import annotations
 from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
+from pydantic import model_validator
 
-CONFIG_VERSION = "2.0.0"
+CONFIG_VERSION = "2.5.0"
 
 
 def _ui(
@@ -65,6 +68,16 @@ class PluginSectionConfig(PluginConfigBase):
             "须与插件默认一致；升级插件后由 Runner 按版本合并配置，请勿随意修改。",
         ),
     )
+    mode: str = Field(
+        default="off",
+        description="运行模式：off（关闭）/ observe（观察）/ apply（应用）",
+        json_schema_extra=_ui(
+            "运行模式",
+            "off：不学习不注入；observe：只学习与生成候选，不改人格、不影响回复；"
+            "apply：真正注入回复并允许改写人格。"
+            "未显式设置时按最小权限处理（旧 enabled=true 只会映射为 observe）。",
+        ),
+    )
 
 
 class AdminConfig(PluginConfigBase):
@@ -81,6 +94,14 @@ class AdminConfig(PluginConfigBase):
             "管理员用户 ID",
             "私聊执行 /soul_setup、/soul_reset 等管理命令的账号。格式：平台:QQ号，例如 qq:12345678。",
             placeholder="qq:12345678",
+        ),
+    )
+    audit_enabled: bool = Field(
+        default=True,
+        description="审计日志开关",
+        json_schema_extra=_ui(
+            "审计日志",
+            "关闭后不写 audit.jsonl",
         ),
     )
 
@@ -136,6 +157,13 @@ class EvolutionConfig(PluginConfigBase):
         description="单条消息截断",
         json_schema_extra=_ui("单条消息最大字符", "过长消息截断，控制 LLM 成本与噪声。"),
     )
+    max_concurrent_groups: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="多群演化分析的最大并发数",
+        json_schema_extra=_ui("最大并发群数", "多群演化并行分析的上限，防 LLM 限流"),
+    )
 
 
 class MonitorConfig(PluginConfigBase):
@@ -152,6 +180,16 @@ class MonitorConfig(PluginConfigBase):
             "监控的群",
             "仅这些群会参与光谱演化。格式：qq:群号:group，每行一项。留空表示不分析任何群。",
             placeholder="qq:12345678:group",
+        ),
+    )
+    platforms: list[str] = Field(
+        default_factory=lambda: ["qq"],
+        description="平台列表",
+        json_schema_extra=_ui(
+            "平台列表",
+            "机器人所在平台（宿主默认 qq）。插件按此列表去宿主流列表探测会话归属；"
+            "探测不到则为未知，不会按 session_id 猜。多平台时逐项列出。",
+            placeholder="qq",
         ),
     )
     excluded_groups: list[str] = Field(
@@ -174,7 +212,7 @@ class MonitorConfig(PluginConfigBase):
         description="排除发言人",
         json_schema_extra=_ui(
             "群内排除的发言人（可选）",
-            "这些 QQ 在监控群里的发言不参与演化（如机器人、小号）。与私聊无关。",
+            "这些账号在监控群里的发言不参与演化。bot 自身账号由宿主 bot.qq_account 自动排除；这里只填写其他机器人或不应参与塑形的账号。与私聊无关。",
             placeholder="qq:12345678",
             advanced=True,
         ),
@@ -224,6 +262,35 @@ class InjectionConfig(PluginConfigBase):
         default=True,
         description="私聊注入",
         json_schema_extra=_ui("私聊注入", "是否在私聊回复前也注入光谱提示。"),
+    )
+    prompt_token_budget: int = Field(
+        default=800,
+        description="Planner 注入预算（估算 token）",
+        json_schema_extra=_ui(
+            "Planner 注入预算",
+            "估算 token 上限。插件侧拿不到宿主分词器，按保守规则估算"
+            "（中文约 1 token/字）；超预算从低优先级条目开始丢弃并记日志。",
+            placeholder="800",
+        ),
+    )
+    replyer_token_budget: int = Field(
+        default=400,
+        description="Replyer 注入预算（估算 token）",
+        json_schema_extra=_ui(
+            "Replyer 注入预算",
+            "Replyer 只收本次相关观点与表达倾向（不含分层摘要/图谱/自评），"
+            "因此预算通常小于 Planner。",
+            placeholder="400",
+        ),
+    )
+    replyer_injection_enabled: bool = Field(
+        default=True,
+        description="Replyer 侧分用途注入",
+        json_schema_extra=_ui(
+            "Replyer 侧注入",
+            "开启后 replyer 收到「观点 + 表达倾向」视图（与 planner 的分层/立场视图"
+            "分开，禁止同一份完整动态层塞两遍）。",
+        ),
     )
     max_traits: int = Field(
         default=3,
@@ -287,6 +354,112 @@ class ThoughtCabinetConfig(PluginConfigBase):
         description="去重阈值",
         json_schema_extra=_ui("自动去重相似度阈值", "0–1，越高越保守、越少自动合并。", step=0.02),
     )
+    internalization_check_interval_seconds: int = Field(
+        default=15,
+        description="内化队列消费间隔（秒）",
+        json_schema_extra=_ui(
+            "内化队列间隔（秒）",
+            "后台执行排队内化的间隔。命令侧只入队并立即返回，实际内化在这里跑，"
+            "避免命令 RPC 超时（60s）与 LLM 调用（最长 120s）互相打架。",
+        ),
+    )
+    seed_ttl_hours: float = Field(
+        default=168.0,
+        ge=0.0,
+        description="种子过期时间",
+        json_schema_extra=_ui("种子过期时间（小时）", "超过此时间的 pending 种子自动标记 expired，0=永不过期。", step=24.0),
+    )
+    reviewed_keep_count: int = Field(
+        default=200,
+        ge=0,
+        description="已审核种子保留数",
+        json_schema_extra=_ui("已审核种子保留数", "approved/rejected/expired 种子的最大保留条数，超出删最旧的。"),
+    )
+    trait_ttl_days: int = Field(
+        default=90,
+        ge=0,
+        description="trait 过期天数",
+        json_schema_extra=_ui("trait 过期天数", "长期未被强化的 active trait 超过此天数后自动 expired 并停止注入，0=永不过期。", step=10),
+    )
+    seed_dedup_threshold: float = Field(
+        default=0.82,
+        ge=0.0,
+        le=1.0,
+        description="种子去重阈值",
+        json_schema_extra=_ui("种子去重相似度阈值", "0–1，新种子与已有待审种子相似度超过此值则跳过，0=不去重。", step=0.02),
+    )
+    admin_notification_cooldown_minutes: int = Field(
+        default=30,
+        ge=0,
+        description="通知冷却",
+        json_schema_extra=_ui("聚合通知冷却（分钟）", "两次聚合种子通知的最小间隔，0=不冷却。", step=5),
+    )
+    max_internalize_delta: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="内化最大光谱变化",
+        json_schema_extra=_ui("内化单轴最大变化值", "即时内化时单轴光谱最多变化多少，默认±10。值越大内化权重越高。", step=1),
+    )
+    # ─── 发酵（v2.4.0 新增）───
+    fermentation_enabled: bool = Field(
+        default=False,
+        description="启用发酵",
+        json_schema_extra=_ui("启用种子发酵", "批准后不立即内化，持续收集相关群聊输入，逐步形成结论。关闭则批准后立即内化（旧行为）。"),
+    )
+    fermentation_window_hours: float = Field(
+        default=12.0,
+        ge=1.0,
+        le=168.0,
+        description="发酵窗口",
+        json_schema_extra=_ui("发酵窗口（小时）", "种子批准后持续收集群聊输入的时间，到期后触发最终内化。", step=1.0),
+    )
+    fermentation_check_interval_minutes: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=180.0,
+        description="发酵检查间隔",
+        json_schema_extra=_ui("发酵检查间隔（分钟）", "多久检查一次发酵中种子是否有新的相关群聊输入。", step=5.0),
+    )
+    fermentation_relevance_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="关联度阈值",
+        json_schema_extra=_ui("关联度阈值", "群聊消息与种子关联度超过此值才收录为发酵输入，0=全部收录。", step=0.05),
+    )
+    fermentation_max_inputs: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="最大发酵输入数",
+        json_schema_extra=_ui("最大发酵输入数", "单种子最多收集多少条发酵输入，超出后停止收集。"),
+    )
+    fermentation_min_inputs: int = Field(
+        default=3,
+        ge=0,
+        description="最小发酵输入数",
+        json_schema_extra=_ui("最小发酵输入数", "发酵窗口到期时若输入不足此数，自动延长窗口。0=关闭最少证据门槛（到期将直接内化，等同弱化发酵，不推荐）。"),
+    )
+    fermentation_max_extensions: int = Field(
+        default=2,
+        ge=0,
+        description="最大延长次数",
+        json_schema_extra=_ui("最大延长次数", "输入不足时最多延长几次发酵窗口，每次延长一个完整窗口。"),
+    )
+    fermented_max_internalize_delta: int = Field(
+        default=15,
+        ge=1,
+        le=25,
+        description="发酵后内化最大光谱变化",
+        json_schema_extra=_ui("发酵后单轴最大变化值", "经过发酵的种子内化时单轴光谱最多变化多少，比即时内化更大。", step=1),
+    )
+    seed_daily_cap_per_group: int = Field(
+        default=1,
+        ge=0,
+        description="每群每天种子上限",
+        json_schema_extra=_ui("每群每天种子上限", "限制每天每个群最多产生多少个种子，0=不限制。"),
+    )
 
 
 class ApiConfig(PluginConfigBase):
@@ -297,7 +470,7 @@ class ApiConfig(PluginConfigBase):
     __ui_order__ = 7
 
     enabled: bool = Field(
-        default=True,
+        default=False,
         description="启用 API",
         json_schema_extra=_ui("启用 Soul @API", "关闭后 soul.* 接口返回未启用；不影响命令与注入。"),
     )
@@ -397,6 +570,13 @@ class NotionConfig(PluginConfigBase):
         description="富文本长度",
         json_schema_extra=_ui("写入 Notion 的文本最大长度", "防止超长块导致 API 失败。"),
     )
+    http_timeout_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="HTTP 超时",
+        json_schema_extra=_ui("HTTP 请求超时（秒）", "Notion API 请求超时时间，含重试等待。最小 5，最大 120。", advanced=True),
+    )
     property_title: str = Field(default="Name", json_schema_extra=_ui("Traits：标题字段名", "Notion 属性名映射，与库结构一致即可。", advanced=True))
     property_trait_id: str = Field(default="TraitId", json_schema_extra=_ui("Traits：TraitId 字段名", "高级：属性名映射。", advanced=True))
     property_tags: str = Field(default="Tags", json_schema_extra=_ui("Traits：Tags 字段名", "高级：属性名映射。", advanced=True))
@@ -409,14 +589,220 @@ class NotionConfig(PluginConfigBase):
     property_updated_at: str = Field(default="UpdatedAt", json_schema_extra=_ui("Traits：UpdatedAt 字段名", "高级：属性名映射。", advanced=True))
     spectrum_property_title: str = Field(default="Name", json_schema_extra=_ui("光谱：标题字段名", "高级：属性名映射。", advanced=True))
     spectrum_property_scope_id: str = Field(default="ScopeId", json_schema_extra=_ui("光谱：ScopeId 字段名", "高级：属性名映射。", advanced=True))
-    spectrum_property_economic: str = Field(default="Economic", json_schema_extra=_ui("光谱：Economic 字段名", "高级：属性名映射。", advanced=True))
-    spectrum_property_social: str = Field(default="Social", json_schema_extra=_ui("光谱：Social 字段名", "高级：属性名映射。", advanced=True))
-    spectrum_property_diplomatic: str = Field(default="Diplomatic", json_schema_extra=_ui("光谱：Diplomatic 字段名", "高级：属性名映射。", advanced=True))
-    spectrum_property_progressive: str = Field(default="Progressive", json_schema_extra=_ui("光谱：Progressive 字段名", "高级：属性名映射。", advanced=True))
+    spectrum_property_economic: str = Field(default="Sincerity", json_schema_extra=_ui("光谱：Sincerity 字段名", "高级：Notion 属性名映射（真诚度）。", advanced=True))
+    spectrum_property_social: str = Field(default="Engagement", json_schema_extra=_ui("光谱：Engagement 字段名", "高级：Notion 属性名映射（投入度）。", advanced=True))
+    spectrum_property_diplomatic: str = Field(default="Closeness", json_schema_extra=_ui("光谱：Closeness 字段名", "高级：Notion 属性名映射（亲密度）。", advanced=True))
+    spectrum_property_progressive: str = Field(default="Directness", json_schema_extra=_ui("光谱：Directness 字段名", "高级：Notion 属性名映射（直率度）。", advanced=True))
     spectrum_property_value: str = Field(default="Value", json_schema_extra=_ui("光谱：Value 字段名", "dimension_rows 模式用。", advanced=True))
     spectrum_property_initialized: str = Field(default="Initialized", json_schema_extra=_ui("光谱：Initialized 字段名", "高级：属性名映射。", advanced=True))
     spectrum_property_last_evolution: str = Field(default="LastEvolution", json_schema_extra=_ui("光谱：LastEvolution 字段名", "高级：属性名映射。", advanced=True))
     spectrum_property_updated_at: str = Field(default="UpdatedAt", json_schema_extra=_ui("光谱：UpdatedAt 字段名", "高级：属性名映射。", advanced=True))
+
+
+class RenderConfig(PluginConfigBase):
+    """状态卡片图片渲染（/soul_dashboard 等命令）。"""
+
+    __ui_label__ = "卡片渲染"
+    __ui_icon__ = "image"
+    __ui_order__ = 9
+
+    card_enabled: bool = Field(
+        default=True,
+        description="启用卡片渲染",
+        json_schema_extra=_ui(
+            "启用状态卡片图片",
+            "开启后 /soul_dashboard 等命令输出可视化图片；关闭或渲染失败时回退为纯文本。",
+        ),
+    )
+    viewport_width: int = Field(
+        default=1100,
+        ge=480,
+        le=2000,
+        description="视口宽度",
+        json_schema_extra=_ui("渲染视口宽度（像素）", "卡片图片的渲染宽度，过小会换行拥挤。", step=20),
+    )
+    device_scale_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=4.0,
+        description="缩放倍率",
+        json_schema_extra=_ui("图片清晰度倍率", "越大越清晰但图片更大，建议 2.0。", step=0.5),
+    )
+    render_timeout_ms: int = Field(
+        default=60000,
+        ge=5000,
+        le=120000,
+        description="渲染超时",
+        json_schema_extra=_ui("渲染超时（毫秒）", "Host 无头浏览器渲染的业务超时；超时回退纯文本。", step=1000, advanced=True),
+    )
+
+
+class WorldviewConfig(PluginConfigBase):
+    """P1 三观生长：分层限速、群切片、情绪辅助（dev 分支）。"""
+
+    __ui_label__ = "三观生长 (P1)"
+    __ui_icon__ = "layers"
+    __ui_order__ = 25
+
+    local_first_evolution: bool = Field(
+        default=True,
+        description="局部优先演化：单群输入默认只改本群观点（默认开启）",
+        json_schema_extra=_ui(
+            "局部优先演化",
+            "开启（默认）：内化出的观点写入来源群、只影响该群；要变成全局须显式 "
+            "/soul_promote_global。单群输入的证据不足以直接改写 bot 的全局人格。"
+            "关闭：观点直接写全局，A 群形成的思想可在 B 群被召回（旧行为）。",
+        ),
+    )
+
+    p1_enabled: bool = Field(
+        default=True,
+        description="启用 P1",
+        json_schema_extra=_ui(
+            "启用 P1 三观生长",
+            "关闭后行为与 main/v2.0 一致：不做分层限速、切片、情绪与分层注入摘要。",
+        ),
+    )
+    values_max_delta: int = Field(
+        default=2,
+        ge=0,
+        le=20,
+        description="价值观层单次上限",
+        json_schema_extra=_ui("价值观层单次演化上限", "经济维等映射到价值观层，变化最慢。"),
+    )
+    worldview_max_delta: int = Field(
+        default=4,
+        ge=0,
+        le=20,
+        description="世界观层单次上限",
+        json_schema_extra=_ui("世界观层单次演化上限", "社会/外交维映射到世界观层。"),
+    )
+    conduct_max_delta: int = Field(
+        default=6,
+        ge=0,
+        le=20,
+        description="处事观层单次上限",
+        json_schema_extra=_ui("处事观层单次演化上限", "变革维等映射到处事观层，变化较快。"),
+    )
+    local_influence_ratio: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="群局部偏移比例",
+        json_schema_extra=_ui(
+            "群聊局部偏移累积比例",
+            "演化 delta 的一部分记入本群切片，用于观察局部氛围，不替代全局光谱。",
+            step=0.05,
+        ),
+    )
+    mood_enabled: bool = Field(
+        default=True,
+        description="情绪辅助",
+        json_schema_extra=_ui("短期情绪辅助", "仅影响注入中的语气提示，不写入长期三观。"),
+    )
+    mood_decay_hours: float = Field(
+        default=8.0,
+        ge=0.5,
+        le=72.0,
+        description="情绪衰减",
+        json_schema_extra=_ui("情绪归零时间（小时）", "超过该时间未演化则短期情绪自动归零。", step=0.5),
+    )
+    mood_inject: bool = Field(
+        default=True,
+        description="注入情绪",
+        json_schema_extra=_ui("在注入中加入情绪语气", "关闭则情绪仅可在 /soul_status 查看。"),
+    )
+    graph_inject: bool = Field(
+        default=True,
+        description="注入图谱提示",
+        json_schema_extra=_ui("在注入中加入思想关联摘要", "展示 derived_from / supports 等轻量关系。"),
+    )
+
+
+class SelfReflectionConfig(PluginConfigBase):
+    """自我评价反馈回路：bot 自评过往回复是否符合人设，反馈到演化与下次注入。"""
+
+    __ui_label__ = "自我评价 (P1)"
+    __ui_icon__ = "refresh-cw"
+    __ui_order__ = 26
+
+    enabled: bool = Field(
+        default=False,
+        description="启用自评",
+        json_schema_extra=_ui(
+            "启用自我评价反馈回路",
+            "关闭后不捕获 bot 回复、不评价、不反馈。开启后在 planner/replyer 决策后捕获回复，"
+            "定期评价是否符合人设，反馈到光谱演化与下次注入提醒。默认关闭。",
+        ),
+    )
+    evaluation_interval_hours: float = Field(
+        default=1.0,
+        ge=0.5,
+        le=72.0,
+        description="评价周期",
+        json_schema_extra=_ui("评价周期（小时）", "多久批量评价一次攒下的回复。", step=0.5, advanced=True),
+    )
+    max_replies_per_cycle: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="单周期上限",
+        json_schema_extra=_ui("单周期评价上限", "每轮最多评价多少条回复，防单轮 token 爆炸。", advanced=True),
+    )
+    self_reflection_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="自评权重",
+        json_schema_extra=_ui(
+            "自评对光谱的影响权重",
+            "0=关闭光谱修正；0.5≈每周期最多±1；1.0≈每周期最多±2（需净偏离≥3次才触发）。建议 0.5。",
+            step=0.1,
+            advanced=True,
+        ),
+    )
+    relevance_gate_enabled: bool = Field(
+        default=True,
+        description="相关性门槛",
+        json_schema_extra=_ui(
+            "启用相关性门槛",
+            "纯闲聊社交回复（哈哈/表情/附和）跳过不打分；只有表态/决策的回复才完整评价。关闭则全部评价。",
+        ),
+    )
+    normalize_across_batch: bool = Field(
+        default=False,
+        description="批次归一化",
+        json_schema_extra=_ui(
+            "批次归一化",
+            "自评分减去本批均值，把绝对高低转为相对偏离，对冲 AI 系统性高估。可选。",
+            advanced=True,
+        ),
+    )
+    pending_max_age_hours: int = Field(
+        default=48,
+        ge=1,
+        le=720,
+        description="待评过期",
+        json_schema_extra=_ui("待评回复过期（小时）", "超龄未评的待评回复标过期，防队列堆积。", advanced=True),
+    )
+    pending_max_rows: int = Field(
+        default=5000,
+        ge=100,
+        le=100000,
+        description="待评上限",
+        json_schema_extra=_ui("待评队列上限", "超过则物理删最旧，防表膨胀。", advanced=True),
+    )
+    self_observation_daily_cap: int = Field(
+        default=2,
+        ge=0,
+        le=50,
+        description="自评种子日上限",
+        json_schema_extra=_ui(
+            "自我观察种子每日上限",
+            "每天最多由自评产生多少个 self_observation 种子。0=关闭上限。与群聊种子日上限独立。",
+            advanced=True,
+        ),
+    )
 
 
 class MaiSoulEngineConfig(PluginConfigBase):
@@ -425,9 +811,23 @@ class MaiSoulEngineConfig(PluginConfigBase):
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
+    worldview: WorldviewConfig = Field(default_factory=WorldviewConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
     threshold: ThresholdConfig = Field(default_factory=ThresholdConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
     thought_cabinet: ThoughtCabinetConfig = Field(default_factory=ThoughtCabinetConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     notion: NotionConfig = Field(default_factory=NotionConfig)
+    render: RenderConfig = Field(default_factory=RenderConfig)
+    self_reflection: SelfReflectionConfig = Field(default_factory=SelfReflectionConfig)
+
+    @model_validator(mode="after")
+    def _cross_section_validate(self) -> "MaiSoulEngineConfig":
+        """跨段校验：self_reflection 依赖 thought_cabinet（自评产生种子需思维阁审批）。"""
+        if self.self_reflection.enabled and not self.thought_cabinet.enabled:
+            import logging
+            logging.getLogger("MaiSoulEngine").warning(
+                "[配置] self_reflection.enabled=True 但 thought_cabinet.enabled=False——"
+                "自评产生的 self_observation 种子无法被审批内化"
+            )
+        return self

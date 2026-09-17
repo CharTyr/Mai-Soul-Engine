@@ -18,15 +18,36 @@ async def handle_status(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[boo
         return True, msg, True
 
     spectrum_dict = {
-        "economic": spectrum.economic,
-        "social": spectrum.social,
-        "diplomatic": spectrum.diplomatic,
-        "progressive": spectrum.progressive,
+        "sincerity": spectrum.sincerity,
+        "engagement": spectrum.engagement,
+        "closeness": spectrum.closeness,
+        "directness": spectrum.directness,
     }
 
     display = format_spectrum_display(spectrum_dict)
     last_update = spectrum.updated_at.strftime("%Y-%m-%d %H:%M:%S") if spectrum.updated_at else "未知"
 
+    from ..worldview.service import WorldviewService, config_from_plugin
+
+    extras = WorldviewService(config_from_plugin(plugin)).format_status_extras(stream_id)
     msg = f"当前灵魂光谱：\n\n{display}\n\n上次更新: {last_update}"
+    if extras:
+        msg = f"{msg}\n\n{extras}"
+
+    # 思维阁启用时显示待审种子数 + 发酵中种子
+    if plugin.config.thought_cabinet.enabled:
+        from ..models.ideology_model import count_pending_thought_seeds
+
+        pending = count_pending_thought_seeds()
+        if pending > 0:
+            msg = f"{msg}\n\n待审思维种子: {pending} 个（用 /soul_seeds 查看）"
+
+        # v2.4.0: 发酵中种子
+        if getattr(plugin.config.thought_cabinet, "fermentation_enabled", False):
+            from ..models.seeds import get_fermenting_seeds
+            fermenting = get_fermenting_seeds()
+            if fermenting:
+                msg = f"{msg}\n发酵中种子: {len(fermenting)} 个"
+
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True

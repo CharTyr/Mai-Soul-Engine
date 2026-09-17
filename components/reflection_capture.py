@@ -1,0 +1,263 @@
+"""自我评价捕获层：after_response hook 委托 + before_request 上下文缓存/快照。
+
+一个 OBSERVE 模式 HookHandler（不改写输出，零干扰宿主主流程）：
+- ``maisaka.replyer.after_response`` → 拿最终回复文本
+
+planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
+
+before_request 侧（由 ``ideology_injector.inject_ideology`` 调用）：
+- ``cache_session_context``：缓存触发上文（session_id 作 key，TTL bound）
+- ``maybe_write_injection_snapshot``：仅 ``[self_reflection].enabled`` 时落注入快照
+
+after_response 侧（``capture_after_response``）：
+- 取最近 snapshot 配对（1:N）+ 取缓存 context → 入队 ``soul_pending_reflections``
+
+设计要点（见 .slim/deepwork/self-reflection.md oracle 审查）：
+- after_response payload 不含触发消息 → context 从 before_request 内存缓存取；
+  缓存缺失/超龄 → context_json 空，是合法降级路径（评估只基于 response 文本）。
+- snapshot 仅 enabled 时写，防表膨胀（oracle 修订点 4）。
+- OBSERVE 模式 + error_policy=SKIP → 捕获失败不影响 bot 正常回复。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json as _json
+import logging
+import threading as _threading
+import time
+from typing import Any
+
+from ..utils.host_prompt_items import extract_user_texts
+from ..utils.spectrum_utils import sanitize_text
+
+logger = logging.getLogger(__name__)
+
+# 注：models.self_reflection 的导入放在函数内懒加载，避免在模块加载期触发
+# ``models._conn → worldview → worldview.service → models.ideology_model → models.history → _conn``
+# 的预存循环导入（仅在测试隔离首个导入 models 时暴露）。热路径 cache_session_context
+# 不依赖 models，无懒导入开销；maybe_write_injection_snapshot / capture_after_response
+# 仅在 [self_reflection].enabled 时调用，此时插件已完全加载。
+
+# ─── 上下文缓存（before → after 配对用）────────────────────────────
+
+_CONTEXT_TTL_SECONDS: int = 600  # 10 分钟
+_CONTEXT_MAX_ENTRIES: int = 256
+_CONTEXT_MAX_LINES: int = 6
+_CONTEXT_LINE_MAX_CHARS: int = 200
+
+# session_id -> (context_lines, timestamp)
+_context_cache: dict[str, tuple[list[str], float]] = {}
+# 用 threading.Lock 而非 asyncio.Lock：临界区只有 O(1) dict 操作（微秒级），
+# 不跨 await 点，threading.Lock 更轻量且不会阻塞事件循环。
+_context_cache_lock = _threading.Lock()
+
+
+# (session_id, reply_message_id) -> (触发消息尾行, 时间戳)
+# replyer 腿在回复生成前观测到真实 items，这里记下"本轮回复在回答什么"；
+# after_response 认领快照时用它做**内容比对**——比"谁更旧"的顺序推断硬得多，
+# 而且不用宿主加字段。进程重启丢失 → 退回旧顺序规则（安全降级）。
+_reply_tail_cache: dict[tuple[str, str], tuple[str, float]] = {}
+_REPLY_TAIL_TTL_SECONDS = 1800.0
+
+
+def cache_reply_tail(
+    session_id: str, reply_message_id: str, prompt_items: list[dict] | None,
+) -> str:
+    """replyer 腿：记下本轮回复的触发消息（尾行），返回归一化后的值。"""
+    import time as _time
+
+    sid = str(session_id or "").strip()
+    rid = str(reply_message_id or "").strip()
+    lines: list[str] = []
+    for content in extract_user_texts(list(prompt_items or []), 1):
+        sanitized = sanitize_text(str(content or ""), max_chars=_CONTEXT_LINE_MAX_CHARS)
+        if sanitized:
+            lines.append(sanitized)
+    tail = lines[-1] if lines else ""
+    if sid and rid and tail:
+        with _context_cache_lock:
+            _reply_tail_cache[(sid, rid)] = (tail, _time.time())
+            if len(_reply_tail_cache) > _CONTEXT_MAX_ENTRIES:
+                for key in list(_reply_tail_cache)[: max(1, len(_reply_tail_cache) // 2)]:
+                    _reply_tail_cache.pop(key, None)
+    return tail
+
+
+def take_reply_tail(session_id: str, reply_message_id: str) -> str:
+    """取回复腿记下的触发尾行（TTL 内），取不到返回空串。"""
+    import time as _time
+
+    key = (str(session_id or "").strip(), str(reply_message_id or "").strip())
+    hit = _reply_tail_cache.get(key)
+    if not hit:
+        return ""
+    tail, ts = hit
+    if (_time.time() - ts) > _REPLY_TAIL_TTL_SECONDS:
+        _reply_tail_cache.pop(key, None)
+        return ""
+    return tail
+
+
+def cache_session_context(session_id: str, prompt_items: list[dict]) -> list[str]:
+    """从 before_request 的宿主提示项提取最近用户消息，缓存供 after_response 用。
+
+    after_response payload 不含触发消息，故在此缓存。空 session_id 不缓存。
+    形状差异（Context Item / 旧 messages）由 ``utils.host_prompt_items`` 处理。
+    sanitize_text 在锁外执行（含正则替换，列表极长时避免阻塞事件循环）。
+
+    Returns:
+        本次缓存的上下文行（供调用方随注入快照一起落库；同会话并发时以快照为准）。
+    """
+    if not session_id:
+        return []
+    # 锁外：提取 + 脱敏（CPU 密集，不需要锁保护）
+    lines: list[str] = []
+    for content in extract_user_texts(prompt_items, _CONTEXT_MAX_LINES):
+        sanitized = sanitize_text(str(content or ""), max_chars=_CONTEXT_LINE_MAX_CHARS)
+        if sanitized:
+            lines.append(sanitized)
+    # 锁内：只做 dict 写入（O(1) 操作，微秒级）
+    with _context_cache_lock:
+        # 容量控制：超上限删最旧一半
+        if len(_context_cache) > _CONTEXT_MAX_ENTRIES:
+            sorted_items = sorted(_context_cache.items(), key=lambda x: x[1][1])
+            for k, _ in sorted_items[: len(sorted_items) // 2]:
+                _context_cache.pop(k, None)
+        _context_cache[session_id] = (lines, time.time())
+    return lines
+
+
+def take_cached_context(session_id: str) -> list[str]:
+    """取并清除缓存（一次性）。超龄或缺失返回空列表（合法降级）。"""
+    if not session_id:
+        return []
+    with _context_cache_lock:
+        entry = _context_cache.pop(session_id, None)
+    if not entry:
+        return []
+    lines, ts = entry
+    if time.time() - float(ts) > _CONTEXT_TTL_SECONDS:
+        return []
+    return lines
+
+
+# ─── 注入快照（before 侧）─────────────────────────────────────────
+
+
+def maybe_write_injection_snapshot(
+    plugin,
+    session_id: str,
+    stream_id: str,
+    selected_traits: list,
+    spectrum_dict: dict,
+    mood_lines: list[str],
+    selection_mode: str,
+    context_lines: list[str] | None = None,
+    bot_identity: str = "",
+    platform: str = "",
+) -> str:
+    """仅 ``[self_reflection].enabled`` 时落注入快照，返回 snapshot_id（否则空串）。
+
+    防表膨胀：调用方无需判断 enabled，本函数内部守卫。
+
+    ``context_lines``（本轮触发上文）随快照落库：同会话并发两轮时，
+    放在 session 键缓存里会互相顶掉，回复会配上别人的触发消息。
+
+    ``bot_identity``：宿主 ``bot.qq_account``（权威来源）。同一条 session_id
+    在换机器人后可能指向不同人格，快照不带身份就无法判断归属。
+
+    ``platform``：由宿主流列表**探测**得出（见 ``utils/stream_kind.py``）。
+    同一 session_id 可能存在于多个平台，不带平台无法区分归属；探不到留空。
+    """
+    if not plugin.config.self_reflection.enabled:
+        return ""
+    trait_ids = [t.trait_id for t in selected_traits if t.trait_id]
+    # context_fingerprint：session_id + trait_ids + selection_mode 简单哈希，用于去重
+    fp_src = f"{session_id}|{','.join(trait_ids)}|{selection_mode}"
+    fingerprint = hashlib.md5(fp_src.encode()).hexdigest()[:16]
+    mood_json = _json.dumps({"lines": mood_lines}, ensure_ascii=False) if mood_lines else "{}"
+    context_json = _json.dumps(list(context_lines), ensure_ascii=False) if context_lines else "[]"
+    # bot_identity 由**异步调用方**解析后传入：本函数是同步的（不能 await），
+    # 身份解析属于 IO。取不到时留空——作用域字段宁可缺席也不编造。
+    try:
+        from ..models.self_reflection import create_injection_snapshot
+
+        return create_injection_snapshot(
+            stream_id=stream_id or "global",
+            session_id=session_id,
+            trait_ids_json=_json.dumps(trait_ids, ensure_ascii=False),
+            spectrum_json=_json.dumps(spectrum_dict, ensure_ascii=False),
+            mood_json=mood_json,
+            selection_mode=selection_mode,
+            context_fingerprint=fingerprint,
+            context_json=context_json,
+            bot_identity=bot_identity,
+            platform=platform,
+        )
+    except Exception:
+        logger.exception("[SelfReflection] 写注入快照失败")
+        return ""
+
+
+# ─── after_response 捕获 ──────────────────────────────────────────
+
+
+async def capture_after_response(plugin, source: str, **kwargs: Any) -> dict[str, Any]:
+    """after_response hook 委托：捕获 bot 回复入待评队列。
+
+    OBSERVE 模式——不改写输出，原样返回。失败由 error_policy=SKIP 兜底。
+
+    Args:
+        plugin: 插件实例。
+        source: 保留参数，当前只处理 ``"replyer"``（``"planner"`` 被跳过——planner 决策不进入自评）。
+        **kwargs: hook payload（response / session_id / reply_message_id 等）。
+    """
+    if not plugin.config.self_reflection.enabled:
+        return {"success": True, "action": "continue"}
+    if source != "replyer":
+        return {"success": True, "action": "continue"}
+    response = str(kwargs.get("response", "") or "").strip()
+    if not response:
+        return {"success": True, "action": "continue"}
+    session_id = str(kwargs.get("session_id", "") or "")
+    reply_message_id = str(kwargs.get("reply_message_id", "") or "")
+    stream_id = session_id or "global"
+    try:
+        from ..models.self_reflection import (
+            claim_snapshot_for_response,
+            create_pending_reflection,
+        )
+
+        # 认领：同一 reply 重试复用同一快照；有多条候选时用 replyer 腿记下的
+        # **触发消息**做内容比对（比顺序推断硬），证据否定了全部候选就弃权。
+        snapshot = claim_snapshot_for_response(
+            session_id, reply_message_id,
+            reply_tail=take_reply_tail(session_id, reply_message_id),
+        )
+        snapshot_id = snapshot.snapshot_id if snapshot else ""
+        context_lines: list[str] = []
+        if snapshot is not None:
+            try:
+                parsed = _json.loads(snapshot.context_json or "[]")
+                if isinstance(parsed, list):
+                    context_lines = [str(x) for x in parsed if str(x).strip()]
+            except (ValueError, TypeError):
+                context_lines = []
+        if not context_lines:
+            # 兼容旧快照（写入时尚未带 context_json）——空内容是合法降级
+            context_lines = take_cached_context(session_id)
+        context_json = _json.dumps(context_lines, ensure_ascii=False) if context_lines else "[]"
+        create_pending_reflection(
+            stream_id=stream_id,
+            session_id=session_id,
+            reply_message_id=reply_message_id,
+            snapshot_id=snapshot_id,
+            source=source,
+            response_text=response,
+            context_json=context_json,
+        )
+    except Exception:
+        logger.exception("[SelfReflection] 捕获 %s after_response 失败", source)
+    # OBSERVE：不改写，原样返回（无 modified_kwargs → 宿主保留原输出）
+    return {"success": True, "action": "continue"}
