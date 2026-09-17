@@ -202,3 +202,66 @@ uv pip install -e ".[test]"   # 或手动装 pytest / pytest-asyncio / pillow / 
 
 `tests/conftest.py` 从 `__file__` 推导路径，宿主仓根与独立 checkout 都能跑；路径推导
 失败会**显式报错**（历史上是静默 skip，会让整套测试以「全跳过」假绿通过）。
+
+---
+
+## 6. T01–T20 复核（第三轮，附测试证据）
+
+第三轮复核的背景：前一轮「全部完成」的汇报**不成立**——两路独立审查用可复现实验
+证伪了多项已宣称完成的行为（observe 仍写人格、内化非原子、局部优先只隔离了 trait、
+监督器未接线等）。本轮按「先把反例变成回归测试、确认对旧代码是红的，再改实现」
+返工，所有修复都有对应回归测试。
+
+**状态口径**：通过 = 有直接测试且断言的是行为；部分 = 覆盖不完整或只测子项；
+阻塞 = 需宿主能力；未做/未验证 = 没有证据，不得当成已完成。
+
+| 项 | 状态 | 证据 / 缺口 |
+|----|------|------------|
+| T01 SDK 归一化契约 + 旧返回形状 + 未知形状显式报错 | 部分 | `test_host_config_value.py`（裸值 / 旧 envelope）；**未知形状的显式报错未单测** |
+| T02 items 往返不破坏其他上下文 | 通过 | `test_host_prompt_items.py`、`test_injection_delivery.py`、`test_purpose_split_delivery.py`（幂等守卫） |
+| T03 并发同会话不混用快照；Planner/Replyer 各拿正确内容 | 部分 + 阻塞 | 分用途投递已落地（`test_purpose_split_delivery.py`）；**精确并发关联阻塞**：宿主 planner / replyer 两个 payload 无共同请求 id（已只读核对宿主源码），现改为标注 `pairing_ambiguous` 并阻断人格反馈（`test_review_regressions.py::test_ambiguous_pairing_never_drives_personality_feedback`），不再用 FIFO 冒充精确关联 |
+| T04 最终请求验收与 hook 成功指标分离 | 部分 | `delivery_state` 只到 `hook_applied`；`final_request_verified` 不可达（宿主无请求后回调），已在文档写明——**无测试可写，是能力缺口不是实现缺口** |
+| T05 两群相反输入只改各自局部、全局不变；晋升后才全局变化 | 通过 | `test_review_regressions.py::test_local_first_internalization_does_not_touch_global_spectrum`、`::test_local_internalization_cannot_disable_global_trait`、`test_promote_global.py`、`test_origin_stream.py` |
+| T06 同批次重复运行不重复影响；低流量不永久丢失 | 部分 | 幂等有测试（`test_evolution_cursor_failure_retry_applies_once`）；**低流量子项缺直接测试** |
+| T07 自身回复 / 自评不得被循环当独立证据 | 通过 | `test_bot_self_filter.py`、`test_self_observation_daily_cap.py`、`test_reflection_feedback.py`（自指护栏） |
+| T08 发酵到期但无新证据不自动批准或增信 | 通过 | `test_fermentation.py`「F2: 无证据不强制内化」 |
+| T09 并发批准 / 提交前后故障 / 租约过期 / 重复命令仅一次正式影响 | 通过 | `test_review_regressions.py`（终结失败、发酵租约被抢、租约接管后旧执行者、在途拒绝）+ `test_seed_operation_lease.py` |
+| T10 清理不删 fermenting / 处理中 / 必需来源 | 通过 | `test_seed_retention.py`、`test_cleanup_excess_marks_expired.py` |
+| T11 禁用 → 槽位被占 → 恢复无唯一约束异常 | 通过 | `test_trait_slot_recovery.py`、`test_cabinet_slots.py` |
+| T12 非法证据引用 / 范围越权 / 无效 JSON 不写正式状态 | 通过 | `test_candidate_validation.py`、`test_review_regressions.py::test_candidate_validation_rejects_fabricated_evidence_and_unknown_axis` |
+| T13 关闭模式无学习/调用/通知；观察模式无正式写入与真实注入 | 通过 | `test_review_regressions.py`（observe/off 队列、observe 演化、在途切模式）、`test_runtime_mode.py`、`test_mode_gate_commands.py` |
+| T14 任务异常 / 热更 / 卸载 / 取消后无重复任务与残留 | 部分 | `test_task_supervisor.py`、`test_unload_isolation.py`、`test_review_regressions.py::test_supervisor_detects_crash_without_config_update`；**热更路径覆盖较弱** |
+| T15 命令鉴权、reset 确认、重试与长任务超时按真实宿主 payload | 通过 | `test_command_input.py`、`test_review_regressions.py::test_reset_requires_exact_confirmation`、`test_internalization_queue.py`（命令不内联等 LLM） |
+| T16 单旧库 / 空新库 / 双非空库 / WAL / 损坏库 / 迁移中断 / 重复迁移 | 部分 | `test_migrations.py`、`test_migration_inventory.py`（含**真实双库只读预演**）；**WAL 与损坏库缺直接测试** |
+| T17 未审核 legacy 不进入正式人格 | 部分 | 导入路径存在（`migration/legacy_import.py`）；**「未审核不进人格」缺专项测试** |
+| T18 日志/产物不含凭据与真实标识；调试追踪有权限与 TTL | 未验证 | 注入日志有采样与 5MB 轮转；**无凭据扫描 / 脱敏测试** |
+| T19 看板区分 8 种空态 | 部分 | `test_dashboard_renderer.py`（未初始化空态）、`components/health_command.py`（degraded / 演化作用域）；**8 种空态未逐一区分** |
+| T20 离线回放的可复现记录 | 未做 | 无 |
+
+**汇总**：通过 11 项、部分 8 项、未验证 1 项（T18）、未做 1 项（T20）。
+阻塞点 1 个（T03 的精确关联需要宿主提供请求关联 id——见下方最小接口需求）。
+
+### 6.1 给宿主的最小接口变更需求（用于根治 T03）
+
+现状：`maisaka.planner.before_request` 与 `maisaka.replyer.before_model_request` /
+`maisaka.replyer.after_response` 的 payload **没有任何共同请求标识**，插件无法把
+「某次注入」与「某次回复」精确绑定，只能启发式配对并标注歧义。
+
+最小改动（不新增权限，只加字段）：
+1. 宿主在一次推理开始时生成 `request_id`（uuid 即可）；
+2. 三个 hook 的 payload 都带上同一个 `request_id`（planner.before_request、
+   replyer.before_model_request、replyer.after_response）。
+
+有此字段后：快照按 `request_id` 精确认领，`pairing_ambiguous` 可退化为
+「宿主未提供 request_id 时的降级路径」。**在获批之前不做宿主改动**，
+现状是「标注歧义 + 阻断人格反馈」，而不是猜。
+
+### 6.2 尚未落实的方案条目（不因本轮返工而改变）
+
+1. Replyer 侧分用途投递 —— **本轮已落地**（见 §6 T03 行的前半）。
+2. token 预算与截断规则显式配置 —— **本轮已落地**（`utils/token_budget.py`，
+   保守估算 + 稳定裁剪 + 可配置预算；标明是估算）。
+3. 作用域字段（平台 / 机器人身份）—— 仍未做：宿主 payload 只给 session_id，
+   平台需枚举、机器人身份可从 `bot.qq_account` 读；半成品作用域会污染注入隔离。
+4. 任务监督器细粒度状态 —— 本轮补了 last_success / heartbeat / next_retry + 退避，
+   仍缺 `waiting` 状态。
