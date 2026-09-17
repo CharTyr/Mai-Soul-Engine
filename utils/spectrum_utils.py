@@ -66,6 +66,27 @@ def match_user(platform: str, user_id: str, config_id: str) -> bool:
     return cfg_user_id == user_id
 
 
+def extract_command_text(kwargs: dict | None) -> str:
+    """从 SDK2 Command kwargs 提取命令原始文本。
+
+    宿主 ``invoke_args``（``component_query.py:522``）把命令文本放在**顶层**
+    ``text``（= ``message.processed_plain_text``）；``message`` 字典里
+    **没有** ``text`` 键（见 ``PluginMessageUtils._session_message_to_dict``）。
+    旧写法 ``(kwargs["message"]).get("text")`` 恒为空，确认类命令永远等不到确认。
+    """
+    raw = kwargs or {}
+    if not isinstance(raw, dict):
+        return ""
+    text = raw.get("text")
+    if not isinstance(text, str) or not text.strip():
+        message = raw.get("message")
+        if isinstance(message, dict):
+            fallback = message.get("processed_plain_text")
+            if isinstance(fallback, str):
+                text = fallback
+    return text.strip() if isinstance(text, str) else ""
+
+
 def extract_command_actor(kwargs: dict | None) -> tuple[str, str]:
     """从 SDK2 Command kwargs 解析 platform / user_id。
 

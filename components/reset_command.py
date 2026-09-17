@@ -25,11 +25,11 @@ async def handle_reset(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool
         await plugin.ctx.send.text(err, stream_id)
         return True, err, True
 
-    from ..utils.spectrum_utils import extract_command_actor
+    from ..utils.spectrum_utils import extract_command_actor, extract_command_text
     platform, user_id = extract_command_actor(kwargs)
 
-    # 检查是否为确认指令
-    message_text = (kwargs.get("message") or {}).get("text", "") or ""
+    # 检查是否为确认指令（文本取自顶层 text；message 字典里没有 text 键）
+    message_text = extract_command_text(kwargs)
     is_confirm = "confirm" in message_text.casefold()
 
     if is_confirm:

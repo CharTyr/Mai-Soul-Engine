@@ -6,6 +6,8 @@ import logging
 import re
 from typing import Any
 
+from ..utils.spectrum_utils import extract_command_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,8 +55,7 @@ async def handle_seed_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_seed\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_seed <种子ID>"
@@ -143,8 +144,7 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         return True, msg, True
 
     # 从文本中提取种子 ID
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_approve\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_approve <种子ID>"
@@ -253,8 +253,7 @@ async def handle_seed_reject(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         return True, msg, True
 
     # 从文本中提取种子 ID
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_reject\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_reject <种子ID>"
@@ -309,8 +308,7 @@ async def handle_traits_list(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         return True, msg, True
 
     # 从文本中提取可选的 stream_id 过滤条件
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_traits(?:\s+(\S+))?\s*$", str(text))
     filter_stream_id = match.group(1).strip() if match and match.group(1) else None
 
@@ -394,8 +392,7 @@ async def handle_trait_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait <trait_id>"
@@ -537,8 +534,7 @@ async def handle_trait_set_tags(plugin: Any, stream_id: str, **kwargs: Any) -> t
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_set_tags\s+(\w+)\s+(.+?)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_set_tags <trait_id> <tag1 tag2 / tag1,tag2>"
@@ -584,8 +580,7 @@ async def handle_trait_merge(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_merge\s+(\w+)\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_merge <source_trait_id> <target_trait_id>"
@@ -649,8 +644,7 @@ async def handle_trait_disable(plugin: Any, stream_id: str, **kwargs: Any) -> tu
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_disable\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_disable <trait_id>"
@@ -690,8 +684,7 @@ async def handle_trait_enable(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_enable\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_enable <trait_id>"
@@ -731,8 +724,7 @@ async def handle_trait_delete(plugin: Any, stream_id: str, **kwargs: Any) -> tup
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_trait_delete\s+(\w+)\s*$", str(text))
     if not match:
         msg = "用法: /soul_trait_delete <trait_id>"
@@ -820,8 +812,7 @@ async def handle_trait_slot(plugin: Any, stream_id: str, **kwargs: Any) -> tuple
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_slot\s+([\w-]{8,})\s+(\d+|clear)\s*$", str(text))
     if not match:
         msg = (
@@ -894,8 +885,7 @@ async def handle_promote_global(plugin: Any, stream_id: str, **kwargs: Any) -> t
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    message = kwargs.get("message") or {}
-    text = kwargs.get("text", "") or message.get("processed_plain_text", "")
+    text = extract_command_text(kwargs)
     match = re.match(r"^/soul_promote_global\s+([\w-]{8,})\s*$", str(text))
     if not match:
         msg = "用法: /soul_promote_global <trait_id>"
