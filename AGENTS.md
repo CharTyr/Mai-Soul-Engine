@@ -334,7 +334,7 @@ cd /path/to/Maibot
 .venv/bin/python -c "import importlib; p=importlib.import_module('plugins.CharTyr_Mai-Soul-Engine.plugin'); i=p.create_plugin(); print(len(i.get_components()))"
 ```
 
-重载后联调建议：`/soul_health` → `/soul_setup`/`/soul_status` → 有种子时 `/soul_approve`（即时内化应劝槽）→ `/soul_slot` → `/soul_inspect` / `/soul_dashboard`（12 格）。自评开时 `/soul_reflect`；发酵开时 approve 进 fermenting。完整清单见本地 `.slim/deepwork/acceptance-2.5.0.md`（不入库）。
+重载后联调建议：`/soul_health` → `/soul_setup`/`/soul_status` → 有种子时 `/soul_approve`（即时模式**入队**，用 `/soul_op` 看进展；发酵模式进 fermenting）→ `/soul_slot` → `/soul_inspect` / `/soul_dashboard`（12 格）。自评开时 `/soul_reflect`。完整清单见本地 `.slim/deepwork/acceptance-2.5.0.md`（不入库）。
 
 ## 修改约束
 
