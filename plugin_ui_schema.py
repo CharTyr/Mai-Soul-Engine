@@ -597,13 +597,13 @@ class WorldviewConfig(PluginConfigBase):
     __ui_order__ = 25
 
     local_first_evolution: bool = Field(
-        default=False,
-        description="局部优先演化：单群输入默认只改本群观点",
+        default=True,
+        description="局部优先演化：单群输入默认只改本群观点（默认开启）",
         json_schema_extra=_ui(
             "局部优先演化",
-            "关闭（默认）：内化出的观点写全局，A 群形成的思想可在 B 群被召回。"
-            "开启：观点写入来源群、只影响该群，要变成全局须显式 /soul_promote_global。"
-            "开启会改变人格作用域语义，建议先在观察模式确认效果。",
+            "开启（默认）：内化出的观点写入来源群、只影响该群；要变成全局须显式 "
+            "/soul_promote_global。单群输入的证据不足以直接改写 bot 的全局人格。"
+            "关闭：观点直接写全局，A 群形成的思想可在 B 群被召回（旧行为）。",
         ),
     )
 

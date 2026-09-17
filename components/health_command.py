@@ -30,6 +30,15 @@ async def handle_health(plugin, stream_id: str, **kwargs: Any) -> tuple[bool, st
         lines.append(supervisor.describe())
         if not supervisor.is_healthy():
             lines.append("⚠️ 有后台任务连续异常结束并已停止重试，请检查日志后重启插件")
+    # 观点作用域：局部优先会让新观点只在本群生效，必须一眼可见（否则像"没学到"）
+    local_first = bool(
+        getattr(getattr(plugin.config, "worldview", None), "local_first_evolution", False)
+    )
+    lines.append(
+        "观点作用域: 局部优先（新观点仅来源群生效，全局需 /soul_promote_global）"
+        if local_first
+        else "观点作用域: 全局（新观点对所有群生效）"
+    )
     lines.append(f"数据目录: {plugin._data_dir}")
     lines.append(f"数据来源: {'宿主' if plugin._data_dir_source == 'host' else '插件目录'}")
 

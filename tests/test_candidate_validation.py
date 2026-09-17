@@ -333,7 +333,7 @@ def _engine_with_scope(local_first: bool) -> Any:
 
 
 def test_default_scope_is_global(soul_db: Any) -> None:
-    """默认：观点写全局，来源群只作溯源（保持既有语义，不因本次改动反转）。"""
+    """显式关闭局部优先：观点写全局，来源群只作溯源（旧行为，仍可切回）。"""
     engine = _engine_with_scope(False)
     stream_id, origin = engine._trait_scope_for_seed({"stream_id": "qq-123-group"})
 
@@ -358,10 +358,13 @@ def test_local_first_without_origin_still_global(soul_db: Any) -> None:
     assert engine._trait_scope_for_seed({"stream_id": "global"})[0] == "global"
 
 
-def test_local_first_is_opt_in_config_default() -> None:
-    """配置默认必须是关闭——作用域语义变更不得靠升级静默发生。"""
+def test_local_first_is_the_default_scope() -> None:
+    """默认局部优先：单群输入不足以改写 bot 的全局人格。
+
+    要恢复旧行为（观点直接写全局）把 ``local_first_evolution`` 设为 false。
+    """
     schema = _import_soul_submodule("plugin_ui_schema")
-    assert schema.WorldviewConfig().local_first_evolution is False
+    assert schema.WorldviewConfig().local_first_evolution is True
 
 
 def test_local_first_end_to_end_writes_group_scoped_trait(soul_db: Any) -> None:
