@@ -23,8 +23,8 @@
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
 | Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.5.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
-| 运行模式 | **`plugin.mode` = `off` / `observe` / `apply`**（schema 默认 `off`），唯一模式判定入口 `utils/runtime_mode.py`，拆成四个闸门：注入回复 / 后台学习 / 改写人格 / 管理员接纳。`off` 全关；`observe` 只学习、不改人格、不注入；`apply` 全开。**升级绝不隐式进入 `apply`**：`mode` 未显式设置时，仅当旧配置 `enabled=true` 且 `mode` 为空字符串才映射为 `observe`，否则按 `off`（schema 默认值，pydantic 会补齐）——升级不得让插件突然开始改写人格并影响真实回复。未知 `mode` 值保守回落并提示 |
-| 任务生命周期 | `on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`_task_action` 是纯函数（start/restart/stop/keep），**必须用 `done()` 判断任务死活**——只看 `is not None` 会让崩溃的任务静默停摆且看板假绿；状态记入 `utils/task_supervisor.py`，连续异常超限转 `failed` 等人工介入 |
+| 运行模式 | **`plugin.mode` = `off` / `observe` / `apply`**（schema 默认 `off`），唯一模式判定入口 `utils/runtime_mode.py`，拆成四个闸门：注入回复 / 后台学习 / 改写人格 / 管理员接纳。`off` 全关；`observe` 只学习、不改人格、不注入；`apply` 全开。**升级绝不隐式进入 `apply`**：`mode` 未显式设置时，仅当旧配置 `enabled=true` 且 `mode` 为空字符串才映射为 `observe`，否则按 `off`（schema 默认值，pydantic 会补齐）——升级不得让插件突然开始改写人格并影响真实回复。未知 `mode` 值保守回落并提示。**模式判定必须发生在真正写库那一刻**：`utils/runtime_mode.ensure_mutation_allowed(source)` 读**调用时**的当前配置，被拦则抛 `MutationBlocked`——入口检查一次挡不住「LLM 在途时被切到 `observe`」，而那正是假成功的高发路径。模式拒绝要与业务失败**区分开**（前者是设计拦截，不是故障） |
+| 任务生命周期 | `on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`_task_action` 是纯函数（start/restart/stop/keep），**必须用 `done()` 判断任务死活**——只看 `is not None` 会让崩溃的任务静默停摆且看板假绿；状态记入 `utils/task_supervisor.py`（**五态** `running`/`waiting`/`backoff`/`failed`/`stopped`）。崩溃检测 → **退避重启**（5s→10s→…→300s 上限）→ 超限转 `failed` 等人工介入；另有 `last_success`/`heartbeat`/`next_retry_at`。`plugin._supervisor_loop` 每 **30s** 巡检（循环内异常吞掉，观测不得拖垮业务）；`_unloading` 置位后**不得再拉起任务**。循环在等待间隔打 `waiting`——没人调的状态就是装饰 |
 | 管理员鉴权 | `plugin.enabled` 仍存在但只作兼容位；`admin_user_id` 仅标识管理员 QQ，**不是**安全边界 |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
 | 群 Stream 解析 | `utils/runtime_resolution.resolve_monitored_group_stream` 先试 `get_stream_by_group_id`（内存快），回退 `open_session`（持久创建/恢复）；无 platform 时保留 MD5 兼容 |
@@ -177,6 +177,9 @@ v2.4.0（fermentation_enabled）：`pending → fermenting → internalized`（�
 - `picked[].activation_reason`：`tag_hit:…` / `keyword:…` / `tagless_impact` / `fallback_recent_impact`；`/soul_inspect` 与 dashboard 可展示。
 - 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids, traits=已查列表)` 排除已在详细块的 trait，避免重复。
 - **合并策略**：`utils/host_prompt_items.append_block_to_first_system` 把动态层追加到**首个 system item 的最后一个 text part**（标记 `[Mai-Soul 动态层 | …]`）；**禁止**再 prepend 新 system。回写键必须与宿主传入形状一致（宿主传 `items`）——写错会被整份忽略且不报错。
+- **分用途投递（第四轮）**：planner 与 replyer 是**两个不同视图**——planner（默认）给立场/分层/情绪/图谱/固化观点 + 自评，**落快照、打冷却**；replyer 只给「与本轮相关的观点 + 表达倾向」，**不落快照、不打冷却**（快照锚点只能 planner 落，否则同会话「多快照」歧义永远为真；冷却按**轮**计，否则 replyer 同轮永远选不中）。**不把完整动态层塞两遍**。
+- **注入必须幂等**：宿主对同一请求**每次重试都会再调一次 hook**，`append_block_to_first_system` 靠标记守卫避免重复追加；动这块前先验证幂等（历史文档曾把不幂等写成幂等）。
+- **token 预算**：`utils/token_budget.py` 对注入块做保守估算（CJK 按 1 token/字）与稳定裁剪，顺序即优先级。**这是估算，不是精确用量**，别当真实 token 数汇报。
 - **热路径优化**：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`；锁用 `asyncio.Lock`；注入日志采样 + 5MB 轮转 + `asyncio.to_thread` 异步写。
 
 ### 种子去重
@@ -235,6 +238,7 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 
 - **捕获**：`@HookHandler("maisaka.replyer.after_response")`，`mode=HookMode.OBSERVE` + `error_policy=ErrorPolicy.SKIP`（**零干扰不改写输出**，失败不影响 bot 回复）。宿主触发点（**只读引用，不改**）：`src/chat/replyer/maisaka_generator_base.py:1182`，payload 含 `response`/`session_id`/`reply_message_id`/token 统计。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
 - **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode + **触发上下文**）；`after_response` 用 `claim_snapshot_for_response` **FIFO 认领最旧的未认领快照**（同一 reply 重试复用同一快照）。旧行为是"取最近一条"，同会话两轮并发时会把 A 轮的回复配到 B 轮的快照上——trait 归属与触发上文一起串味。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
+- **配对歧义（v6）与宿主零改动结论**：陈旧窗口内 ≥2 条未认领快照 → 标 `pairing_ambiguous=1`，**下游阻断会改人格的自评反馈**（不确定就不改人格）。`reply_message_id` 只让「同一回复重试」那条腿**精确**；planner ↔ replyer 之间**没有共同请求 id**（已核实宿主 payload），在「不得修改宿主任何代码」约束下精确绑定**不可达——已知限制，不是待办**。作用域字段：快照记 `bot_identity`（v7）+ `platform`（v8，按配置声明的平台列表探测宿主流列表得出；探不到留空）。
 - **context 来源**：`after_response` payload **不含触发消息**，故 before_request 把触发上文随快照一起落库（`context_json`）；`reflection_capture.take_cached_context` 的 session 键缓存只作旧数据兜底。**上下文缺失 = context_json 空 = 合法降级**（评估只基于 response 文本判语气）。
 - **投递阶段**：`delivery_state` 记 `selected` → `hook_applied`。宿主未提供请求后回调，插件**无法自我声明"最终请求已包含注入"**（`final_request_verified` 不可达）——不要把它当成已验证。
 
@@ -305,10 +309,11 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文 + v2.4.0 发酵后内化（`fermentation_inputs` 参数），`fermentation_engine.py`（**v2.4.0**：发酵循环 + L1 关键词过滤 + L3 LLM 关联度判断 + 到期检测/延长/最终内化触发）
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
 - `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`；v2.4.0 +`fermentation_prompts.py`）
-- `models/` — 按实体拆分：`_conn.py`（连接/建表/迁移 ledger，v2–v5：`cabinet_slot_no` / 快照配对 / 种子操作租约 / 通知 outbox）、`spectrum.py`、`history.py`、`seeds.py`（含日上限计数与终态保留）、`traits.py`（`origin_stream_id` / `set_trait_slot` / `promote_trait_to_global` / 槽位让位）、`p1.py`、`self_reflection.py`、`operations.py`（内化单赢家租约）、`notifications.py`（通知 outbox）；`ideology_model.py` 为重导出 shim
+- `models/` — 按实体拆分：`_conn.py`（连接/建表/迁移 ledger，v2–**v8**：`cabinet_slot_no` / 快照配对 / 种子操作租约 / 通知 outbox / 快照配对**歧义**标记 / `bot_identity` / `platform`；`CURRENT_SCHEMA_VERSION = 8`）、`spectrum.py`、`history.py`、`seeds.py`（含日上限计数与终态保留）、`traits.py`（`origin_stream_id` / `set_trait_slot` / `promote_trait_to_global` / 槽位让位）、`p1.py`、`self_reflection.py`、`operations.py`（内化单赢家租约）、`notifications.py`（通知 outbox）；`ideology_model.py` 为重导出 shim
 - `migration/` — `legacy_import.py`（旧库只读导入）、`inventory.py`（双数据目录**只读**盘点与迁移预演，含谱系观察，**不自动选源**）
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `utils/` — `data_dir.py`（宿主 data_dir 解析 + backup 迁移）、`host_persona.py`（人设快照）、`host_config.py`（`config.get` 裸值归一）、`host_prompt_items.py`（`items` 契约适配/合并）、`runtime_resolution.py`（群 stream：get_stream → open_session）、`runtime_mode.py`（三模式闸门）、`task_supervisor.py`（任务存活监督）、`stream_kind.py`（会话类型显式判定）、`notify.py`（通知发送 + 失败入队）、`spectrum_utils.py`（命令文本/模式闸门）、`card_render.py`
+- `utils/` — `data_dir.py`（宿主 data_dir 解析 + backup 迁移）、`host_persona.py`（人设快照）、`host_config.py`（`config.get` 裸值归一）、`host_prompt_items.py`（`items` 契约适配/合并）、`runtime_resolution.py`（群 stream：get_stream → open_session）、`runtime_mode.py`（三模式闸门）、`task_supervisor.py`（任务存活监督）、`stream_kind.py`（会话类型显式判定）、`notify.py`（通知发送 + 失败入队）、`spectrum_utils.py`（命令文本/模式闸门）、`card_render.py`、`token_budget.py`（token 预算：保守估算 + 稳定裁剪，顺序即优先级）
+- `tools/` — `replay.py`（**离线回放**：候选/接纳/注入/配对四阶段全走**真实代码路径**，输出可复现记录并逐条标注「LLM 是固定 fixture」；**不得把 fixture 输出当真实模型表现**）
 - `tests/` — 约 **500** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；覆盖宿主契约、快照配对、种子保留、槽位恢复、操作租约与队列、卸载隔离、通知 outbox、运行模式与命令闸门、候选校验、任务监督、会话类型、迁移盘点 等
 
 ## 开发与验证
@@ -342,7 +347,7 @@ cd /path/to/Maibot
 - 配置示例与文档中的 QQ/群号用占位符，勿提交真实 ID。
 - 可选能力默认关：**Notion**、**思维阁**、**@API**（`api.enabled` 默认 False）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
 - **`plugin.mode = "off"`（schema 默认）**：不学习、不注入、不改人格；`observe` 只学习并生成候选（不注入、不改人格、接纳类命令被拒）；`apply` 才真正注入并允许改写人格。**`mode` 未显式设置时不隐式放行**：仅当旧配置 `enabled=true` 且 `mode` 为空字符串才映射为 `observe`，否则按 schema 默认 `off`（pydantic 会补齐默认值，所以「旧配置没写 mode」实际落在 `off`）。
-- **候选优先**：内化 LLM 的输出先过 `thought/candidate.py` 结构化校验，无效候选（空观点 / 数值无法解析 / 越界 / 类型错误）**拒绝且不写任何人格状态**，返回结构化原因；越界不静默 clamp。`spectrum_impact` 是 `spectrum_deltas` 的历史别名，仍须支持。
+- **候选优先**：内化 LLM 的输出先过 `thought/candidate.py` 结构化校验，无效候选（空观点 / 数值无法解析 / 越界 / 类型错误）**拒绝且不写任何人格状态**，返回结构化原因；越界不静默 clamp。`spectrum_impact` 是 `spectrum_deltas` 的历史别名，仍须支持。**未知光谱轴 = 拒绝**（早期实现是「告警后丢弃」，已改）；**证据引用必须来自本次输入**（白名单精确匹配或输入全文子串），并校验来源范围与身份边界；**模型不得自选 `global` 作用域**——全局变化只能走显式 `/soul_promote_global`。
 - **内化幂等**：LLM 调用前先 `claim_seed_operation` 拿租约（`models/operations.py`），同一颗种子并发批准/崩后重试只施加一次光谱影响；终结时操作结果与种子终态在同一事务提交。
 - **种子保留只碰终态**：`approved`/`rejected`/`expired`/`internalized` 才可回收，`pending`/`fermenting` 不得删（发酵中是在途工作，删了会连发酵输入一起丢）。
 - **槽位恢复**：重新启用 trait 时若其槽已被别的启用 trait 占用，**让出自己的槽号**（不挤走现占用者），避免撞 `cabinet_slot_no` 部分唯一索引。
@@ -384,11 +389,13 @@ cd /path/to/Maibot
 | 0D 判定 | 会话类型走宿主显式流列表（不猜 `session_id` 字符串）；判定不出时以更严格设置为准 | `utils/stream_kind.py`、`ideology_injector.py` |
 | 0D 盘点 | 双数据目录**只读**盘点 + 迁移预演 + 谱系观察（**不自动选源**） | `migration/inventory.py` |
 
-**方案里尚未落地**（明确列出，勿当成已完成）：
-1. **Replyer 侧分用途投递**——宿主有 `maisaka.replyer.before_model_request`，当前只在 planner 注入。落地前先定清 Replyer 具体看到什么，做错会变双重注入。
-2. **token 预算与截断规则显式配置**——现靠 `injection.max_traits` 限条数，无 token 估算。
-3. **作用域字段**——快照只记 session_id，未含平台/机器人身份。
-4. **任务监督器细粒度状态**——缺 waiting/backoff 与心跳/最后成功时间。
+**方案条目落地状态（第四轮返工后更新；本节旧表述「尚未落地」已全部作废）**：
+1. **Replyer 侧分用途投递**——**已落地**。`maisaka.replyer.before_model_request` 已接线；replyer 视图只给「与本轮相关的观点 + 表达倾向」，**不落快照、不打冷却**（快照锚点只能由 planner 落，否则同会话「多快照」歧义永远为真）；冷却按**轮**计，否则 planner 注入后 replyer 同轮永远选不中刚选中的观点。
+2. **token 预算与截断**——**已落地**：`utils/token_budget.py`。CJK 按 1 token/字**保守估算**，顺序即优先级，预算可配置。**没有真实分词器，这是估算不是精确值，不许当精确用量汇报**。
+3. **作用域字段**——**已落地（宿主零改动）**。快照记 `bot_identity`（宿主 `bot.qq_account`）+ `platform`。平台 = **配置声明**平台列表（`plugin.platforms`，默认 `["qq"]`）→ 按平台探测宿主流列表（SDK 的 `chat.get_*_streams` 吃 platform **入参**，不返回平台）→ 命中即归属，探不到**留空**。**禁止按 `session_id` 字符串猜平台**。
+4. **任务监督器五态**——**已落地**：`running` / `waiting` / `backoff` / `failed` / `stopped`；退避 5s→…→300s，另有 `last_success` / `heartbeat` / `next_retry_at`；五个真实循环在等待间隔打 `waiting`（否则该状态只是装饰）。
+
+**宿主零改动（用户硬约束）**：**不得修改宿主任何代码**。因此 T03 的精确并发绑定（planner ↔ replyer 的共同请求 id）**不可达，属已知限制而非待办**——已核实宿主 payload：planner hook 只有 `items / item_schema_version / tool_definitions / selected_history_count / built_message_count / selection_reason / session_id` 七项，两侧没有共同 id。插件侧穷尽为：replyer 重试按 `reply_message_id` **精确**复用 + 陈旧窗口内最旧未认领 + **窗口内 ≥2 条未认领即标 `pairing_ambiguous` 并阻断会改人格的自评反馈**。宁可不动，不许猜。
 
 **尚未做（YAGNI / 可选）**：完整 v3 candidates/runs/versions；宿主 H3 结构化 persona extension；冷却改分惩罚；自动静默占槽。
 
