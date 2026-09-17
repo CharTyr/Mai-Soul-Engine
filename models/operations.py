@@ -28,6 +28,8 @@ from ._conn import _dt_to_str, _get_conn, _str_to_dt
 from .seeds import TERMINAL_SEED_STATUSES
 
 __all__ = [
+    "list_recent_operations",
+    "list_running_operations",
     "DEFAULT_LEASE_SECONDS",
     "SeedOperation",
     "claim_seed_operation",
@@ -84,6 +86,32 @@ def get_seed_operation(operation_id: str) -> SeedOperation | None:
         (operation_id,),
     ).fetchone()
     return _row_to_operation(row) if row else None
+
+
+def list_running_operations(
+    limit: int = 10,
+    *,
+    operation_type: str = "internalize",
+) -> list[SeedOperation]:
+    """按入队顺序取仍在 ``running`` 的操作（队列消费入口，FIFO）。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM soul_seed_operations "
+        "WHERE status = ? AND operation_type = ? "
+        "ORDER BY created_at ASC, rowid ASC LIMIT ?",
+        (STATUS_RUNNING, operation_type, int(limit)),
+    ).fetchall()
+    return [_row_to_operation(r) for r in rows]
+
+
+def list_recent_operations(limit: int = 10) -> list[SeedOperation]:
+    """按时间倒序取最近的操作（供管理员查询状态）。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM soul_seed_operations ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()
+    return [_row_to_operation(r) for r in rows]
 
 
 def claim_seed_operation(

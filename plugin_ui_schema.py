@@ -315,6 +315,15 @@ class ThoughtCabinetConfig(PluginConfigBase):
         description="去重阈值",
         json_schema_extra=_ui("自动去重相似度阈值", "0–1，越高越保守、越少自动合并。", step=0.02),
     )
+    internalization_check_interval_seconds: int = Field(
+        default=15,
+        description="内化队列消费间隔（秒）",
+        json_schema_extra=_ui(
+            "内化队列间隔（秒）",
+            "后台执行排队内化的间隔。命令侧只入队并立即返回，实际内化在这里跑，"
+            "避免命令 RPC 超时（60s）与 LLM 调用（最长 120s）互相打架。",
+        ),
+    )
     seed_ttl_hours: float = Field(
         default=168.0,
         ge=0.0,

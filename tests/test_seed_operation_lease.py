@@ -218,6 +218,7 @@ def test_double_approve_internalizes_only_once(soul_db: Any) -> None:
 
     tc = _import_soul_submodule("components.thought_commands")
     seeds = _seeds()
+    ops = _import_soul_submodule("models.operations")
     _mk_seed(seeds, "seed_dup")
 
     mock_seed = {
@@ -257,5 +258,6 @@ def test_double_approve_internalizes_only_once(soul_db: Any) -> None:
         asyncio.run(tc.handle_seed_approve(plugin, "g", **_approve_kwargs()))
         asyncio.run(tc.handle_seed_approve(plugin, "g", **_approve_kwargs()))
 
-    assert engine.internalize_seed.await_count == 1, "重复批准不得重复内化"
-    assert seeds.get_thought_seed_by_id("seed_dup").status == "approved"
+    # 命令侧现在只入队，不再内联调用 LLM（超时问题见 internalization_queue）
+    assert engine.internalize_seed.await_count == 0, "命令内不得内联内化"
+    assert len(ops.list_running_operations(limit=10)) == 1, "同一颗种子只允许一条进行中的操作"

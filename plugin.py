@@ -74,6 +74,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         self._notion_sync_task: asyncio.Task | None = None
         self._self_reflection_task: asyncio.Task | None = None
         self._fermentation_task: asyncio.Task | None = None  # v2.4.0 发酵循环
+        # 内化队列消费者：命令只入队，实际内化在这里跑（避免命令 RPC 超时）
+        self._internalization_task: asyncio.Task | None = None
         # 问卷会话状态：{session_key: {current, answers, started_at}}
         self._questionnaire_sessions: dict[str, dict[str, Any]] = {}
         # P1 缓存：避免每条消息重建 WorldviewConfigView 和 WorldviewService
@@ -99,6 +101,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             "fermentation": master
             and bool(config.thought_cabinet.enabled)
             and bool(getattr(config.thought_cabinet, "fermentation_enabled", False)),
+            # 队列消费者：思维阁开着就需要（管理员批准后要靠它执行内化）
+            "internalization": master and bool(config.thought_cabinet.enabled),
         }
 
     @staticmethod
@@ -130,6 +134,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             ("notion", "_notion_sync_task", "_notion_sync_loop"),
             ("reflection", "_self_reflection_task", "_self_reflection_loop"),
             ("fermentation", "_fermentation_task", "_fermentation_loop"),
+            ("internalization", "_internalization_task", "_internalization_loop"),
         ]
 
         for key, attr_name, loop_attr in task_entries:
@@ -296,6 +301,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             "_notion_sync_task",
             "_self_reflection_task",
             "_fermentation_task",
+            "_internalization_task",
         ):
             await _step(f"取消 {attr_name}", lambda a=attr_name: _cancel_task(a))
 
@@ -365,6 +371,35 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.reflection_evaluator import run_reflection_loop
 
         await run_reflection_loop(self)
+
+    async def _internalization_loop(self) -> None:
+        """内化队列消费者 — 按间隔执行排队中的内化操作。"""
+        from .thought.internalization_queue import run_queue_once
+
+        interval = 15.0
+        try:
+            interval = max(
+                5.0,
+                float(getattr(self.config.thought_cabinet, "internalization_check_interval_seconds", 15)),
+            )
+        except (AttributeError, TypeError, ValueError):
+            pass
+        logger.info("[Mai-Soul-Engine] 内化队列消费者已启动，间隔 %.0f 秒", interval)
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                stats = await run_queue_once(self)
+                if stats["done"] or stats["retry"]:
+                    logger.info(
+                        "[Mai-Soul-Engine] 内化队列: 完成 %s / 待重试 %s / 跳过 %s",
+                        stats["done"], stats["retry"], stats["skipped"],
+                    )
+            except asyncio.CancelledError:
+                logger.info("[Mai-Soul-Engine] 内化队列消费者已停止")
+                raise
+            except Exception:
+                logger.exception("[Mai-Soul-Engine] 内化队列消费异常，下轮重试")
 
     async def _fermentation_loop(self) -> None:
         """v2.4.0 发酵循环 — 委托到 fermentation_engine 模块。"""
@@ -461,6 +496,17 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         from .components.thought_commands import handle_seeds_list
 
         return await handle_seeds_list(self, stream_id, **kwargs)
+
+    @Command(
+        "soul_op",
+        description="查看内化队列/操作状态（管理员）",
+        pattern=r"^/soul_op(?:\s+([\w-]{8,}))?\s*$",
+    )
+    async def cmd_soul_op(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """查看内化操作状态。"""
+        from .components.thought_commands import handle_op_status
+
+        return await handle_op_status(self, stream_id, **kwargs)
 
     @Command("soul_seed", description="查看单个思维种子详情（管理员）", pattern=r"^/soul_seed\s+([\w-]{8,})\s*$")
     async def cmd_soul_seed(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:

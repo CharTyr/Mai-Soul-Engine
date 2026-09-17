@@ -60,14 +60,20 @@ def test_all_disabled() -> None:
     fn = _get_compute()
     cfg = _build_config()
     result = fn(cfg)
-    assert result == {"evolution": False, "notion": False, "reflection": False, "fermentation": False}
+    assert result == {
+        "evolution": False,
+        "notion": False,
+        "reflection": False,
+        "fermentation": False,
+        "internalization": False,
+    }
 
 
 # ─── 全开 ──────────────────────────────────────────────────
 
 
 def test_all_enabled() -> None:
-    """所有子开关开启 + plugin.enabled=True → 四个 desired 全 true。"""
+    """所有子开关开启 + plugin.enabled=True → 各 desired 全 true（含内化队列）。"""
     fn = _get_compute()
     cfg = _build_config(
         plugin={"enabled": True},
@@ -77,7 +83,14 @@ def test_all_enabled() -> None:
         thought_cabinet={"enabled": True, "fermentation_enabled": True},
     )
     result = fn(cfg)
-    assert result == {"evolution": True, "notion": True, "reflection": True, "fermentation": True}
+    assert result == {
+        "evolution": True,
+        "notion": True,
+        "reflection": True,
+        "fermentation": True,
+        # 内化队列消费者随思维阁启停（批准后要靠它执行内化）
+        "internalization": True,
+    }
 
 
 # ─── 总开关 ────────────────────────────────────────────────
@@ -94,7 +107,13 @@ def test_plugin_disabled_kills_all() -> None:
         thought_cabinet={"enabled": True, "fermentation_enabled": True},
     )
     result = fn(cfg)
-    assert result == {"evolution": False, "notion": False, "reflection": False, "fermentation": False}
+    assert result == {
+        "evolution": False,
+        "notion": False,
+        "reflection": False,
+        "fermentation": False,
+        "internalization": False,
+    }
 
 
 # ─── 逐个独立开关 ──────────────────────────────────────────

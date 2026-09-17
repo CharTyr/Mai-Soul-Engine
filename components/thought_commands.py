@@ -131,7 +131,6 @@ async def handle_seed_detail(plugin: Any, stream_id: str, **kwargs: Any) -> tupl
 async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
     """批准思维种子内化（管理员）。"""
     from ..thought.seed_manager import ThoughtSeedManager
-    from ..thought.internalization_engine import InternalizationEngine
     from ..utils.spectrum_utils import check_admin_permission
 
     ok, err = check_admin_permission(plugin, kwargs, "审核思维种子")
@@ -193,89 +192,28 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
             await plugin.ctx.send.text(msg, stream_id)
             return True, msg, True
 
-    # 旧行为：立即内化（fermentation_enabled=false）
-    # 先认领操作租约：并发批准 / 崩后重试时同一颗种子只能有一个内化在跑，
-    # 且结果只落一次（否则光谱影响会被施加两遍）。
-    from ..models.operations import (
-        claim_seed_operation,
-        finish_seed_operation,
-        release_seed_operation,
-    )
+    # 旧行为：命令里直接调 LLM 内化——但插件给 LLM 的超时是 120s，
+    # 宿主给命令的 RPC 超时是 60s，慢一点就会出现"命令报超时、内化其实已成功"。
+    # 现在改成：命令只认领并把操作放进队列，立刻回 operation_id，后台按预算执行。
+    from ..thought.internalization_queue import enqueue_internalization
 
-    operation_id = claim_seed_operation(seed_id)
+    operation_id = await enqueue_internalization(plugin, seed_id)
     if not operation_id:
         msg = (
-            f"⏳ 种子 {seed_id} 正在处理中（或已内化过），本次跳过。\n"
-            f"若上一次进程中断，租约到期后可重试。"
+            f"⏳ 种子 {seed_id} 已有进行中的内化操作（或已内化过），本次跳过。\n"
+            f"用 /soul_op 查看最近操作；若上一次进程中断，租约到期后可重试。"
         )
         await plugin.ctx.send.text(msg, stream_id)
         return True, msg, True
 
-    engine = InternalizationEngine(plugin)
-    dedup_cfg = {
-        "enabled": bool(plugin.config.thought_cabinet.auto_dedup_enabled),
-        "threshold": float(plugin.config.thought_cabinet.auto_dedup_threshold),
-    }
-    try:
-        result = await engine.internalize_seed(seed, dedup=dedup_cfg)
-    except Exception as exc:  # noqa: BLE001 — 内化异常必须释放租约，否则种子卡死
-        release_seed_operation(operation_id, error=f"{type(exc).__name__}: {exc}")
-        logger.exception("种子 %s 内化异常", seed_id)
-        msg = f"❌ 种子 {seed_id} 内化失败，已释放租约可重试"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
-
-    if not result.get("success"):
-        release_seed_operation(operation_id, error=str(result.get("error") or "内化未成功"))
-
-    if result["success"]:
-        # 操作结果 + 种子终态同事务提交（重复终结幂等返回 False）
-        finish_seed_operation(
-            operation_id,
-            seed_status="approved",
-            result_json=_json.dumps(
-                {
-                    "trait_id": result.get("trait_id", ""),
-                    "merged": bool(result.get("merged", False)),
-                },
-                ensure_ascii=False,
-            ),
-        )
-        impact = result["spectrum_impact"]
-        impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
-        trait_id = result.get("trait_id", "")
-        merged = bool(result.get("merged", False))
-        similarity = result.get("dedup_similarity", None)
-        trait_line = f"\ntrait_id: {trait_id}" if trait_id else ""
-        if merged:
-            sim_text = ""
-            try:
-                if similarity is not None:
-                    sim_text = f" (similarity={float(similarity):.2f})"
-            except (TypeError, ValueError):
-                sim_text = ""
-            trait_line = f"\ntrait_id: {trait_id}（已合并）{sim_text}"
-        msg = (
-            f"✅ 种子 {seed_id} 已批准内化{trait_line}\n\n"
-            f"固化观点: {result['thought'][:100]}...\n\n"
-            f"光谱影响: {impact_str or '无'}"
-        )
-        # P1.1: 建议入槽（非 merged 且有 trait_id 时）
-        if trait_id and not merged:
-            from ..models.traits import query_crystallized_traits
-            _all_t = query_crystallized_traits(deleted=False, enabled=True, limit=200)
-            used = {t.cabinet_slot_no for t in _all_t if t.cabinet_slot_no is not None}
-            free = [i for i in range(1, 13) if i not in used]
-            if free:
-                msg += f"\n\n建议：/soul_slot {trait_id} {free[0]}  将观点放入思维阁槽位（推荐空槽 {free[0]}）"
-            else:
-                msg += f"\n\n12 槽已满，可用 /soul_slot {trait_id} <1-12> 替换已有"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
-    else:
-        msg = f"❌ 种子 {seed_id} 内化失败: {result['error']}"
-        await plugin.ctx.send.text(msg, stream_id)
-        return True, msg, True
+    msg = (
+        f"🧾 种子 {seed_id} 已进入内化队列\n"
+        f"operation_id: {operation_id}\n\n"
+        f"内化在后台执行（通常几十秒），完成后会通知你。\n"
+        f"用 /soul_op {operation_id} 查看状态。"
+    )
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
 
 
 # ===== 种子拒绝 =====
@@ -999,5 +937,63 @@ async def handle_promote_global(plugin: Any, stream_id: str, **kwargs: Any) -> t
         msg = f"✅ trait {trait_id}（{trait.name}）已提升为全局作用域\n来源群 {stream_raw} 已记录为 origin_stream_id"
     else:
         msg = f"❌ 提升失败（trait 不存在或已删除）"
+    await plugin.ctx.send.text(msg, stream_id)
+    return True, msg, True
+
+
+# ===== 内化操作状态查询 =====
+
+
+async def handle_op_status(plugin: Any, stream_id: str, **kwargs: Any) -> tuple[bool, str, bool]:
+    """查看内化队列/操作状态（管理员，只读）。
+
+    命令侧只入队并立即返回，所以需要一个入口回答"我批准的那颗种子到底怎么样了"。
+    """
+    from ..models.operations import get_seed_operation, list_recent_operations
+    from ..utils.spectrum_utils import check_admin_permission, extract_command_text
+
+    ok, err = check_admin_permission(plugin, kwargs, "查看内化操作")
+    if not ok:
+        await plugin.ctx.send.text(err, stream_id)
+        return True, err, True
+
+    text = extract_command_text(kwargs)
+    tokens = text.split()
+    op_id = tokens[1] if len(tokens) > 1 else ""
+
+    if op_id:
+        record = get_seed_operation(op_id)
+        if record is None:
+            msg = f"未找到操作 {op_id}"
+            await plugin.ctx.send.text(msg, stream_id)
+            return True, msg, True
+        lines = [
+            f"操作 {record.operation_id}",
+            f"种子: {record.seed_id}",
+            f"状态: {record.status}",
+            f"尝试: {record.attempt}",
+        ]
+        if record.lease_expires_at:
+            lines.append(f"租约到期: {record.lease_expires_at}")
+        if record.result_json:
+            lines.append(f"结果: {record.result_json[:200]}")
+        if record.error:
+            lines.append(f"错误: {record.error[:200]}")
+        msg = "\n".join(lines)
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    records = list_recent_operations(limit=10)
+    if not records:
+        msg = "最近没有内化操作记录"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    lines = ["最近内化操作（新→旧）："]
+    for r in records:
+        lines.append(f"• {r.operation_id}  {r.seed_id}  {r.status}  尝试{r.attempt}")
+    lines.append("")
+    lines.append("用 /soul_op <operation_id> 查看单条详情。")
+    msg = "\n".join(lines)
     await plugin.ctx.send.text(msg, stream_id)
     return True, msg, True

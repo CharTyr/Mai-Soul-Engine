@@ -22,7 +22,13 @@ __all__ = [
 ]
 
 # 与 plugin.py 的 task_entries 对齐
-TASK_NAMES: tuple[str, ...] = ("evolution", "notion", "reflection", "fermentation")
+TASK_NAMES: tuple[str, ...] = (
+    "evolution",
+    "notion",
+    "reflection",
+    "fermentation",
+    "internalization",
+)
 
 STATUS_STOPPED = "stopped"
 STATUS_RUNNING = "running"
