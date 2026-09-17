@@ -195,10 +195,12 @@ class InternalizationEngine:
             conn.execute("BEGIN")
             try:
                 # 只应用已校验的 delta（候选校验已挡住非数字/越界，这里不会再抛 ValueError）
+                trait_scope, origin_scope = self._trait_scope_for_seed(seed_info)
                 spectrum_impact = await self._apply_spectrum_impact(
                     candidate.spectrum_deltas,
                     is_fermented=is_fermented,
                     commit=False,
+                    scope_id=trait_scope,
                 )
                 logger.debug(f"光谱影响已应用（暂未提交）: {spectrum_impact}")
 
@@ -351,11 +353,20 @@ class InternalizationEngine:
         return GLOBAL_STREAM, origin
 
     async def _apply_spectrum_impact(
-        self, impact: Mapping[str, Any], is_fermented: bool = False, commit: bool = True,
+        self,
+        impact: Mapping[str, Any],
+        is_fermented: bool = False,
+        commit: bool = True,
+        scope_id: str = "global",
     ) -> dict:
+        """把光谱影响写到目标作用域。
+
+        ``scope_id`` 与新建 trait 的作用域保持一致——否则会出现
+        「观点写进了 A 群，光谱却改了全局」的错位（局部优先承诺的隔离就破了）。
+        """
         from ..models.ideology_model import apply_spectrum_deltas, get_or_create_spectrum
 
-        spectrum = get_or_create_spectrum("global")
+        spectrum = get_or_create_spectrum(scope_id)
 
         old_values = {
             "sincerity": spectrum.sincerity,
@@ -379,6 +390,7 @@ class InternalizationEngine:
             group_id="",
             reason="发酵后 trait 内化光谱影响" if is_fermented else "trait 内化光谱影响",
             commit=commit,
+            scope_id=scope_id,
         )
 
         logger.debug(f"应用光谱影响后: {applied}")
@@ -409,10 +421,15 @@ class InternalizationEngine:
             dedup_threshold = 0.78
         dedup_threshold = max(0.0, min(1.0, dedup_threshold))
 
+        # 先定作用域：新建 trait 写哪儿，关系判定就只能在**同一作用域**里找对手。
+        # 否则局部证据会改到全局观点（局部优先承诺的隔离就破了）。
+        target_scope, _origin_scope = self._trait_scope_for_seed(seed_info)
+
         relation_result: dict | None = None
         if dedup_enabled:
             relation_result = await self._classify_trait_relation(
                 stream_id=seed_info.get("stream_id", "") or "",
+                target_scope=target_scope,
                 new_name=seed_info.get("type", "trait"),
                 new_question=seed_info.get("question", "") or "",
                 new_thought=result.get("thought", "") or "",
@@ -550,6 +567,7 @@ class InternalizationEngine:
         new_thought: str,
         new_tags: list[str],
         threshold: float,
+        target_scope: str = "",
     ) -> dict | None:
         import json
         import difflib
@@ -560,12 +578,19 @@ class InternalizationEngine:
         if not new_thought.strip():
             return None
 
+        from ..worldview.constants import GLOBAL_STREAM
+
         # 候选集包含本群 trait + 全局 trait（query_active_traits_for_injection 已按
         # stream_id OR GLOBAL_STREAM 匹配且过滤 enabled），确保新 trait 能与全局观点比对矛盾
         candidates = query_active_traits_for_injection(
             stream_id=stream_id,
             limit=40,
         )
+        # 局部优先隔离：目标是局部作用域时，候选**只能**是本作用域的 trait。
+        # 全局观点可以被读到，但本群证据不得强化/禁用/改写它——
+        # 要动全局，走显式的 /soul_promote_global 接纳流程。
+        if target_scope and target_scope != GLOBAL_STREAM:
+            candidates = [c for c in candidates if (c.stream_id or "") == target_scope]
         if not candidates:
             return None
 

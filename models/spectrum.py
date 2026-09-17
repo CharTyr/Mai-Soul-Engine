@@ -146,6 +146,7 @@ def apply_spectrum_deltas(
     reason: str = "",
     write_history: bool = True,
     commit: bool = True,
+    scope_id: str = "global",
 ) -> dict[str, int]:
     """统一光谱写入闸门 — 所有改人设数值的路径都经此（ora-2 三回路瘦身高优先级建议）。
 
@@ -163,6 +164,8 @@ def apply_spectrum_deltas(
         resistance: 反向变动阻力系数，0=不阻力（回路2/3）。
         max_per_axis: 单轴 delta 绝对值上限（clamp）。
         group_id: 演化历史 group_id（回路1 传 stream_id；回路3 传 "global"；回路2 留空）。
+        scope_id: **写入哪个作用域的光谱**（默认 global）。局部优先演化时传来源群，
+            否则会出现「观点写进本群、光谱却改了全局」的错位。
         reason: 附加到 history reason 的说明。
         write_history: 是否写 soul_evolution_history（默认 True；回路2 经此获得可观测性）。
         commit: 是否立即提交。``internalize_seed`` 等的原子化路径传 ``commit=False``（由外层事务统一 commit/rollback）。
@@ -173,7 +176,7 @@ def apply_spectrum_deltas(
     from ..utils.spectrum_utils import apply_resistance, smooth_delta, update_spectrum_value
     from .history import create_evolution_history
 
-    spectrum = get_or_create_spectrum("global")
+    spectrum = get_or_create_spectrum(scope_id)
     now = datetime.now()
     applied: dict[str, int] = {}
     new_dirs: dict[str, int] = {}

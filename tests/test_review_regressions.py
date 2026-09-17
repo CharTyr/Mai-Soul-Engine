@@ -232,7 +232,7 @@ async def test_observe_mode_evolution_does_not_write_personality(db):
 @pytest.mark.asyncio
 async def test_finish_failure_reports_failure_and_never_double_applies(db):
     """操作终结失败：不得报 done，且重试后人格影响只能有一次。"""
-    p = make_plugin("apply")
+    p = make_plugin("apply", worldview__local_first_evolution=False)
     make_seed()
     await q.enqueue_internalization(p, "seed_test0001")
 
@@ -260,7 +260,7 @@ async def test_finish_failure_reports_failure_and_never_double_applies(db):
 @pytest.mark.asyncio
 async def test_queue_must_not_steal_fermentation_lease(db):
     """队列不得撤销正在发酵的执行租约（否则发酵完成后会重复内化）。"""
-    p = make_plugin("apply", thought_cabinet__fermentation_enabled=True)
+    p = make_plugin("apply", worldview__local_first_evolution=False, thought_cabinet__fermentation_enabled=True)
     s = make_seed(ferment=True)
 
     entered, proceed = asyncio.Event(), asyncio.Event()
@@ -291,7 +291,7 @@ async def test_queue_must_not_steal_fermentation_lease(db):
 @pytest.mark.asyncio
 async def test_expired_lease_owner_cannot_commit_after_takeover(db):
     """执行租约被接管后，旧执行者不得提交。"""
-    p = make_plugin("apply")
+    p = make_plugin("apply", worldview__local_first_evolution=False)
     make_seed()
     await q.enqueue_internalization(p, "seed_test0001")
     c = connmod._get_conn()
@@ -323,7 +323,7 @@ async def test_expired_lease_owner_cannot_commit_after_takeover(db):
 @pytest.mark.asyncio
 async def test_reject_during_inflight_is_not_overwritten(db):
     """管理员在途拒绝的种子，完成逻辑不得改回 approved，也不得写人格。"""
-    p = make_plugin("apply")
+    p = make_plugin("apply", worldview__local_first_evolution=False)
     make_seed()
     await q.enqueue_internalization(p, "seed_test0001")
 
