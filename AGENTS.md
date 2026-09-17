@@ -91,7 +91,7 @@ trait 有 `lifecycle_state`，6 个状态现全部有写入路径：
 | `components/status_command.py` | P1 扩展（切片偏移、情绪、层计数） |
 | `plugin_ui_schema.py` | `WorldviewConfig` 段；`CONFIG_VERSION = "2.5.0"` |
 | `plugin.py` | 生命周期 `_compute_desired_tasks` + `_reconcile_background_tasks`；`soul.get_worldview` API；`soul.get_traits` 返回 layer/lifecycle；@API 双层访问控制（`public=False` + `api.enabled`）+ `api_set_spectrum` 审计 |
-| `tests/` | 插件内测试见下方「开发与验证」（约 220 项） |
+| `tests/` | 插件内测试见下方「开发与验证」（数字以那里为准） |
 
 ## 思维阁（v2.4.0 发酵重构，关键）
 
