@@ -123,20 +123,32 @@ def resolve_and_prepare_data_dir(plugin: Any) -> dict[str, Any]:
     if target_data.resolve() == legacy_data.resolve():
         return result
 
-    # 目标已有 soul.db → 直接用，不覆盖
+    # 目标已有 soul.db → 不覆盖数据库，但仍要补齐缺失的附属文件。
+    # 旧实现在此直接 return，导致 soul.db 先迁走、audit.jsonl 等留在旧目录，
+    # 而审计日志随后仍指向旧目录，形成"库在新、日志在旧"的混合状态。
     if (target_data / "soul.db").exists():
         logger.info(
             "[data_dir] 目标目录已有 soul.db，直接使用: %s (source=%s)",
             target_data, source,
         )
+        if legacy_data.is_dir():
+            try:
+                _copy_auxiliary_files(legacy_data, target_data, skip_existing=True)
+            except OSError as exc:
+                logger.warning("[data_dir] 补齐附属文件失败: %s", exc)
         return result
 
-    # legacy 无 soul.db → 无需迁移
+    # legacy 无 soul.db → 无需迁移数据库，但仍补齐附属文件（如 audit.jsonl）
     if not (legacy_data / "soul.db").exists():
         logger.info(
             "[data_dir] 无旧 soul.db，直接使用: %s (source=%s)",
             target_data, source,
         )
+        if legacy_data.is_dir():
+            try:
+                _copy_auxiliary_files(legacy_data, target_data, skip_existing=True)
+            except OSError as exc:
+                logger.warning("[data_dir] 补齐附属文件失败: %s", exc)
         return result
 
     # 执行迁移
@@ -246,10 +258,16 @@ def _verify_sqlite_integrity(db_path: Path) -> None:
         conn.close()
 
 
-def _copy_auxiliary_files(src: Path, dst: Path, *, exclude_wal: bool = True) -> None:
+def _copy_auxiliary_files(
+    src: Path, dst: Path, *, exclude_wal: bool = True, skip_existing: bool = False
+) -> None:
     """拷贝 soul.db 外的附属文件（audit.jsonl, injections.jsonl, migration_state.json）。
 
     跳过 -wal, -shm 等 WAL 附属文件（backup 已固化）。
+
+    Args:
+        skip_existing: 为 True 时不覆盖目标已存在的同名文件。目标目录已有 soul.db
+            时用它补齐缺失的附属文件，避免用旧副本盖掉新数据。
     """
     WAL_SUFFIXES = frozenset({"-wal", "-shm"})
     for f in src.iterdir():
@@ -262,6 +280,8 @@ def _copy_auxiliary_files(src: Path, dst: Path, *, exclude_wal: bool = True) -> 
             continue
         # 跳过 migration_marker.json（我们在最后写）
         if f.name == "migration_marker.json":
+            continue
+        if skip_existing and (dst / f.name).exists():
             continue
         try:
             shutil.copy2(str(f), str(dst / f.name))

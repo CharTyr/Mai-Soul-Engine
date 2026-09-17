@@ -180,8 +180,8 @@ _INJECTION_LOG_MAX_SIZE_MB: int = 5
 INJECTION_LOG_MAX_BYTES: int = _INJECTION_LOG_MAX_SIZE_MB * 1024 * 1024
 
 
-async def _record_injection(entry: dict, plugin_dir: Path) -> None:
-    """记录注入日志到 data/injections.jsonl（采样 + 自动轮转）。"""
+async def _record_injection(entry: dict, data_dir: Path) -> None:
+    """记录注入日志到 <data_dir>/injections.jsonl（采样 + 自动轮转）。"""
     global _injection_log_counter
 
     # 采样：每 INJECTION_LOG_EVERY 条写一次
@@ -189,7 +189,7 @@ async def _record_injection(entry: dict, plugin_dir: Path) -> None:
     if _injection_log_counter % INJECTION_LOG_EVERY != 0:
         return
 
-    file_path = plugin_dir / "data" / "injections.jsonl"
+    file_path = data_dir / "injections.jsonl"
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     async with _injection_log_lock:
@@ -621,7 +621,9 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     session_id: str = kwargs.get("session_id", "") or ""
     stream_id = session_id
     is_private = ":private" in stream_id or "private" in stream_id.lower()
-    plugin_dir: Path = plugin._plugin_dir
+    # 日志统一写到已解析的数据目录（宿主统一目录或 plugin_dir/data），
+    # 不要再拼 _plugin_dir/「data」——那会把日志写回旧式源码目录。
+    data_dir: Path = plugin._data_dir
 
     # 配置字段均来自 pydantic model，直接属性访问
     scope = plugin.config.injection.scope.strip().lower()
@@ -633,13 +635,13 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     # ── 2. 私聊/群聊范围检查 ───────────────────────────────────────
     if is_private and not inject_private:
         return await _skip_and_log(
-            plugin_dir, "private injection disabled",
+            data_dir, "private injection disabled",
         )
 
     if not is_private:
         skip_reason = _check_group_scope(plugin, stream_id, scope)
         if skip_reason is not None:
-            return await _skip_and_log(plugin_dir, skip_reason)
+            return await _skip_and_log(data_dir, skip_reason)
 
     # ── 3. 获取光谱并构建提示词 ─────────────────────────────────────
     spectrum = get_or_create_spectrum("global")
@@ -764,7 +766,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
                 "policy": "disabled",
                 "prompt_version": "v2.4.0",
             },
-            plugin_dir=plugin_dir,
+            data_dir=data_dir,
         )
         return {"success": True, "action": "continue"}
 
@@ -781,7 +783,7 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
             "cooldown_skipped": cooldown_skipped[:20],
             "prompt_version": "v2.4.0",
         },
-        plugin_dir=plugin_dir,
+        data_dir=data_dir,
     )
     if selected:
         await _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)
@@ -821,7 +823,7 @@ def _check_group_scope(plugin, stream_id: str, scope: str) -> str | None:
     return None
 
 
-async def _skip_and_log(plugin_dir: Path, reason: str) -> dict:
+async def _skip_and_log(data_dir: Path, reason: str) -> dict:
     """跳过并记录采样跳过日志。"""
     await _record_injection(
         {
@@ -831,6 +833,6 @@ async def _skip_and_log(plugin_dir: Path, reason: str) -> dict:
             "policy": "disabled",
             "prompt_version": "v2.4.0",
         },
-        plugin_dir=plugin_dir,
+        data_dir=data_dir,
     )
     return {"success": True, "action": "continue"}

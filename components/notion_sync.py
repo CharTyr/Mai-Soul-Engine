@@ -28,7 +28,7 @@ async def run_notion_sync_loop(plugin) -> None:
     Args:
         plugin: MaiSoulEnginePlugin 实例。
     """
-    plugin_dir: Path = plugin._plugin_dir
+    data_dir: Path = plugin._data_dir
     first_run = True
 
     while True:
@@ -42,7 +42,7 @@ async def run_notion_sync_loop(plugin) -> None:
                 await asyncio.sleep(cfg.first_delay_seconds)
             first_run = False
 
-            res = await asyncio.to_thread(sync_notion_frontend, plugin_dir=plugin_dir, cfg=cfg)
+            res = await asyncio.to_thread(sync_notion_frontend, data_dir=data_dir, cfg=cfg)
             logger.debug("[Mai-Soul-Engine] Notion 同步结果: %s", res)
 
             await asyncio.sleep(cfg.sync_interval_seconds)
