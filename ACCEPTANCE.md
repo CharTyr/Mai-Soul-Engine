@@ -93,6 +93,7 @@ enabled = true      # 旧字段，保留兼容
 | T13 模式闸门 | off/observe 不注入、不接纳、不改人格；旧配置不隐式 apply | `tests/test_runtime_mode.py`、`tests/test_mode_gate_commands.py` |
 | T14 任务监督与故障恢复 | 崩溃可发现（不再只看 `is not None`）、自动重启、超限转 failed 并提示人工介入；稳定运行后的偶发崩溃不累积（1h 窗口） | `tests/test_task_supervisor.py` |
 | 长操作队列 | 命令只入队并立刻回 `operation_id`，后台按预算执行；`/soul_op` 查状态；失败释放租约可重试；完成时操作结果与种子终态同事务提交 | `tests/test_internalization_queue.py` |
+| 会话类型判定 | 用宿主显式流列表接口（`chat.get_group_streams` / `get_private_streams`）判定 group/private/unknown，**不猜 session_id 字符串**；判定不出时以更严格的设置为准 | `tests/test_stream_kind.py` |
 | T15 命令鉴权与确认 | 真实载荷下 `/soul_reset confirm` 走执行分支；只读命令在 observe 下不受阻 | `tests/test_command_input.py`、`tests/test_mode_gate_commands.py` |
 | T16 迁移与多库 | 只读盘点 + 不自动选源 + 风险告警 + 谱系观察；已在真实双库上跑通 | `tests/test_migration_inventory.py`、`migration/inventory.py` |
 | T17 legacy 隔离 | — | **未实现** |
@@ -130,6 +131,17 @@ enabled = true      # 旧字段，保留兼容
   仍按 `session_id` 字面量推断（已在代码标注为设计债，需宿主提供显式元数据）。
 - **`final_request_verified`**：宿主未提供请求后回调，插件侧只能确认「已交回宿主」
   （`hook_applied`），无法自我声明最终请求已包含注入。
+- **方案里尚未落地的条目**（明确列出，避免被当成已完成）：
+  1. **Replyer 侧分用途投递**：方案 §4.1 要求 Planner 与 Replyer 分别收到不同视图
+     （Planner 收立场/边界，Replyer 收观点与表达倾向）。宿主确实提供
+     `maisaka.replyer.before_model_request` hook，但当前插件只在 planner 注入。
+     落地前要先定清「Replyer 具体看到什么」——做错会变成双重注入。
+  2. **token 预算与截断规则显式配置**：方案 §4.1 要求按预算截断并显式配置；
+     目前靠 `injection.max_traits` 限条数，没有 token 估算。
+  3. **作用域字段**：方案 §2.2 要求作用域至少含平台、机器人身份、宿主 session_id；
+     当前快照只记 session_id。
+  4. **任务监督器细粒度状态**：方案 §5 要求 running/waiting/backoff/failed/stopped
+     与最后成功时间、心跳；当前有 running/restarting/failed/stopped。
 - **快照配对的残余风险**：已核对宿主源码，`planner.before_request` 与
   `replyer.after_response` 的 payload **没有任何共同请求 id**，配对只能是启发式
   （FIFO + 同 reply 复用 + 30 分钟陈旧窗口）。若某一轮生成失败且另一轮并发响应，
@@ -150,6 +162,11 @@ enabled = true      # 旧字段，保留兼容
   下次启动重跑或跳过迁移。改为每块成功后跟进 `current`，并加增量升级路径测试。
 - **盘点工具表名写成 `soul_spectrum`** —— 真实表是 `soul_ideology_spectrum`，读不到却
   静默显示「—」。已修正并加「表名单必须与实际 schema 一致」的测试。
+- **会话类型按 `session_id` 含 "private" 字样推断** —— 宿主改 id 编码即静默失效，
+  而 `inject_private=False` 正是靠它兜底。改用宿主显式流列表接口判定；判定不出时不猜。
+- **`/soul_approve` 在命令里内联调 LLM（最长 120s），而命令 RPC 超时 60s** ——
+  命令报超时/失败，但内化其实已成功写入，管理员认知与实际相反。改为持久操作队列：
+  命令只入队立即返回，后台按预算执行，`/soul_op` 查状态。
 
 ---
 
