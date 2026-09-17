@@ -44,6 +44,34 @@ def _rotate_if_needed(path: Path) -> None:
         path.rename(rotated)
 
 
+def tail_events(limit: int = 50) -> list[dict]:
+    """读审计日志最后 N 条（同步、只读）。
+
+    给看板判定「取证失败 / LLM 失败」用——没有这个，看板只能把它们和
+    「本来就没数据」显示成同一种空态（T19 明确禁止）。
+    文件不存在/读失败一律返回空列表：看板不能因为读日志失败而崩。
+    """
+    path = _audit_file
+    if not path or not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in lines[-max(1, int(limit)):]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
+
+
 async def log_audit_event(event_type: str, **fields: Any) -> None:
     """写入一条结构化审计事件。"""
     if not _audit_enabled:

@@ -921,6 +921,23 @@ def build_dashboard_text(data: dict) -> str:
     )
     lines.extend(["", "【功能开关】", f"  {flag_s}"])
 
+    # T19：八种状态分别标注——「关着 / 没数据 / 出错了 / 无法验证」不能长得一样
+    health = data.get("health_states")
+    if isinstance(health, list) and health:
+        _mark = {
+            "ok": "✓", "disabled": "○", "not_initialized": "○",
+            "empty": "∅", "failed": "✗", "unverified": "?", "stopped": "■",
+        }
+        lines.extend(["", "【状态细分】"])
+        for item in health:
+            if not isinstance(item, dict):
+                continue
+            state = str(item.get("state", ""))
+            mark = _mark.get(state, "·")
+            detail = str(item.get("detail", "") or "").strip()
+            suffix = f"（{detail}）" if detail else ""
+            lines.append(f"  {mark} {_dash_or(item.get('label'))}{suffix}")
+
     return "\n".join(lines)
 
 
