@@ -77,7 +77,9 @@ class WorldviewService:
             out[dim] = max(-cap, min(cap, val))
         return out
 
-    def record_local_slice(self, stream_id: str, deltas: dict[str, int], message_count: int) -> None:
+    def record_local_slice(
+        self, stream_id: str, deltas: dict[str, int], message_count: int, *, commit: bool = True
+    ) -> None:
         """记录群聊对全局光谱的局部偏移（P1-d），不写用户画像。"""
         if not self.cfg.p1_enabled or not stream_id:
             return
@@ -90,6 +92,7 @@ class WorldviewService:
             engagement_offset=local["engagement"],
             closeness_offset=local["closeness"],
             directness_offset=local["directness"],
+            commit=commit,
             sample_count=message_count,
         )
 
@@ -117,14 +120,16 @@ class WorldviewService:
             mood.arousal = mood.arousal // 2
             mood.energy = mood.energy // 2
             mood.updated_at = datetime.now()
-            im.save_mood(mood)
+            im.save_mood(mood, commit=commit)
         return mood
 
-    def nudge_mood_from_deltas(self, deltas: dict[str, int]) -> None:
+    def nudge_mood_from_deltas(self, deltas: dict[str, int], *, commit: bool = True) -> None:
         """由演化结果轻微调整短期情绪，不写入长期三观表。"""
         if not self.cfg.p1_enabled or not self.cfg.mood_enabled:
             return
-        mood = im.get_or_create_mood("global")
+        # commit 必须透传：情绪建行时的内部 commit 会**悄悄结束外层批次事务**，
+        # 让整批回滚失效（这正是「游标写失败仍重复施加光谱」的机制）
+        mood = im.get_or_create_mood("global", commit=commit)
         total = sum(int(deltas.get(d, 0) or 0) for d in SPECTRUM_DIM_TO_LAYER)
         if total > 0:
             mood.valence = min(2, mood.valence + 1)
@@ -133,7 +138,7 @@ class WorldviewService:
             mood.valence = max(-2, mood.valence - 1)
             mood.energy = max(-2, mood.energy - 1)
         mood.updated_at = datetime.now()
-        im.save_mood(mood)
+        im.save_mood(mood, commit=commit)
 
     def mood_prompt_lines(self) -> list[str]:
         if not self.cfg.p1_enabled or not self.cfg.mood_enabled or not self.cfg.mood_inject:

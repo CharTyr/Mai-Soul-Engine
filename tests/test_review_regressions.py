@@ -114,7 +114,14 @@ def state() -> dict:
 
 @contextlib.contextmanager
 def evolution_patched(plugin):
-    """演化路径的宿主桩（消息、群流、LLM、日志）。"""
+    """演化路径的宿主桩（消息、群流、LLM、日志）。
+
+    `get_by_time_in_chat` **尊重时间窗**（真实宿主就是这样）：游标推进后
+    同一批消息不会再被返回——否则测出来的「重复分析」是 mock 的假象。
+    """
+    import time as _time
+
+    msg_time = _time.time() - 30
     msgs = [
         {
             "message_id": f"m{i}",
@@ -124,7 +131,15 @@ def evolution_patched(plugin):
         }
         for i in range(5)
     ]
-    plugin.ctx.message = NS(get_by_time_in_chat=AsyncMock(return_value=msgs))
+
+    async def _windowed(*, chat_id="", start_time="", end_time="", **kw):
+        try:
+            since = float(start_time)
+        except (TypeError, ValueError):
+            since = 0.0
+        return msgs if since < msg_time else []
+
+    plugin.ctx.message = NS(get_by_time_in_chat=_windowed)
     patchers = [
         patch.object(ev, "resolve_monitored_group_stream", AsyncMock(return_value="group-A")),
         patch.object(ev, "resolve_host_bot_self_ids", AsyncMock(return_value=["qq:fixture-bot"])),
@@ -427,6 +442,11 @@ async def test_evolution_cursor_failure_retry_applies_once(db):
     s.initialized = True
     s.save()
     record = im.get_or_create_group_evolution("group-A")
+    # 制造真实窗口：游标退到 1 小时前（否则窗口为空，什么都分析不到）
+    from datetime import datetime as _dt, timedelta as _td
+
+    record.last_analyzed = _dt.now() - _td(hours=1)
+    record.save()
     old_cursor = record.last_analyzed
 
     with evolution_patched(p):
@@ -441,8 +461,16 @@ async def test_evolution_cursor_failure_retry_applies_once(db):
     with evolution_patched(p):
         await ev._analyze_group(p, "qq:fixture-group:group", 5)
 
+    applied_once = im.get_or_create_spectrum("global").sincerity
+    assert applied_once != GLOBAL_BASE, "重试后应恰好施加一次影响（不该什么都没写）"
+
+    # 同一窗口再跑：游标已推进，不得再加一次
+    with evolution_patched(p):
+        await ev._analyze_group(p, "qq:fixture-group:group", 5)
     final = im.get_or_create_spectrum("global").sincerity
-    assert final == GLOBAL_BASE + 5, f"重试同一窗口重复施加影响: {final}"
+    assert final == applied_once, (
+        f"同一窗口被重复施加影响: {final}（一次后为 {applied_once}）"
+    )
 
 
 # --------------------------------------------- P0: 重置确认 / P1: 关联

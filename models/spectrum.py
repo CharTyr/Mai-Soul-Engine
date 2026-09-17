@@ -61,15 +61,15 @@ class GroupEvolutionRecord:
     group_id: str = ""
     last_analyzed: datetime = field(default_factory=datetime.now)
 
-    def save(self) -> None:
+    def save(self, *, commit: bool = True) -> None:
         """持久化当前记录。"""
-        save_group_evolution_record(self)
+        save_group_evolution_record(self, commit=commit)
 
 
 # ─── IdeologySpectrum CRUD ──────────────────────────────────────────
 
 
-def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:
+def get_or_create_spectrum(scope_id: str = "global", *, commit: bool = True) -> IdeologySpectrum:
     """获取或创建光谱记录。DB 异常时返回默认中性光谱（降级不崩）。"""
     try:
         conn = _get_conn()
@@ -88,7 +88,8 @@ def get_or_create_spectrum(scope_id: str = "global") -> IdeologySpectrum:
                VALUES (?, 50, 50, 50, 50, 0, 0, 0, 0, 0, ?, ?)""",
             (scope_id, _dt_to_str(now), _dt_to_str(now)),
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return IdeologySpectrum(scope_id=scope_id, last_evolution=now, updated_at=now)
     except Exception as e:
         logger.warning("[Spectrum] get_or_create_spectrum 降级: %s", e)
@@ -297,11 +298,12 @@ def get_or_create_group_evolution(group_id: str) -> GroupEvolutionRecord:
     return GroupEvolutionRecord(group_id=group_id, last_analyzed=now)
 
 
-def save_group_evolution_record(r: GroupEvolutionRecord) -> None:
-    """更新群组演化记录。"""
+def save_group_evolution_record(r: GroupEvolutionRecord, *, commit: bool = True) -> None:
+    """更新群组演化记录。``commit=False`` 供原子批次（人格+游标一次提交）使用。"""
     conn = _get_conn()
     conn.execute(
         "UPDATE soul_group_evolution SET last_analyzed = ? WHERE group_id = ?",
         (_dt_to_str(r.last_analyzed), r.group_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()

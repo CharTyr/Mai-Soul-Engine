@@ -72,6 +72,8 @@ def upsert_context_slice(
     closeness_offset: int,
     directness_offset: int,
     sample_count: int,
+    *,
+    commit: bool = True,
 ) -> None:
     conn = _get_conn()
     now = _dt_to_str(datetime.now())
@@ -98,7 +100,8 @@ def upsert_context_slice(
             now,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def get_context_slice(scope_type: str, scope_key: str) -> ContextSlice | None:
@@ -124,7 +127,7 @@ def get_context_slice(scope_type: str, scope_key: str) -> ContextSlice | None:
 # ─── 情绪 CRUD ──────────────────────────────────────────────────────
 
 
-def get_or_create_mood(scope_id: str = "global") -> MoodState:
+def get_or_create_mood(scope_id: str = "global", *, commit: bool = True) -> MoodState:
     conn = _get_conn()
     row = conn.execute("SELECT * FROM soul_mood_state WHERE scope_id = ?", (scope_id,)).fetchone()
     if row:
@@ -140,18 +143,20 @@ def get_or_create_mood(scope_id: str = "global") -> MoodState:
         "INSERT INTO soul_mood_state (scope_id, valence, arousal, energy, updated_at) VALUES (?, 0, 0, 0, ?)",
         (scope_id, _dt_to_str(now)),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return MoodState(scope_id=scope_id, updated_at=now)
 
 
-def save_mood(m: MoodState) -> None:
+def save_mood(m: MoodState, *, commit: bool = True) -> None:
     conn = _get_conn()
     conn.execute(
         """UPDATE soul_mood_state SET valence = ?, arousal = ?, energy = ?, updated_at = ?
            WHERE scope_id = ?""",
         (m.valence, m.arousal, m.energy, _dt_to_str(m.updated_at), m.scope_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ─── 思想图谱边 CRUD ────────────────────────────────────────────────

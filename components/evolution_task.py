@@ -395,24 +395,55 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> s
             evolution_rate,
         )
 
-        # 经统一光谱闸门写入（v2.3.0 收口：resistance + EMA + save + history）
-        smoothed_deltas = apply_spectrum_deltas(
-            "evolution",
-            raw_deltas,
-            smooth_alpha=ema_alpha,
-            resistance=resistance,
-            max_per_axis=evolution_rate,
-            group_id=stream_id,
-            reason=f"分析了{len(messages)}条消息",
-        )
-        spectrum = get_or_create_spectrum("global")
+        # 写入闸门：非 apply 模式**不写正式人格**（只分析、只记日志）。
+        # 必须在写库前用当前配置判定——后台循环可能在运行中被切模式。
+        from ..utils.runtime_mode import MutationBlocked, ensure_mutation_allowed
 
-        after = {
-            "sincerity": spectrum.sincerity,
-            "engagement": spectrum.engagement,
-            "closeness": spectrum.closeness,
-            "directness": spectrum.directness,
-        }
+        try:
+            ensure_mutation_allowed(plugin, action=f"群 {stream_id} 演化")
+        except MutationBlocked as exc:
+            logger.info("[Soul] 演化跳过写入（%s）: %s", stream_id, exc)
+            await log_evolution_skip(
+                stream_id, "mode_not_apply", message_count=len(messages), detail=str(exc)
+            )
+            return "skipped"
+
+        # 幂等批次：人格影响 + 切片/情绪 + **游标推进**在同一事务。
+        # 此前分开提交：游标写失败会重放同一时间窗，光谱被重复施加。
+        from ..models._conn import _get_conn
+
+        conn = _get_conn()
+        conn.execute("BEGIN")
+        try:
+            # 经统一光谱闸门写入（v2.3.0 收口：resistance + EMA + save + history）
+            smoothed_deltas = apply_spectrum_deltas(
+                "evolution",
+                raw_deltas,
+                smooth_alpha=ema_alpha,
+                resistance=resistance,
+                max_per_axis=evolution_rate,
+                group_id=stream_id,
+                reason=f"分析了{len(messages)}条消息",
+                commit=False,
+            )
+            spectrum = get_or_create_spectrum("global")
+
+            after = {
+                "sincerity": spectrum.sincerity,
+                "engagement": spectrum.engagement,
+                "closeness": spectrum.closeness,
+                "directness": spectrum.directness,
+            }
+
+            wv.record_local_slice(stream_id, smoothed_deltas, len(messages), commit=False)
+            wv.nudge_mood_from_deltas(smoothed_deltas, commit=False)
+
+            record.last_analyzed = now
+            record.save(commit=False)
+            conn.commit()
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
         await log_evolution(
             group_id=stream_id,
@@ -423,9 +454,6 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> s
             message_count=len(messages),
         )
 
-        wv.record_local_slice(stream_id, smoothed_deltas, len(messages))
-        wv.nudge_mood_from_deltas(smoothed_deltas)
-
         # P-EVO-1b: 极值告警 — 光谱任一轴在极区间时 log.warning
         spectrum = get_or_create_spectrum("global")
         for dim in ("sincerity", "engagement", "closeness", "directness"):
@@ -435,9 +463,6 @@ async def _analyze_group(plugin, group_config_id: str, evolution_rate: int) -> s
                     "[SpectrumGuard] %s 极值告警: %s=%d（可能跑偏）",
                     stream_id, dim, val,
                 )
-
-        record.last_analyzed = now
-        record.save()
 
         logger.info(
             "群%s演化完成: 真诚=%s, 投入=%s, 亲近=%s, 直率=%s",
