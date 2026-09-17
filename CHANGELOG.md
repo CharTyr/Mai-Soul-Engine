@@ -2,7 +2,7 @@
 
 ## [2.5.0] — Phase 0 正确性 + 12 槽接入 + 插件侧 H1/H2
 
-相对 v2.4.0 发酵基线的生产打磨版本。**不建全量 v3 表**；测试约 **272** 项。
+相对 v2.4.0 发酵基线的生产打磨版本。**不建全量 v3 表**；测试 **586** 项。
 
 ### 用户可感知
 
@@ -32,11 +32,40 @@
 - 群锁 trait 列表标 `[仅群]`；`/soul_promote_global <id>` 提升为全局（保留 origin）。
 - `fermentation_min_inputs=0` 配置警告；data_dir 迁移失败时 `/soul_health` 标 degraded。
 
+### 第四轮返工（正确性复审修复）
+
+复审给出 18 条直接反例（全部先转成回归测试、确认对旧代码为红，再修实现），逐项修复：
+
+- **观察模式原来真的会改人格**：模式闸门下沉到**写库那一刻**（`ensure_mutation_allowed` 读调用时配置，被拦抛 `MutationBlocked`）——入口检查挡不住「LLM 在途时被切到 observe」。区分「模式拒绝」与「业务失败」。
+- **内化一次生效**：所有权校验 + 种子 CAS + 人格写入 + 终态落库在**同一 COMMIT**，校验不过整笔回滚；终结失败走**有界重试**而不是直接 failed（保住管理员批准意图）。根因之一：`models/p1.py` 写函数内部的 `conn.commit()` 会**提前结束外层事务**，让回滚变空操作——已加 `commit=False`。
+- **「局部优先」此前是假的**：`apply_spectrum_deltas` 硬编码写 global，开关看着生效实际没生效；现在作用域一路传到最底层，关系判定候选集也限同作用域（局部证据不得强化/改写全局观点）。
+- **演化批次幂等**：光谱 + 切片 + 情绪 + **游标推进**包成同一 COMMIT（含游标——否则重放批次会重复施加影响）。
+- **`/soul_reset` 严格确认**：整串精确匹配、确认绑定操作者+会话+300s、执行前重新鉴权与查模式、文案写明重置范围。
+- **通知闭环**：`claim_notification` 原子认领（pending→sending）防并发重放；直发成功按去重键结清历史待发；发送失败/早退不得清空待发。
+- **任务监督接成真实闭环**：五态 `running/waiting/backoff/failed/stopped`、退避 5s→300s、30s 巡检、`_unloading` 期间禁止重新拉起；五个真实循环在等待间隔打 `waiting`。
+- **候选校验收紧**：未知光谱轴**拒绝**（不再是告警后丢弃）；证据引用必须来自本次输入；模型不得自选 `global`。
+- **配对歧义**（schema v6）：同会话多条未认领快照 → 标 `pairing_ambiguous`，**阻断会改人格的自评反馈**（不确定就不改人格）。
+- **回复分用途投递**：新增 replyer 侧注入（`maisaka.replyer.before_model_request`）——只给「与本轮相关的观点 + 表达倾向」，**不落快照、不打冷却**（快照锚点只能 planner 落；冷却按轮计）；`append_block_to_first_system` 加幂等标记守卫（宿主每次重试都会调 hook）。
+- **token 预算**：`utils/token_budget.py` 保守估算（CJK 1 token/字）+ 稳定裁剪，顺序即优先级。**是估算不是精确用量**。
+- **作用域字段**：快照记 `bot_identity`（v7，宿主 `bot.qq_account`）+ `platform`（v8）——平台由**配置声明平台列表**（`plugin.platforms`，默认 qq）按平台探测宿主流列表得出，**不猜 session_id 字符串**；探不到留空。
+- **看板区分八种状态**（T19）：未初始化 / 关闭 / 无候选 / 无切片 / 取证失败 / LLM 失败 / 注入未验证 / 后台停止，各自独立文案与标记，不再都渲染成一种空。
+- **隐私与保留**（T18）：注入日志只记元数据（不含原始对话与会话标识），加**保留期 TTL**（14 天，此前只按大小轮转＝低频环境永不清理）。
+- **离线回放**（T20）：新增 `tools/replay.py`——候选/接纳/注入/配对四阶段走**真实代码路径**，同输入两次回放逐字节相同，覆盖反例/刷屏/多账号歧义/长期无证据；记录逐条标注「LLM 是固定 fixture」，**不得当真实模型表现**。
+- **迁移鲁棒性**（T16）：WAL 库补迁移不丢行、损坏库显式报错且原文件逐字节不变、迁移中断不推进版本+账本记 failed+可重试、重复迁移幂等；新增迁移必须登记到 `_MIGRATION_ARTIFACTS`（不登记测试报错）。
+- **新增测试文件**：`test_review_regressions.py`（18 条复审反例）、`test_migration_robustness.py`、`test_legacy_import_personality.py`、`test_privacy_and_retention.py`、`test_replay_harness.py`、`test_low_flow_no_loss.py`（T06）、`test_task_lifecycle_hotupdate.py`（T14）、`test_dashboard_states.py`（T19）、`test_token_budget.py`、`test_purpose_split_delivery.py`。测试 272 → **586**。
+
+### 宿主零改动约束下的已知限制
+
+- **planner ↔ replyer 无法精确配对**：两侧 payload 没有共同请求标识（已核实宿主源码），且「不得修改宿主任何代码」。插件侧穷尽为：replyer 重试按 `reply_message_id` 精确复用 + 陈旧窗口内最旧未认领 + 多条未认领即标歧义并阻断人格反馈。**属已知限制，不是待办**。
+- 平台字段只能来自配置声明 + 宿主流列表探测；宿主不返回平台，插件侧不猜字符串。
+
 ### 已知债务（非阻塞）
 
 - 存量群锁 trait 跨群不可见，需管理员知悉或手动处理。
 - 槽位无自动入槽建议，不手动 `/soul_slot` 则优先效果弱。
 - 关键词 2-gram 精度有限；冷却仍为硬过滤。
+- T06 低流量子项、T14 热更路径、T19 看板空态**已补测**（见上）。
+- 真实端到端未跑（按用户要求冻结：不启用、不重启、不群播）；离线回放用固定 fixture，**不代表真实模型表现**。
 
 
 ## [2.3.0] — dev 分支（自我评价反馈回路）
