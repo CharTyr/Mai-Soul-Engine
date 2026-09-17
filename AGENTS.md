@@ -14,16 +14,21 @@
 | 运行时 | **maibot-plugin-sdk 2.x**，独立 Runner；入口 `plugin.py` + `create_plugin()` |
 | 禁止 | `import src.*`、写宿主 `data/MaiBot.db`、恢复 POST_LLM 注入 |
 | 注入 | 主接线：`@HookHandler("maisaka.planner.before_request")` → `components/ideology_injector.py`；自评捕获另有一个 `@HookHandler(mode=OBSERVE)`（`replyer.after_response`，见"自我评价反馈回路"） |
-| 注入合并 | **追加到宿主首条 system**（`_apply_soul_injection_to_messages`），不得 prepend 竞争性 system；找不到 system → fail-open 跳过注入 |
+| 注入载荷 | **宿主传入/回读的是 `items`（Context Item 列表），不是 `messages`**。形状差异统一由 `utils/host_prompt_items.py` 处理。回写键与传入形状不一致时宿主**整份忽略且不报错**——历史上注入全程空转、日志一切正常，就是踩的这个 |
+| 注入合并 | **追加到首个 system item 的最后一个 text part**，保留 `item_schema_version`；无 system item → fail-open 跳过注入，不得凭空 prepend |
+| 宿主返回解包 | `config.get` 被 SDK 解包成**裸值**（用 `utils/host_config.py` 归一）；`llm.generate` / `send.*` / `chat.open_session` **不解包**（读 `success` / `response`）；`render.html2png` 解包成 payload |
+| 命令入参 | 命令文本取**顶层 `text`**（= `message.processed_plain_text`）；`message` 字典里**没有** `text` 键（用 `spectrum_utils.extract_command_text`） |
 | 数据 | **`soul.db`**（`models/`，stdlib sqlite3）。**优先**宿主 `ctx.paths.data_dir/mai_soul_engine`（`utils/data_dir.resolve_and_prepare_data_dir`，SQLite backup 迁移，失败回退 `plugin_dir/data`）；`plugin._data_dir` / `_data_dir_info` 记录实际路径与 source。`models/` 按实体拆分，`ideology_model.py` 为重导出 shim |
 | 旧数据 | `on_load` → `migration/legacy_import.py` 只读宿主 `data/MaiBot.db` 的 `soul_*` 表，一次性导入；**注意旧政治轴数值无法映射到社交轴，会丢失**（详见下方"迁移注意"） |
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
 | Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.5.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
-| 功能总开关 | `plugin.enabled` 管**注入 + 四后台任务**（演化/Notion/自评/发酵）；`on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`admin_user_id` 仅标识管理员 QQ |
+| 运行模式 | **`plugin.mode` = `off` / `observe` / `apply`**（默认 `off`），唯一模式判定入口 `utils/runtime_mode.py`，拆成四个闸门：注入回复 / 后台学习 / 改写人格 / 管理员接纳。`off` 全关；`observe` 只学习、不改人格、不注入；`apply` 全开。**旧配置 `enabled=true` 且未写 `mode` 只映射为 `observe`**——升级不得让插件突然开始改写人格并影响真实回复。未知 `mode` 值保守回落并提示 |
+| 任务生命周期 | `on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`_task_action` 是纯函数（start/restart/stop/keep），**必须用 `done()` 判断任务死活**——只看 `is not None` 会让崩溃的任务静默停摆且看板假绿；状态记入 `utils/task_supervisor.py`，连续异常超限转 `failed` 等人工介入 |
+| 管理员鉴权 | `plugin.enabled` 仍存在但只作兼容位；`admin_user_id` 仅标识管理员 QQ，**不是**安全边界 |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
 | 群 Stream 解析 | `utils/runtime_resolution.resolve_monitored_group_stream` 先试 `get_stream_by_group_id`（内存快），回退 `open_session`（持久创建/恢复）；无 platform 时保留 MD5 兼容 |
-| 宿主人设读取 | `utils/host_persona.fetch_host_persona` 经 `config.get` 读 `personality.personality` / `reply_style`；`format_persona_for_prompt` 格式化后注入内化 prompt（`thought/internalization_engine.py` 中追加） |
+| 宿主人设读取 | `utils/host_persona.fetch_host_persona` 读 `personality.personality` / `reply_style`；**`config.get` 的返回值已被 SDK 解包成裸值**，必须经 `utils/host_config.fetch_config_value` 归一——旧写法要求 `{success, value}` 包装，会把人设基底静默读成空。`format_persona_for_prompt` 格式化后注入内化 prompt（`thought/internalization_engine.py` 中追加） |
 
 ## 光谱轴（v2.1.0 重构，关键）
 
@@ -171,7 +176,7 @@ v2.4.0（fermentation_enabled）：`pending → fermenting → internalized`（�
 - `selection_mode`：`tag_hit` / `tag_hit+keyword` / `keyword_fill` / `tag_hit+tagless` / `keyword+tagless` / `tagless_fill` / `fallback_recent_impact` / `spectrum_only`（及组合）。
 - `picked[].activation_reason`：`tag_hit:…` / `keyword:…` / `tagless_impact` / `fallback_recent_impact`；`/soul_inspect` 与 dashboard 可展示。
 - 层摘要 `build_layer_trait_summary(.., exclude_trait_ids=selected_ids, traits=已查列表)` 排除已在详细块的 trait，避免重复。
-- **合并策略**：`_apply_soul_injection_to_messages` 把动态层追加到宿主首条 system 末尾（标记 `[Mai-Soul 动态层 | …]`）；**禁止**再 prepend 新 system。
+- **合并策略**：`utils/host_prompt_items.append_block_to_first_system` 把动态层追加到**首个 system item 的最后一个 text part**（标记 `[Mai-Soul 动态层 | …]`）；**禁止**再 prepend 新 system。回写键必须与宿主传入形状一致（宿主传 `items`）——写错会被整份忽略且不报错。
 - **热路径优化**：`WorldviewConfigView` + `WorldviewService` 缓存在 `plugin._wv_config_view`/`plugin._wv_service`；锁用 `asyncio.Lock`；注入日志采样 + 5MB 轮转 + `asyncio.to_thread` 异步写。
 
 ### 种子去重
@@ -228,8 +233,9 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 ### 接线（唯一新增 hook 点）
 
 - **捕获**：`@HookHandler("maisaka.replyer.after_response")`，`mode=HookMode.OBSERVE` + `error_policy=ErrorPolicy.SKIP`（**零干扰不改写输出**，失败不影响 bot 回复）。宿主触发点（**只读引用，不改**）：`src/chat/replyer/maisaka_generator_base.py:1182`，payload 含 `response`/`session_id`/`reply_message_id`/token 统计。planner 决策不进入自评——planner 的策略选择最终体现在 replyer 输出中，由 replyer 自评覆盖。
-- **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode）；`after_response` 用 session_id 取最近 snapshot 配对（**1:N**，一个 snapshot 可配多条 pending：replyer 多次重试）。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
-- **context 来源**：`after_response` payload **不含触发消息**，故 `reflection_capture.cache_session_context` 在 before_request 内存缓存触发上文（session_id 作 key，TTL 10min），after 取回（一次性）。**缓存缺失/超龄 = context_json 空 = 合法降级**（评估只基于 response 文本判语气）。
+- **配对**：`before_request`（现有 `ideology_injector`）注入时落 `soul_injection_snapshots`（session_id + 命中 trait_ids + 光谱 + mood + selection_mode + **触发上下文**）；`after_response` 用 `claim_snapshot_for_response` **FIFO 认领最旧的未认领快照**（同一 reply 重试复用同一快照）。旧行为是"取最近一条"，同会话两轮并发时会把 A 轮的回复配到 B 轮的快照上——trait 归属与触发上文一起串味。时序安全：`inject_ideology` 是 BLOCKING，宿主在 before 完成后才调 LLM 再触发 after。
+- **context 来源**：`after_response` payload **不含触发消息**，故 before_request 把触发上文随快照一起落库（`context_json`）；`reflection_capture.take_cached_context` 的 session 键缓存只作旧数据兜底。**上下文缺失 = context_json 空 = 合法降级**（评估只基于 response 文本判语气）。
+- **投递阶段**：`delivery_state` 记 `selected` → `hook_applied`。宿主未提供请求后回调，插件**无法自我声明"最终请求已包含注入"**（`final_request_verified` 不可达）——不要把它当成已验证。
 
 ### 数据（3 表，`models/self_reflection.py`）
 
@@ -303,7 +309,7 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `utils/data_dir.py` — 宿主 data_dir 解析 + backup 迁移
 - `utils/host_persona.py` — HostBasePersona 快照（config.get）
 - `utils/runtime_resolution.py` — 群 stream：get_stream → open_session
-- `tests/` — 约 **276** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；含 migrations/cabinet_slots/promote/open_session/persona/message_merge 等
+- `tests/` — 约 **423** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；含 migrations/cabinet_slots/promote/open_session/persona/message_merge/宿主契约(host_prompt_items/host_config/command_input)/快照配对/种子保留/槽位恢复/操作租约/运行模式/候选校验/任务监督 等
 
 ## 开发与验证
 
@@ -335,7 +341,12 @@ cd /path/to/Maibot
 - **不要改 Maibot 主程序**（`src/`）除非维护者明确许可。
 - 配置示例与文档中的 QQ/群号用占位符，勿提交真实 ID。
 - 可选能力默认关：**Notion**、**思维阁**、**@API**（`api.enabled` 默认 False）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
-- **`plugin.enabled=false`**：注入跳过 + 四后台任务 desired 全 false（经 `_reconcile_background_tasks`）。
+- **`plugin.mode = "off"`（默认）**：不学习、不注入、不改人格；`observe` 只学习并生成候选（不注入、不改人格、接纳类命令被拒）；`apply` 才真正注入并允许改写人格。旧 `enabled=true` 且未写 `mode` 只映射为 `observe`。
+- **候选优先**：内化 LLM 的输出先过 `thought/candidate.py` 结构化校验，无效候选（空观点 / 数值无法解析 / 越界 / 类型错误）**拒绝且不写任何人格状态**，返回结构化原因；越界不静默 clamp。`spectrum_impact` 是 `spectrum_deltas` 的历史别名，仍须支持。
+- **内化幂等**：LLM 调用前先 `claim_seed_operation` 拿租约（`models/operations.py`），同一颗种子并发批准/崩后重试只施加一次光谱影响；终结时操作结果与种子终态在同一事务提交。
+- **种子保留只碰终态**：`approved`/`rejected`/`expired`/`internalized` 才可回收，`pending`/`fermenting` 不得删（发酵中是在途工作，删了会连发酵输入一起丢）。
+- **槽位恢复**：重新启用 trait 时若其槽已被别的启用 trait 占用，**让出自己的槽号**（不挤走现占用者），避免撞 `cabinet_slot_no` 部分唯一索引。
+- **`local_first_evolution`（默认 false）**：关=内化观点写全局（现状）；开=写来源群，只影响该群，要全局须显式 `/soul_promote_global`。
 - **`p1_enabled=false` 只关分层/切片/情绪，社交轴仍然生效**，不会回滚到政治轴。
 - **`fermentation_enabled=false` 只关发酵**，批准后立即内化；**`fermentation_min_inputs=0` 会弱化「最少证据」门槛（到期易直接内化），不推荐**。
 - 光谱边界：硬 clamp 0–100，禁止越界反弹。
