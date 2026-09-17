@@ -73,8 +73,8 @@ enabled = true      # 旧字段，保留兼容
 | T02 items 往返 | 追加到首个 system item、保留其他 kwargs 与 schema 版本、输入不被原地修改 | `tests/test_host_prompt_items.py`、`tests/test_injection_delivery.py` |
 | T03 并发不混用快照 | FIFO 认领、1:1 归属、同 reply 重试复用、跨 session 隔离 | `tests/test_reflection_snapshot_pairing.py` |
 | T04 投递阶段可观测 | `selected` → `hook_applied`；`unverified` 与成功可区分；非法态拒写 | 同上 + `tests/test_reflection_capture.py` |
-| T05/T06 局部与全局 | — | **未实现**（Phase D） |
-| T07/T08 自评隔离与补证 | — | **部分**：自评注入隔离沿用既有设计，补证语义未改（Phase D） |
+| T05/T06 局部与全局 | 候选校验先于写入；局部优先演化为显式开关（默认关，保持现有全局语义），开启后观点写入来源群 | `tests/test_candidate_validation.py` |
+| T07/T08 自评隔离与补证 | 补证发酵「无新证据不成熟」既有实现已覆盖；自评注入隔离沿用既有设计 | `tests/test_fermentation.py` |
 | T09 幂等内化 | 单赢家租约、重复批准只内化一次、终结幂等、失败可重试、租约过期可恢复 | `tests/test_seed_operation_lease.py` |
 | T10 保留策略 | 只回收终态；发酵中种子与其输入不被删 | `tests/test_seed_retention.py` |
 | T11 槽位恢复 | 禁用→被占→恢复不撞唯一索引，且不挤走现占用者 | `tests/test_trait_slot_recovery.py` |
@@ -101,9 +101,12 @@ enabled = true      # 旧字段，保留兼容
 
 ## 5. 已知限制与未完成项
 
-- **Phase D 未实现**：局部优先演化（单群输入默认只改局部）、候选优先（LLM 不直接改
-  人格）、显式全局晋升、补证发酵（到期且无新证据不自动成熟）。当前演化仍直接写全局，
-  群切片是「记录」而非「隔离」——文档措辞不应把它宣传成隔离机制。
+- **Phase D 部分实现**：
+  - 已做：候选优先（`thought/candidate.py`，无效候选拒绝且不写人格）、局部优先演化的
+    开关（`[worldview].local_first_evolution`，**默认关**）、显式晋升（`/soul_promote_global` 已有）
+  - 未做：把「局部优先」设为默认。当前默认仍是全局写入——这是刻意的，因为反转它会
+    改变产品语义，需要操作者决策。
+  - **群切片目前仍是「记录」而非「隔离」**，文档与看板措辞不应把它宣传成隔离机制。
 - **Phase E 剩余**：任务监督器（running/waiting/backoff/failed/stopped 与故障恢复）、
   卸载清理的逐项隔离、通知 outbox。
 - **Phase C 剩余**：迁移工具（只读盘点 + 显式选源 + 预演报告）——需要操作者授权后

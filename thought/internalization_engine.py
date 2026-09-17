@@ -287,6 +287,33 @@ class InternalizationEngine:
         except (AttributeError, TypeError, ValueError):
             return default
 
+    def _trait_scope_for_seed(self, seed_info: Mapping[str, Any]) -> tuple[str, str]:
+        """决定新建 trait 写入的作用域，返回 ``(stream_id, origin_stream_id)``。
+
+        默认（``local_first_evolution=False``）：写全局，来源群只作溯源——
+        思想属于 Bot 的全局身份，A 群形成的思想可在 B 群相关话题被召回。
+
+        开启 ``local_first_evolution``：写**来源群**（局部优先），
+        单群输入默认只影响该群；要变成全局观点须显式 ``/soul_promote_global``。
+
+        这是刻意做成开关而非直接反转：把「群输入默认改全局人格」改成
+        「默认只改局部」是产品语义变更，不能靠升级静默发生。
+        """
+        from ..worldview.constants import GLOBAL_STREAM
+
+        origin = str(seed_info.get("stream_id", "") or "").strip()
+        if origin == GLOBAL_STREAM:
+            origin = ""
+        try:
+            local_first = bool(
+                getattr(self._plugin.config.worldview, "local_first_evolution", False)
+            )
+        except AttributeError:
+            local_first = False
+        if local_first and origin:
+            return origin, origin
+        return GLOBAL_STREAM, origin
+
     async def _apply_spectrum_impact(
         self, impact: Mapping[str, Any], is_fermented: bool = False, commit: bool = True,
     ) -> dict:
@@ -403,12 +430,10 @@ class InternalizationEngine:
                     )
 
                     # 1) 先创建新 trait（active）
-                    from ..worldview.constants import GLOBAL_STREAM
-
-                    origin = seed_info.get("stream_id", "") or ""
+                    scope_stream_id, origin = self._trait_scope_for_seed(seed_info)
                     create_crystallized_trait(
                         trait_id=trait_id,
-                        stream_id=GLOBAL_STREAM,  # 思想属于 Bot 全局
+                        stream_id=scope_stream_id,
                         seed_id=seed_info.get("id", "") or "",
                         name=seed_info.get("type", "trait"),
                         question=seed_info.get("question", "") or "",
@@ -458,10 +483,10 @@ class InternalizationEngine:
             default=WorldviewService.infer_layer_from_tags(tags),
         )
 
-        origin = seed_info.get("stream_id", "") or ""
+        scope_stream_id, origin = self._trait_scope_for_seed(seed_info)
         create_crystallized_trait(
             trait_id=trait_id,
-            stream_id=GLOBAL_STREAM,  # 思想属于 Bot 全局
+            stream_id=scope_stream_id,
             seed_id=seed_info.get("id", "") or "",
             name=seed_info.get("type", "trait"),
             question=seed_info.get("question", "") or "",

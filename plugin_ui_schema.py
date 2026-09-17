@@ -596,6 +596,17 @@ class WorldviewConfig(PluginConfigBase):
     __ui_icon__ = "layers"
     __ui_order__ = 25
 
+    local_first_evolution: bool = Field(
+        default=False,
+        description="局部优先演化：单群输入默认只改本群观点",
+        json_schema_extra=_ui(
+            "局部优先演化",
+            "关闭（默认）：内化出的观点写全局，A 群形成的思想可在 B 群被召回。"
+            "开启：观点写入来源群、只影响该群，要变成全局须显式 /soul_promote_global。"
+            "开启会改变人格作用域语义，建议先在观察模式确认效果。",
+        ),
+    )
+
     p1_enabled: bool = Field(
         default=True,
         description="启用 P1",

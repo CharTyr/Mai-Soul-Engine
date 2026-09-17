@@ -321,3 +321,60 @@ def test_valid_candidate_still_writes(soul_db: Any) -> None:
 
     assert result["success"] is True
     assert soul_db.get_crystallized_trait_by_id(result["trait_id"]) is not None
+
+
+# ─── 局部优先演化（默认保持全局，需显式开启） ────────────────────────
+
+
+def _engine_with_scope(local_first: bool) -> Any:
+    engine = _engine(_valid_raw())
+    engine._plugin.config.worldview.local_first_evolution = local_first
+    return engine
+
+
+def test_default_scope_is_global(soul_db: Any) -> None:
+    """默认：观点写全局，来源群只作溯源（保持既有语义，不因本次改动反转）。"""
+    engine = _engine_with_scope(False)
+    stream_id, origin = engine._trait_scope_for_seed({"stream_id": "qq-123-group"})
+
+    assert stream_id == "global"
+    assert origin == "qq-123-group"
+
+
+def test_local_first_scope_writes_group(soul_db: Any) -> None:
+    """开启后：观点写入来源群，只影响该群。"""
+    engine = _engine_with_scope(True)
+    stream_id, origin = engine._trait_scope_for_seed({"stream_id": "qq-123-group"})
+
+    assert stream_id == "qq-123-group"
+    assert origin == "qq-123-group"
+
+
+def test_local_first_without_origin_still_global(soul_db: Any) -> None:
+    """来源群未知（空/global）→ 仍写全局，不产生无主的局部 trait。"""
+    engine = _engine_with_scope(True)
+
+    assert engine._trait_scope_for_seed({"stream_id": ""})[0] == "global"
+    assert engine._trait_scope_for_seed({"stream_id": "global"})[0] == "global"
+
+
+def test_local_first_is_opt_in_config_default() -> None:
+    """配置默认必须是关闭——作用域语义变更不得靠升级静默发生。"""
+    schema = _import_soul_submodule("plugin_ui_schema")
+    assert schema.WorldviewConfig().local_first_evolution is False
+
+
+def test_local_first_end_to_end_writes_group_scoped_trait(soul_db: Any) -> None:
+    """端到端：开启开关后，内化出的 trait 落在来源群。"""
+    import asyncio
+
+    engine = _engine_with_scope(True)
+    seed = _seed()
+    seed["stream_id"] = "qq-123-group"
+
+    result = asyncio.run(engine.internalize_seed(seed))
+
+    assert result["success"] is True
+    trait = soul_db.get_crystallized_trait_by_id(result["trait_id"])
+    assert trait.stream_id == "qq-123-group"
+    assert trait.origin_stream_id == "qq-123-group"
