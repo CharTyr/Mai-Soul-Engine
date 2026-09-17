@@ -80,7 +80,7 @@ enabled = true      # 旧字段，保留兼容
 | T11 槽位恢复 | 禁用→被占→恢复不撞唯一索引，且不挤走现占用者 | `tests/test_trait_slot_recovery.py` |
 | T12 非法输入不写正式状态 | 非法投递态、非法种子终态、未知 operation 均拒绝 | 上述各文件 |
 | T13 模式闸门 | off/observe 不注入、不接纳、不改人格；旧配置不隐式 apply | `tests/test_runtime_mode.py`、`tests/test_mode_gate_commands.py` |
-| T14 任务监督与故障恢复 | — | **未实现**（Phase E 剩余） |
+| T14 任务监督与故障恢复 | 崩溃可发现（不再只看 `is not None`）、自动重启、超限转 failed 并提示人工介入 | `tests/test_task_supervisor.py` |
 | T15 命令鉴权与确认 | 真实载荷下 `/soul_reset confirm` 走执行分支；只读命令在 observe 下不受阻 | `tests/test_command_input.py`、`tests/test_mode_gate_commands.py` |
 | T16 迁移与多库 | — | **未实现**（需连真实数据库，待授权） |
 | T17 legacy 隔离 | — | **未实现** |
@@ -107,8 +107,10 @@ enabled = true      # 旧字段，保留兼容
   - 未做：把「局部优先」设为默认。当前默认仍是全局写入——这是刻意的，因为反转它会
     改变产品语义，需要操作者决策。
   - **群切片目前仍是「记录」而非「隔离」**，文档与看板措辞不应把它宣传成隔离机制。
-- **Phase E 剩余**：任务监督器（running/waiting/backoff/failed/stopped 与故障恢复）、
-  卸载清理的逐项隔离、通知 outbox。
+- **Phase E 部分实现**：
+  - 已做：三模式闸门、任务监督器（崩溃可见 + 重启 + 超限 failed）
+  - 未做：卸载清理的逐项隔离（单个清理步骤失败不应阻断其它步骤）、通知 outbox
+    （发送失败要有重试与去重，而不是静默丢失）
 - **Phase C 剩余**：迁移工具（只读盘点 + 显式选源 + 预演报告）——需要操作者授权后
   才能连真实数据库。
 - **schema 版本守卫**：`/soul_health` 显示 schema 版本，但尚未在版本不匹配时拒绝启动。
