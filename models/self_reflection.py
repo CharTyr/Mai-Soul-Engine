@@ -93,6 +93,9 @@ class InjectionSnapshot:
     consumed_at: str = ""
     consumed_by_reply: str = ""
     delivery_state: str = DELIVERY_SELECTED
+    # 配对歧义：同会话存在多条未认领快照时，无法确定这条回复对应哪次注入。
+    # 下游**不得**据此改写人格（标记而不是猜）。
+    pairing_ambiguous: bool = False
 
 
 @dataclass
@@ -219,11 +222,23 @@ def claim_snapshot_for_response(
     if not row:
         return None
 
+    # 配对歧义：窗口内还有别的未认领快照 → 无法确定这条回复对应哪一次注入。
+    # 仍然按 FIFO 消费（否则队列会滞留），但**打上标记**，
+    # 下游据此跳过会改写人格的自评反馈——不允许拿猜出来的关联去改人格。
+    pending_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM soul_injection_snapshots "
+        "WHERE session_id = ? AND (consumed_at IS NULL OR consumed_at = '') "
+        "AND created_at >= ?",
+        (session_id, cutoff),
+    ).fetchone()
+    ambiguous = int(pending_count["n"] or 0) > 1
+
     now = _dt_to_str(datetime.now())
     cursor = conn.execute(
-        "UPDATE soul_injection_snapshots SET consumed_at = ?, consumed_by_reply = ? "
+        "UPDATE soul_injection_snapshots "
+        "SET consumed_at = ?, consumed_by_reply = ?, pairing_ambiguous = ? "
         "WHERE snapshot_id = ? AND (consumed_at IS NULL OR consumed_at = '')",
-        (now, reply_message_id, row["snapshot_id"]),
+        (now, reply_message_id, 1 if ambiguous else 0, row["snapshot_id"]),
     )
     conn.commit()
     if cursor.rowcount != 1:
@@ -552,6 +567,9 @@ def _row_to_snapshot(row) -> InjectionSnapshot:
         consumed_by_reply=row["consumed_by_reply"] if "consumed_by_reply" in row.keys() else "",
         delivery_state=(
             row["delivery_state"] if "delivery_state" in row.keys() else DELIVERY_SELECTED
+        ),
+        pairing_ambiguous=bool(
+            row["pairing_ambiguous"] if "pairing_ambiguous" in row.keys() else 0
         ),
     )
 

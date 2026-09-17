@@ -195,7 +195,16 @@ async def _evaluate_batch(
         reply_blocks.append(
             build_reply_block(idx, response_text, context_lines, trait_lines)
         )
-        meta.append({"pending": p, "trait_lines": trait_lines, "context_lines": context_lines})
+        ambiguous = False
+        if p.snapshot_id:
+            snap = snap_cache.get(p.snapshot_id)
+            ambiguous = bool(getattr(snap, "pairing_ambiguous", False)) if snap else False
+        meta.append({
+            "pending": p,
+            "trait_lines": trait_lines,
+            "context_lines": context_lines,
+            "pairing_ambiguous": ambiguous,
+        })
 
     prompt = build_self_reflection_prompt(
         tendency=tendency,
@@ -250,6 +259,15 @@ async def _evaluate_batch(
         direction = str(item.get("deviating_direction", "") or "")
         reason = str(item.get("reason", "") or "")
         sot = item.get("self_observation_trait")
+
+        # 配对歧义：同会话有多条未认领快照，无法确定这条回复对应哪次注入。
+        # 强制记为「未评」——光谱修正只消费 evaluated=1，因此不会有人格副作用；
+        # 同时也拦住 self_observation 种子（那是拿猜出来的归属去种人格）。
+        if m.get("pairing_ambiguous"):
+            evaluated = 0
+            reason = (reason + " | " if reason else "") + (
+                "配对歧义：无法确定该回复对应哪次注入，跳过人格反馈"
+            )
 
         try:
             reflection_id = create_self_reflection(

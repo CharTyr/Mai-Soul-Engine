@@ -27,7 +27,7 @@ __all__ = [
     "init_db",
 ]
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -460,6 +460,37 @@ def _run_migrations() -> None:
         except Exception as e:
             _record_migration_failed(5, "v5_notification_outbox", str(e))
             raise
+
+    if current < 6:
+        _record_migration_start(6, "v6_snapshot_pairing_ambiguous")
+        try:
+            _run_v6_migration()
+            _record_migration_success(6, "v6_snapshot_pairing_ambiguous")
+            _set_schema_version(6)
+            current = 6
+        except Exception as e:
+            _record_migration_failed(6, "v6_snapshot_pairing_ambiguous", str(e))
+            raise
+
+
+def _run_v6_migration() -> None:
+    """Version 6：快照配对歧义标记。
+
+    宿主 planner / after_response 两个 payload **没有共同请求 id**（已核对宿主源码），
+    所以配对只能是启发式。当同一会话存在多条未认领快照时，我们**无法确定**
+    这条回复对应哪一次注入——必须标记出来，让下游跳过会改写人格的自评反馈，
+    而不是拿一条猜出来的关联去改人格。
+
+    旧行默认 0（视为「不歧义」）：它们是历史数据，当时的判定条件无从追溯。
+    """
+    conn = _get_conn()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(soul_injection_snapshots)")}
+    if "pairing_ambiguous" not in cols:
+        conn.execute(
+            "ALTER TABLE soul_injection_snapshots "
+            "ADD COLUMN pairing_ambiguous INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.commit()
 
 
 def _run_v5_migration() -> None:

@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -163,7 +164,25 @@ class InternalizationEngine:
             # 结构非法（空观点 / 数值无法解析 / 越界 / 类型错误）→ 明确拒绝并记录原因，
             # 不写任何人格状态。旧行为是静默 clamp 或归零，出了事无法归因。
             max_delta = self._max_internalize_delta(is_fermented)
-            candidate = build_trait_candidate(result, max_delta=max_delta)
+            # 校验要拿「本次输入」做依据：证据必须来自这颗种子的材料，
+            # 作用域由本插件决定（模型不得自选 global）
+            _declared_scope, _ = self._trait_scope_for_seed(seed_info)
+            _haystack = json.dumps(
+                {
+                    "event": seed_info.get("event", ""),
+                    "reasoning": seed_info.get("reasoning", ""),
+                    "evidence": seed_info.get("evidence", []),
+                    "context": seed_info.get("context", []),
+                    "seed_id": seed_info.get("id", ""),
+                },
+                ensure_ascii=False,
+            )
+            candidate = build_trait_candidate(
+                result,
+                max_delta=max_delta,
+                evidence_haystack=_haystack,
+                declared_scope=_declared_scope,
+            )
             if not candidate.valid:
                 logger.warning(
                     "内化候选被拒（种子 %s）: %s",

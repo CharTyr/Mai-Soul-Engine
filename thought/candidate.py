@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 __all__ = [
     "DELTA_AXES",
@@ -74,6 +74,9 @@ def build_trait_candidate(
     *,
     max_delta: int,
     default_layer: str = "conduct",
+    allowed_evidence_refs: Iterable[str] | None = None,
+    evidence_haystack: str = "",
+    declared_scope: str = "",
 ) -> TraitCandidate:
     """把内化 LLM 的原始输出校验成候选。
 
@@ -81,6 +84,10 @@ def build_trait_candidate(
         raw: 解析后的 LLM 输出（通常来自 ``json.loads``）。
         max_delta: 单轴允许的最大绝对值（越界即拒绝，不 clamp）。
         default_layer: 层名无法识别时的回落层。
+        allowed_evidence_refs: **本次输入**允许引用的证据白名单（精确匹配）。
+        evidence_haystack: 本次输入证据全文；引用须是其子串（模糊但可查证）。
+        declared_scope: 调用方确定的作用域。模型给的 ``scope`` 必须与它一致——
+            **模型不得自行决定写入 global**（那是显式接纳流程的权限）。
 
     Returns:
         TraitCandidate：``valid=True`` 才可进入写入流程。
@@ -125,15 +132,47 @@ def build_trait_candidate(
     for key, value in raw_deltas.items():
         axis = str(key)
         if axis not in DELTA_AXES:
-            # 未知轴名：丢弃并告警，不让它静默消失也不因它拒绝整条候选
-            warnings.append(f"unknown_axis:{axis}")
-            continue
+            # 未知轴 = 模型在编字段。旧行为只告警并丢弃——那会放行一条
+            # 「正文可能也是编的」的候选去改人格；契约违反必须拒绝。
+            return _reject(f"unknown_axis:{axis}")
         parsed_delta = _as_number(value)
         if parsed_delta is None:
             return _reject(f"delta_not_numeric:{axis}")
         if abs(parsed_delta) > abs(int(max_delta)):
             return _reject(f"delta_exceeds_max:{axis}:{parsed_delta}")
         deltas[axis] = int(parsed_delta)
+
+    # ── 证据引用：必须来自本次输入 ─────────────────────────────────
+    raw_refs = raw.get("evidence_refs")
+    if raw_refs is not None:
+        if not isinstance(raw_refs, (list, tuple)):
+            return _reject("evidence_refs_not_a_list")
+        allow = {str(x) for x in allowed_evidence_refs} if allowed_evidence_refs is not None else None
+        for ref in raw_refs:
+            if not isinstance(ref, str) or not ref.strip():
+                return _reject("evidence_ref_not_a_string")
+            candidate_ref = ref.strip()
+            if allow is not None and candidate_ref in allow:
+                continue
+            if evidence_haystack and candidate_ref in evidence_haystack:
+                continue
+            if allow is None and not evidence_haystack:
+                # 调用方没给校验集：不做无根据的拒绝，但记下「未校验」供排查
+                warnings.append("evidence_unverifiable")
+                break
+            return _reject(f"evidence_not_in_input:{candidate_ref[:60]}")
+
+    # ── 作用域：模型不得自行决定 ───────────────────────────────────
+    raw_scope = raw.get("scope")
+    if raw_scope is not None:
+        model_scope = str(raw_scope).strip()
+        from ..worldview.constants import GLOBAL_STREAM
+
+        if declared_scope:
+            if model_scope and model_scope != declared_scope:
+                return _reject(f"scope_not_allowed:{model_scope}")
+        elif model_scope == GLOBAL_STREAM:
+            return _reject("scope_self_elected_global")
 
     # ── 层 ─────────────────────────────────────────────────────────
     from ..worldview.constants import normalize_ideology_layer

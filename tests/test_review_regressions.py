@@ -593,6 +593,52 @@ async def test_outbox_direct_success_clears_pending(db):
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_pairing_never_drives_personality_feedback(db):
+    """配对歧义的回复：评估必须记为「未评」，光谱修正（会改人格）不得消费它。
+
+    链路：同会话 2 条未认领快照 → 认领必歧义 → 评估层强制 evaluated=0
+    → list_unconsumed_reflections_for_correction 只取 evaluated=1 → 无光谱副作用。
+    """
+    from .test_reflection_evaluator import _mock_plugin
+
+    sr.create_injection_snapshot("g", "g", '["trait-A"]', "{}", "{}", "fixture")
+    sr.create_injection_snapshot("g", "g", '["trait-B"]', "{}", "{}", "fixture")
+    claimed = sr.claim_snapshot_for_response("g", "reply-1")
+    assert claimed is not None and claimed.pairing_ambiguous, "同会话多快照应判为歧义"
+
+    sr.create_pending_reflection(
+        "g", "g", "reply-1", claimed.snapshot_id, "replyer", "我觉得应该直接说"
+    )
+    # LLM 会给一条「已评 + 显著偏离」——若没有歧义拦截，它会驱动光谱修正
+    llm_resp = json.dumps(
+        [
+            {
+                "index": 1,
+                "reply_type": "substantive",
+                "evaluated": 1,
+                "consistency_score": 20,
+                "deviating_axis": "sincerity",
+                "deviating_direction": "low",
+                "reason": "很敷衍",
+                "self_observation_trait": None,
+            }
+        ],
+        ensure_ascii=False,
+    )
+
+    ev_mod = imp("components.reflection_evaluator")
+    await ev_mod._evaluate_cycle(_mock_plugin(llm_resp))
+
+    refs = sr.list_recent_reflections("g", limit=10)
+    assert len(refs) == 1
+    assert refs[0].evaluated == 0, f"歧义配对仍被记为已评: {refs[0]}"
+    assert "歧义" in (refs[0].reason or ""), f"未说明跳过原因: {refs[0].reason}"
+    assert sr.list_unconsumed_reflections_for_correction(limit=10) == [], (
+        "歧义配对的自评仍会驱动人格修正"
+    )
+
+
+@pytest.mark.asyncio
 async def test_supervisor_detects_crash_without_config_update(db):
     """任务崩溃后必须有自动巡检发现它（无需配置热更），健康状态不得假绿。"""
     actual = Plugin()

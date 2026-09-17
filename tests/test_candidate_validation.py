@@ -146,14 +146,18 @@ def test_bool_is_not_a_number() -> None:
 # ─── 噪声处理（记录而非拒绝） ───────────────────────────────────────
 
 
-def test_unknown_axes_are_dropped_with_warning() -> None:
-    """未知轴名丢弃并记录告警——不拒绝整条候选，也不让它静默消失。"""
+def test_unknown_axes_are_rejected() -> None:
+    """未知轴名 = 模型在编字段 → 拒绝整条候选（旧行为只告警放行）。
+
+    放行的代价是：一条「正文可能也是编的」候选会去改人格。契约违反必须拒绝，
+    且拒绝原因机器可读，调用方据此跳过写入。
+    """
     c = _cand().build_trait_candidate(
         _valid_raw(spectrum_deltas={"sincerity": 2, "honesty": 9}), max_delta=10,
     )
-    assert c.valid is True
+    assert c.valid is False
+    assert "honesty" in c.rejection_reason
     assert "honesty" not in c.spectrum_deltas
-    assert any("honesty" in w for w in c.warnings)
 
 
 def test_non_list_tags_are_dropped_with_warning() -> None:
