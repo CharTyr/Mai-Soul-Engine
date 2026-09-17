@@ -2,7 +2,7 @@
 
 ## [2.5.0] — Phase 0 正确性 + 12 槽接入 + 插件侧 H1/H2
 
-相对 v2.4.0 发酵基线的生产打磨版本。**不建全量 v3 表**；测试 **597** 项。
+相对 v2.4.0 发酵基线的生产打磨版本。**不建全量 v3 表**；测试 **600** 项。
 
 ### 用户可感知
 
@@ -52,11 +52,13 @@
 - **隐私与保留**（T18）：注入日志只记元数据（不含原始对话与会话标识），加**保留期 TTL**（14 天，此前只按大小轮转＝低频环境永不清理）。
 - **离线回放**（T20）：新增 `tools/replay.py`——候选/接纳/注入/配对四阶段走**真实代码路径**，同输入两次回放逐字节相同，覆盖反例/刷屏/多账号歧义/长期无证据；记录逐条标注「LLM 是固定 fixture」，**不得当真实模型表现**。
 - **迁移鲁棒性**（T16）：WAL 库补迁移不丢行、损坏库显式报错且原文件逐字节不变、迁移中断不推进版本+账本记 failed+可重试、重复迁移幂等；新增迁移必须登记到 `_MIGRATION_ARTIFACTS`（不登记测试报错）。
-- **新增测试文件**：`test_review_regressions.py`（18 条复审反例）、`test_migration_robustness.py`、`test_legacy_import_personality.py`、`test_privacy_and_retention.py`、`test_replay_harness.py`、`test_low_flow_no_loss.py`（T06）、`test_task_lifecycle_hotupdate.py`（T14）、`test_dashboard_states.py`（T19）、`test_token_budget.py`、`test_purpose_split_delivery.py`。测试 272 → **586**。
+- **配对补强（内容证据，第五轮）**：replyer 腿记下本轮「在回答哪条消息」，认领快照时与候选的触发上文做**内容比对**（剥「昵称:」前缀）：唯一命中即精确认领（并发两轮也能分开）、全不命中即弃权——堵住「滞留单条快照被误配给下一轮回复、拿别人的人格反馈改光谱」的漏洞；无证据退回顺序规则。**不需要宿主加字段**。
+- **合并 PR #3**（@riesaexe）：附属数据与日志（audit.jsonl / injections.jsonl / Notion 状态文件）跟随统一持久化目录，堵住「库在新、日志在旧」；补回归 `test_data_dir_aux_copy.py`（3 条）。
+- **新增测试文件**：`test_review_regressions.py`（18 条复审反例）、`test_migration_robustness.py`、`test_legacy_import_personality.py`、`test_privacy_and_retention.py`、`test_replay_harness.py`、`test_low_flow_no_loss.py`（T06）、`test_task_lifecycle_hotupdate.py`（T14）、`test_dashboard_states.py`（T19）、`test_token_budget.py`、`test_purpose_split_delivery.py`。测试 272 → **586**（后续迭代与 PR #3 合并后累计 **600**）。
 
 ### 宿主零改动约束下的已知限制
 
-- **planner ↔ replyer 无法精确配对**：两侧 payload 没有共同请求标识（已核实宿主源码），且「不得修改宿主任何代码」。插件侧穷尽为：replyer 重试按 `reply_message_id` 精确复用 + 陈旧窗口内最旧未认领 + 多条未认领即标歧义并阻断人格反馈。**属已知限制，不是待办**。
+- **planner ↔ replyer 无请求级关联**：两侧 payload 没有共同请求标识（已核实宿主源码），且「不得修改宿主任何代码」。插件侧已补到：replyer 重试按 `reply_message_id` 精确复用 + **内容证据**（replyer 腿真实 items 的触发消息尾行 ↔ 候选快照触发上文，剥前缀比对；唯一命中即精确认领、全不命中即弃权）+ 无证据时退回顺序规则（最旧未认领 / 多条未认领即标歧义）。标歧义即阻断会改人格的自评反馈。**请求级绑定不可达——属已知限制，不是待办**。
 - 平台字段只能来自配置声明 + 宿主流列表探测；宿主不返回平台，插件侧不猜字符串。
 
 ### 已知债务（非阻塞）
