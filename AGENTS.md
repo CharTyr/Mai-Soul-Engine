@@ -23,7 +23,7 @@
 | 配置模型 | `plugin_ui_schema.py`（`MaiSoulEngineConfig`）；`plugin.py` 只引用该类 |
 | Runner 必填 | `config.toml` 须有 **`[plugin]`** + **`config_version`**；dev 版本号为 `2.5.0`；`normalize_plugin_config` 会补齐旧配置 |
 | WebUI 说明 | Dashboard 只显示 `json_schema_extra` 的 **`label` / `hint`**，不是 `Field(description)` |
-| 运行模式 | **`plugin.mode` = `off` / `observe` / `apply`**（默认 `off`），唯一模式判定入口 `utils/runtime_mode.py`，拆成四个闸门：注入回复 / 后台学习 / 改写人格 / 管理员接纳。`off` 全关；`observe` 只学习、不改人格、不注入；`apply` 全开。**旧配置 `enabled=true` 且未写 `mode` 只映射为 `observe`**——升级不得让插件突然开始改写人格并影响真实回复。未知 `mode` 值保守回落并提示 |
+| 运行模式 | **`plugin.mode` = `off` / `observe` / `apply`**（schema 默认 `off`），唯一模式判定入口 `utils/runtime_mode.py`，拆成四个闸门：注入回复 / 后台学习 / 改写人格 / 管理员接纳。`off` 全关；`observe` 只学习、不改人格、不注入；`apply` 全开。**升级绝不隐式进入 `apply`**：`mode` 未显式设置时，仅当旧配置 `enabled=true` 且 `mode` 为空字符串才映射为 `observe`，否则按 `off`（schema 默认值，pydantic 会补齐）——升级不得让插件突然开始改写人格并影响真实回复。未知 `mode` 值保守回落并提示 |
 | 任务生命周期 | `on_load`/`on_config_update` 共用 `_reconcile_background_tasks`；`_task_action` 是纯函数（start/restart/stop/keep），**必须用 `done()` 判断任务死活**——只看 `is not None` 会让崩溃的任务静默停摆且看板假绿；状态记入 `utils/task_supervisor.py`，连续异常超限转 `failed` 等人工介入 |
 | 管理员鉴权 | `plugin.enabled` 仍存在但只作兼容位；`admin_user_id` 仅标识管理员 QQ，**不是**安全边界 |
 | Manifest 版本 | 须为**严格三段式 semver**（如 `2.1.0`），**不能带 `-dev` 后缀**，否则 Runner 校验拒绝 |
@@ -121,7 +121,7 @@ v2.4.0（fermentation_enabled）：`pending → fermenting → internalized`（�
 - `extend_fermentation_window(seed_id)`：递增 `fermentation_extension_count`，重置 `fermentation_started_at`。
 - `update_fermentation_checked(seed_id, checked_at)`：更新发酵检查时间戳。
 
-**审核后不删除记录**：`/soul_approve` → `mark_seed_fermenting`（发酵模式）或 `mark_seed_status(.., "approved")` + 立即内化（旧模式），`/soul_reject` → `"rejected"`。**不要改回 `delete_seed`**。
+**审核后不删除记录**：`/soul_approve` → `mark_seed_fermenting`（发酵模式），或**入内化操作队列**（即时模式：种子保持 `pending`，后台 `_internalization_loop` 消费成功后才 `mark_seed_status(.., "approved")`；命令立刻返回，不内联调 LLM）；`/soul_reject` → `"rejected"`。**不要改回 `delete_seed`**。
 
 ### 发酵引擎（v2.4.0 新增，核心）
 
@@ -194,7 +194,8 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 
 ### 命令
 
-- `/soul_approve <id>`：v2.4.0 行为分叉——`fermentation_enabled=true` → 标 `fermenting`；`false` → 立即内化。内化成功（非 merge）会**建议** `/soul_slot <trait_id> <空槽>`。
+- `/soul_approve <id>`：行为分叉——`fermentation_enabled=true` → 标 `fermenting`；`false` → **入内化操作队列**（命令立刻返回 `operation_id`，**不内联调 LLM**）。完成/失败均出队通知。
+- `/soul_op [operation_id]`：查内化操作状态（运行中 / 已完成 / 失败原因），不带参数列最近记录。
 - `/soul_reject <id>`：可拒绝 `fermenting`（清理发酵输入）。
 - `/soul_seed <id>`：详情 + 发酵进度。
 - 只读：`/soul_trait <id>`、`/soul_inspect <文本>`（含 `activation_reason`）、`/soul_dashboard`（含 **12 格槽位**）。
@@ -208,7 +209,7 @@ v2.4.0 新增发酵配置（9 项）：`fermentation_enabled` / `fermentation_wi
 
 `worldview/constants.py` 定义 `GLOBAL_STREAM = "global"`。trait/光谱以此值表示"不绑定特定群、对所有聊天流生效"的全局作用域。**历史上 trait 曾用空串 `""` 表全局**（与"未设置/异常"无法区分，误写空 stream_id 的群 trait 会泄漏到所有群注入），现统一用显式 `"global"`：`""` = 未设置/异常（不应匹配任何注入），`"global"` = 有意的全局作用域。`init_db` 迁移自动把存量 `""` trait 归一为 `"global"`（幂等）。
 
-**Phase 0B.1（关键）**：内化新建 trait 时 **`stream_id` 固定写 `GLOBAL_STREAM`**（思想属于 Bot 全局身份）；来源群写入 **`origin_stream_id`**（仅溯源/展示，不参与注入 scope）。`create_crystallized_trait` 接受 `origin_stream_id`；空 `stream_id` 仍归一 global。注入查询 `query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配——因此 A 群形成的思想可在 B 群相关话题被召回。存量群锁 trait 不会被自动改写，仅新内化走全局。
+**Phase 0B.1（v2.5.0 修订）**：内化新建 trait 的 `stream_id` 由 **`worldview.local_first_evolution`（默认 `true`）** 决定——**默认写来源群**（单群对话不足以改写 bot 的全局人格），要全局须显式 `/soul_promote_global`；把开关设为 `false` 则回到旧行为（固定写 `GLOBAL_STREAM`，思想视为 Bot 全局身份）。来源群始终写入 **`origin_stream_id`**（仅溯源/展示，不参与注入 scope）。`create_crystallized_trait` 接受 `origin_stream_id`；空 `stream_id` 仍归一 global。注入查询 `query_active_traits_for_injection` 按 `stream_id == ? OR stream_id == GLOBAL_STREAM` 匹配——全局 trait 在所有群可召回，群作用域 trait 只在本群召回。存量 trait 不会被自动改写。
 
 ### @API 访问控制
 
@@ -271,7 +272,7 @@ OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened tr
 
 | 文件 | 职责 |
 |------|------|
-| `models/self_reflection.py` | 3 表 dataclass + CRUD（含 `cleanup_expired_pending` TTL/上限、`get_injection_snapshot` 按 id 配对） |
+| `models/self_reflection.py` | 3 表 dataclass + CRUD（含 `cleanup_expired_pending` TTL/上限、`claim_snapshot_for_response` FIFO 认领 + 陈旧窗口、`mark_snapshot_delivery_state` 投递阶段） |
 | `components/reflection_capture.py` | 两个 OBSERVE hook 委托 + context 缓存 + snapshot 守卫。**懒导入 models 避开预存循环导入** |
 | `components/reflection_evaluator.py` | 评价协程 + 批量 LLM + 相关性门槛 + self_observation 种子 + 批次归一化 |
 | `components/reflection_feedback.py` | 双路反馈：光谱修正（dead zone）+ planner 摘要聚合 |
@@ -304,12 +305,11 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `thought/` — 思维阁种子与内化（`thought_cabinet.enabled`）；`seed_manager.py` 含上下文窗口/TTL/去重，`internalization_engine.py` 含 P1 层推断/生命周期/图谱边 + 内化 prompt 上下文 + v2.4.0 发酵后内化（`fermentation_inputs` 参数），`fermentation_engine.py`（**v2.4.0**：发酵循环 + L1 关键词过滤 + L3 LLM 关联度判断 + 到期检测/延长/最终内化触发）
 - `worldview/` — **P1 新增**：`constants.py`（层/轴映射）、`service.py`（`WorldviewService`）
 - `prompts/`、`questions/` — 问卷与 LLM 提示词（v2.1.0 社交轴版本；v2.3.0 +`self_reflection_prompts.py`；v2.4.0 +`fermentation_prompts.py`）
-- `models/` — 按实体拆分：`_conn.py`（连接/建表/迁移 ledger + origin/raw/consumed/`cabinet_slot_no`）、`spectrum.py`、`history.py`、`seeds.py`（含日上限计数）、`traits.py`（`origin_stream_id` / `set_trait_slot` / `promote_trait_to_global`）、`p1.py`、`self_reflection.py`；`ideology_model.py` 为重导出 shim
+- `models/` — 按实体拆分：`_conn.py`（连接/建表/迁移 ledger，v2–v5：`cabinet_slot_no` / 快照配对 / 种子操作租约 / 通知 outbox）、`spectrum.py`、`history.py`、`seeds.py`（含日上限计数与终态保留）、`traits.py`（`origin_stream_id` / `set_trait_slot` / `promote_trait_to_global` / 槽位让位）、`p1.py`、`self_reflection.py`、`operations.py`（内化单赢家租约）、`notifications.py`（通知 outbox）；`ideology_model.py` 为重导出 shim
+- `migration/` — `legacy_import.py`（旧库只读导入）、`inventory.py`（双数据目录**只读**盘点与迁移预演，含谱系观察，**不自动选源**）
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
-- `utils/data_dir.py` — 宿主 data_dir 解析 + backup 迁移
-- `utils/host_persona.py` — HostBasePersona 快照（config.get）
-- `utils/runtime_resolution.py` — 群 stream：get_stream → open_session
-- `tests/` — 约 **423** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；含 migrations/cabinet_slots/promote/open_session/persona/message_merge/宿主契约(host_prompt_items/host_config/command_input)/快照配对/种子保留/槽位恢复/操作租约/运行模式/候选校验/任务监督 等
+- `utils/` — `data_dir.py`（宿主 data_dir 解析 + backup 迁移）、`host_persona.py`（人设快照）、`host_config.py`（`config.get` 裸值归一）、`host_prompt_items.py`（`items` 契约适配/合并）、`runtime_resolution.py`（群 stream：get_stream → open_session）、`runtime_mode.py`（三模式闸门）、`task_supervisor.py`（任务存活监督）、`stream_kind.py`（会话类型显式判定）、`notify.py`（通知发送 + 失败入队）、`spectrum_utils.py`（命令文本/模式闸门）、`card_render.py`
+- `tests/` — 约 **500** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；覆盖宿主契约、快照配对、种子保留、槽位恢复、操作租约与队列、卸载隔离、通知 outbox、运行模式与命令闸门、候选校验、任务监督、会话类型、迁移盘点 等
 
 ## 开发与验证
 
@@ -341,17 +341,19 @@ cd /path/to/Maibot
 - **不要改 Maibot 主程序**（`src/`）除非维护者明确许可。
 - 配置示例与文档中的 QQ/群号用占位符，勿提交真实 ID。
 - 可选能力默认关：**Notion**、**思维阁**、**@API**（`api.enabled` 默认 False）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
-- **`plugin.mode = "off"`（默认）**：不学习、不注入、不改人格；`observe` 只学习并生成候选（不注入、不改人格、接纳类命令被拒）；`apply` 才真正注入并允许改写人格。旧 `enabled=true` 且未写 `mode` 只映射为 `observe`。
+- **`plugin.mode = "off"`（schema 默认）**：不学习、不注入、不改人格；`observe` 只学习并生成候选（不注入、不改人格、接纳类命令被拒）；`apply` 才真正注入并允许改写人格。**`mode` 未显式设置时不隐式放行**：仅当旧配置 `enabled=true` 且 `mode` 为空字符串才映射为 `observe`，否则按 schema 默认 `off`（pydantic 会补齐默认值，所以「旧配置没写 mode」实际落在 `off`）。
 - **候选优先**：内化 LLM 的输出先过 `thought/candidate.py` 结构化校验，无效候选（空观点 / 数值无法解析 / 越界 / 类型错误）**拒绝且不写任何人格状态**，返回结构化原因；越界不静默 clamp。`spectrum_impact` 是 `spectrum_deltas` 的历史别名，仍须支持。
 - **内化幂等**：LLM 调用前先 `claim_seed_operation` 拿租约（`models/operations.py`），同一颗种子并发批准/崩后重试只施加一次光谱影响；终结时操作结果与种子终态在同一事务提交。
 - **种子保留只碰终态**：`approved`/`rejected`/`expired`/`internalized` 才可回收，`pending`/`fermenting` 不得删（发酵中是在途工作，删了会连发酵输入一起丢）。
 - **槽位恢复**：重新启用 trait 时若其槽已被别的启用 trait 占用，**让出自己的槽号**（不挤走现占用者），避免撞 `cabinet_slot_no` 部分唯一索引。
-- **`local_first_evolution`（默认 false）**：关=内化观点写全局（现状）；开=写来源群，只影响该群，要全局须显式 `/soul_promote_global`。
+- **`local_first_evolution`（默认 true）**：开=内化观点写来源群、只影响该群，要全局须显式 `/soul_promote_global`（单群输入不足以改写 bot 的全局人格）；关=观点直接写全局（旧行为，可切回）。`/soul_health` 显示当前作用域。
 - **`p1_enabled=false` 只关分层/切片/情绪，社交轴仍然生效**，不会回滚到政治轴。
-- **`fermentation_enabled=false` 只关发酵**，批准后立即内化；**`fermentation_min_inputs=0` 会弱化「最少证据」门槛（到期易直接内化），不推荐**。
+- **`fermentation_enabled=false` 只关发酵**，批准后的内化走操作队列（见下一条）；**`fermentation_min_inputs=0` 会弱化「最少证据」门槛（到期易直接内化），不推荐**。
 - 光谱边界：硬 clamp 0–100，禁止越界反弹。
 - 演化：`_analyze_group` → `"success"|"skipped"|"failed"`，禁止无条件 True。
-- 新内化 trait **默认 global**；槽位**不自动占用**，需 `/soul_slot`（或内化文案提示）。
+- **长操作一律走队列**：宿主命令 RPC 超时 60s，而插件给 LLM 的超时最长 120s——**禁止在命令里内联调 LLM**，否则会出现「命令报超时/失败，但副作用其实已写入」。`/soul_approve` 只入队并立刻回 `operation_id`，后台 `_internalization_loop` 消费，`/soul_op` 查状态。`@Command` 不吃 `timeout_ms`（那是 `@HookHandler` 的参数）。
+- **会话类型不猜字符串**：用 `utils/stream_kind.py`（宿主 `chat.get_group_streams` / `get_private_streams`）判定；判定不出时以更严格的设置为准。**禁止**按 `session_id` 含 "private" 字样推断。
+- 新内化 trait 默认写**来源群**（`local_first_evolution=true`），要全局用 `/soul_promote_global`；槽位**不自动占用**，需 `/soul_slot`（或内化文案提示）。
 - 发版：插件仓 `git push`；宿主 `plugins/*` 常在 gitignore。
 - Manifest / `CONFIG_VERSION`：**2.5.0** 严格三段式 semver，**禁止 `-dev` 后缀**。
 
@@ -365,9 +367,9 @@ cd /path/to/Maibot
 | 0A 发酵 | LLM 失败 `[]` 不推进 checked_at；无证据不强制 finalize | `fermentation_engine.py` |
 | 0A 自评 | raw/normalized；种子用 raw；gate 接线；跨 session + consumed | `self_reflection.py`、`reflection_*` |
 | 0A 生命周期 | `_compute_desired_tasks` + `_reconcile_background_tasks`；API 默认关 | `plugin.py`、`plugin_ui_schema.py` |
-| 0B.1 | 内化 `stream_id=global` + `origin_stream_id` | `traits.py`、`internalization_engine.py` |
+| 0B.1 | 内化 `stream_id` **默认写来源群**（`worldview.local_first_evolution`，默认 true）+ `origin_stream_id` | `traits.py`、`internalization_engine.py`、`plugin_ui_schema.py` |
 | 0B.2 | 关键词补位 + `activation_reason` | `ideology_injector.py` |
-| 0B.3 | 追加宿主首条 system；无 system fail-open | `ideology_injector.py` |
+| 0B.3 | 追加到宿主首个 system item 的**最后一个 text part**（传/回都是 `items`）；无 system fail-open | `ideology_injector.py`、`utils/host_prompt_items.py` |
 | 0B.4 | `self_observation_daily_cap`（默认 2） | `seeds.py`、`reflection_evaluator.py` |
 | 0C | 内化光谱+trait+边 `commit=False` + BEGIN/COMMIT | `internalization_engine.py`、`spectrum.py`、`traits.py`、`p1.py` |
 | 1.mix | `soul_schema_migrations` + `user_version`；`cabinet_slot_no` UNIQUE partial | `_conn.py`、`traits.py` |
@@ -376,6 +378,17 @@ cd /path/to/Maibot
 | data.dir | 宿主 `data_dir/mai_soul_engine` + backup 迁移 | `utils/data_dir.py`、`plugin.py` |
 | H1 插件侧 | get_stream → **open_session** 回退（**非**宿主新 PR） | `utils/runtime_resolution.py` |
 | H2 插件侧 | **config.get** 读 personality/reply_style → 内化基底 | `utils/host_persona.py` |
+| 0D 队列 | 内化走持久操作队列：命令只入队回 `operation_id`，后台 `_internalization_loop` 消费（**禁止在命令里内联调 LLM**——命令 RPC 60s < LLM 120s，会出现「报超时但已写入」） | `thought/internalization_queue.py`、`components/thought_commands.py`、`plugin.py` |
+| 0D 通知 | 发送失败入 outbox 重放；去重键必须稳定（`hash()` 受 PYTHONHASHSEED 影响，重启即失效） | `models/notifications.py`、`utils/notify.py` |
+| 0D 运维 | 卸载清理**逐项隔离**（一步失败不阻断其余）；任务监督用 `done()` 判定存活 + 稳定运行后重置重启计数 | `plugin.py`、`utils/task_supervisor.py` |
+| 0D 判定 | 会话类型走宿主显式流列表（不猜 `session_id` 字符串）；判定不出时以更严格设置为准 | `utils/stream_kind.py`、`ideology_injector.py` |
+| 0D 盘点 | 双数据目录**只读**盘点 + 迁移预演 + 谱系观察（**不自动选源**） | `migration/inventory.py` |
+
+**方案里尚未落地**（明确列出，勿当成已完成）：
+1. **Replyer 侧分用途投递**——宿主有 `maisaka.replyer.before_model_request`，当前只在 planner 注入。落地前先定清 Replyer 具体看到什么，做错会变双重注入。
+2. **token 预算与截断规则显式配置**——现靠 `injection.max_traits` 限条数，无 token 估算。
+3. **作用域字段**——快照只记 session_id，未含平台/机器人身份。
+4. **任务监督器细粒度状态**——缺 waiting/backoff 与心跳/最后成功时间。
 
 **尚未做（YAGNI / 可选）**：完整 v3 candidates/runs/versions；宿主 H3 结构化 persona extension；冷却改分惩罚；自动静默占槽。
 
