@@ -27,7 +27,7 @@ __all__ = [
     "init_db",
 ]
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -483,6 +483,36 @@ def _run_migrations() -> None:
             _record_migration_failed(7, "v7_snapshot_bot_identity", str(e))
             raise
 
+    if current < 8:
+        _record_migration_start(8, "v8_snapshot_platform")
+        try:
+            _run_v8_migration()
+            _record_migration_success(8, "v8_snapshot_platform")
+            _set_schema_version(8)
+            current = 8
+        except Exception as e:
+            _record_migration_failed(8, "v8_snapshot_platform", str(e))
+            raise
+
+
+def _run_v8_migration() -> None:
+    """Version 8：注入快照记录**平台**（作用域字段的第二半）。
+
+    宿主 hook 载荷与 SDK 都**不返回**平台，也没有「枚举平台」的能力，
+    但 SDK 的 ``chat.get_*_streams`` 接受 platform 参数。因此插件侧的唯一诚实解：
+    由**配置声明**平台列表（``plugin.platforms``，默认 ``["qq"]``），
+    再按平台去宿主流列表探测会话归属；探不到留空（未知，不编造）。
+    **禁止**按 session_id 字符串推断平台。
+    """
+    conn = _get_conn()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(soul_injection_snapshots)")}
+    if "platform" not in cols:
+        conn.execute(
+            "ALTER TABLE soul_injection_snapshots "
+            "ADD COLUMN platform TEXT NOT NULL DEFAULT ''"
+        )
+    conn.commit()
+
 
 def _run_v7_migration() -> None:
     """Version 7：注入快照记录**机器人身份**。
@@ -491,9 +521,7 @@ def _run_v7_migration() -> None:
     无法判断「这条记录属于谁」。身份来源是宿主 ``bot.qq_account``（权威），
     插件侧不重复维护。
 
-    **平台字段故意没加**：宿主 hook 载荷与流列表接口都没有平台字段，
-    按 session_id 字符串猜平台是方案明令禁止的。平台需求已并入宿主最小接口
-    变更清单（见 ACCEPTANCE §6.1），拿到之前不造一个永远为空的列。
+    平台字段见 v8（宿主零改动前提下用另一个来源）。
     """
     conn = _get_conn()
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(soul_injection_snapshots)")}

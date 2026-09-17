@@ -32,6 +32,26 @@ def im(conn_mod: Any) -> Any:
     model.close_db()
 
 
+# 每个迁移「加了什么」——测试据此制造"迁移还没跑"的状态。
+# 加新迁移时**必须**在这里登记，否则测试会明确报错（而不是悄悄测不着）。
+_MIGRATION_ARTIFACTS: dict[int, tuple[str, str]] = {
+    6: ("soul_injection_snapshots", "pairing_ambiguous"),
+    7: ("soul_injection_snapshots", "bot_identity"),
+    8: ("soul_injection_snapshots", "platform"),
+}
+
+
+def _latest_artifact() -> tuple[str, str]:
+    """最新迁移留下的可观测产物 (表, 列)。"""
+    latest = _latest()
+    if latest not in _MIGRATION_ARTIFACTS:
+        raise AssertionError(
+            f"迁移 v{latest} 未登记到 _MIGRATION_ARTIFACTS —— 请补上它写了什么"
+            "（表/列），否则迁移鲁棒性测试覆盖不到它"
+        )
+    return _MIGRATION_ARTIFACTS[latest]
+
+
 def _latest() -> int:
     """从模块取最新版本号——**不要硬编码**，否则每次加迁移测试都要改。"""
     return int(_import_soul_submodule("models._conn").CURRENT_SCHEMA_VERSION)
@@ -101,19 +121,19 @@ def test_wal_db_migrates_forward_without_losing_rows(im: Any, tmp_path: Path) ->
     conn = sqlite3.connect(str(db))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("DROP TABLE IF EXISTS soul_notifications")
-    conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN pairing_ambiguous")
-    conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN bot_identity")
-    conn.execute(f"PRAGMA user_version = {_latest() - 2}")
+    table, column = _latest_artifact()
+    conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    conn.execute(f"PRAGMA user_version = {_latest() - 1}")
     conn.commit()
     conn.close()
 
-    stale = _latest() - 2
+    stale = _latest() - 1
     assert _version(db) == stale
+    assert not _has_column(db, table, column), "测试前置：目标列本应已被拆掉"
     im.init_db(db)
 
     assert _version(db) == _latest(), "迁移没有推进到最新版本"
-    assert _has_column(db, "soul_injection_snapshots", "pairing_ambiguous")
-    assert _has_column(db, "soul_injection_snapshots", "bot_identity")
+    assert _has_column(db, table, column), "迁移没有把列补回来"
     _assert_rows_intact(im)
 
     conn = sqlite3.connect(str(db))
@@ -154,8 +174,9 @@ def test_interrupted_migration_does_not_advance_version(
 
     # 退回一个版本并拆掉最后一个迁移的产物，制造「待执行」的状态
     latest = _latest()
+    table, column = _latest_artifact()
     conn = sqlite3.connect(str(db))
-    conn.execute("ALTER TABLE soul_injection_snapshots DROP COLUMN bot_identity")
+    conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
     conn.execute(f"PRAGMA user_version = {latest - 1}")
     conn.commit()
     conn.close()
@@ -175,7 +196,7 @@ def test_interrupted_migration_does_not_advance_version(
     monkeypatch.undo()
     im.init_db(db)
     assert _version(db) == latest
-    assert _has_column(db, "soul_injection_snapshots", "bot_identity")
+    assert _has_column(db, table, column)
     _assert_rows_intact(im)
 
 

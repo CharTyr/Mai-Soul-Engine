@@ -182,6 +182,16 @@ class MonitorConfig(PluginConfigBase):
             placeholder="qq:12345678:group",
         ),
     )
+    platforms: list[str] = Field(
+        default_factory=lambda: ["qq"],
+        description="平台列表",
+        json_schema_extra=_ui(
+            "平台列表",
+            "机器人所在平台（宿主默认 qq）。插件按此列表去宿主流列表探测会话归属；"
+            "探测不到则为未知，不会按 session_id 猜。多平台时逐项列出。",
+            placeholder="qq",
+        ),
+    )
     excluded_groups: list[str] = Field(
         default_factory=list,
         description="排除群",

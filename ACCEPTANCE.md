@@ -253,46 +253,50 @@ uv pip install -e ".[test]"   # 或手动装 pytest / pytest-asyncio / pillow / 
 | T18 | 未验证 | **通过** | 注入日志内容测试（含原始对话与会话标识）+ 保留期 TTL（14 天，此前只按大小轮转＝低频环境永不清理）+ 仓库凭据扫描（`test_privacy_and_retention.py`）。**注**：文件权限继承宿主 data_dir，插件层不做 chmod |
 | T20 | 未做 | **通过** | 离线回放器 `tools/replay.py`：四阶段走真实代码路径，可复现（uuid 归一），覆盖反例/刷屏/多账号歧义/长期无证据，逐条标注 fixture 免责（`test_replay_harness.py`） |
 | T14 | 部分 | 部分（改善） | 监督器补齐方案要求的五态 running/waiting/backoff/failed/stopped，五个真实循环接入 waiting 打点；**热更路径覆盖仍弱** |
-| 作用域字段 | 未做 | 部分 | 快照记录 `bot_identity`（宿主 `bot.qq_account`，v7 迁移）；**平台字段故意没加**——宿主 hook 载荷与流列表接口都没有平台字段（已只读核对），按字符串猜平台是方案禁止的，已并入下方宿主接口需求 |
+| 作用域字段 | 未做 | **通过**（宿主零改动解） | 快照记录 `bot_identity`（宿主 `bot.qq_account`，v7）+ `platform`（v8）。平台来源：**配置声明平台列表**（`plugin.platforms`，默认 `["qq"]`）→ 按平台探测宿主流列表（SDK 的 `chat.get_*_streams` 接受 platform 参数）→ 归属即平台；探不到留空。**不猜 session_id 字符串**（`test_stream_kind.py` 平台探测组 + 快照字段测试） |
 
-**汇总（第四轮）**：通过 15 项、部分 3 项（T03 精确关联、T06 低流量、T14 热更）、
-未验证 0、未做 0。阻塞 1 个（T03 的 request_id）。
+**汇总（第四轮）**：通过 16 项、部分 3 项（T03 精确关联、T06 低流量、T14 热更）、
+未验证 0、未做 0。**无阻塞项**——T03 在「宿主零改动」约束下已是插件侧天花板（见 §6.1）。
 
 仍未覆盖、且**不打算**用测试冒充的：
 - **真实模型表现**：回放用的是固定 fixture，只验证代码路径与决策原因，
   不代表线上质量——那只能靠受控实测（当前按用户要求冻结）。
 - **T06 低流量子项**、**T14 热更路径**：属于「补测试」，仍缺。
 
-### 6.1 给宿主的最小接口变更需求（用于根治 T03）
+### 6.1 T03 在「宿主零改动」约束下的最终形态
 
-现状：`maisaka.planner.before_request` 与 `maisaka.replyer.before_model_request` /
-`maisaka.replyer.after_response` 的 payload **没有任何共同请求标识**，插件无法把
-「某次注入」与「某次回复」精确绑定，只能启发式配对并标注歧义。
+**约束（用户决定）**：**不得修改宿主任何代码**。此前提出的「宿主给 hook 加
+`request_id` / `platform` 字段」的申请**作废**，本节不再作为待办。
 
-最小改动（不新增权限，只加字段）：
-1. 宿主在一次推理开始时生成 `request_id`（uuid 即可）；
-2. 三个 hook 的 payload 都带上同一个 `request_id`（planner.before_request、
-   replyer.before_model_request、replyer.after_response）；
-3. 三个 hook 的 payload 各加 `platform`（平台标识）。
+在该约束下，配对问题的**插件侧穷尽**如下（均已有测试）：
 
-**关于第 3 条**：插件的「作用域」需要平台，但已只读核对过宿主 schema——
-planner hook 只有 `items/item_schema_version/tool_definitions/selected_history_count/
-built_message_count/selection_reason/session_id`，replyer hook 只有
-`items/item_schema_version/session_id/request_type/task_name/模型名/attempt/
-reply_message_id/reply_reason/selected_expression_ids/reply_tool_args`，
-**都没有平台字段**。机器人身份可从宿主 `bot.qq_account` 取（已实现），平台无处可取。
-按 session_id 字符串猜平台是方案明令禁止的，因此在拿到该字段前不造一个永远为空的列。
+| 腿 | 关联手段 | 精确性 |
+|----|----------|--------|
+| planner.before → 快照 | 生成快照（唯一锚点） | — |
+| replyer 重试 → 同一快照 | 复用它已绑定的 `reply_message_id` | **精确** |
+| 回复 → 快照认领 | `reply_message_id` + 陈旧窗口内的最旧未认领 | 启发式 |
+| 窗口内 ≥2 条未认领 | 标 `pairing_ambiguous=1`，**阻断会改人格的自评反馈** | 宁可不动，不许猜 |
 
-有此字段后：快照按 `request_id` 精确认领，`pairing_ambiguous` 可退化为
-「宿主未提供 request_id 时的降级路径」。**在获批之前不做宿主改动**，
-现状是「标注歧义 + 阻断人格反馈」，而不是猜。
+已核实的宿主事实（只读，作为结论依据）：`maisaka.planner.before_request` 的 payload
+就是 `items / item_schema_version / tool_definitions / selected_history_count /
+built_message_count / selection_reason / session_id` 七项；replyer 侧有
+`reply_message_id` 但**两侧没有共同 id**。SDK 的 `chat.get_*_streams(platform=...)`
+是**入参**不带平台返回值，也没有枚举平台的能力。
+
+**结论**：planner→replyer 的精确绑定在宿主零改动下**不可达**。插件采取
+「不确定就不改人格」的保守方向——`pairing_ambiguous` 会让自评反馈被跳过，
+而不是拿猜出来的关联去改人格。这属于**已知限制**，不是待办。
+
+**平台（作用域字段）已用插件侧方案解决**：配置声明平台列表 + 按平台探测宿主流列表
+（见 §6 表）——不需要宿主动任何代码。
 
 ### 6.2 尚未落实的方案条目（不因本轮返工而改变）
 
 1. Replyer 侧分用途投递 —— **本轮已落地**（见 §6 T03 行的前半）。
 2. token 预算与截断规则显式配置 —— **本轮已落地**（`utils/token_budget.py`，
    保守估算 + 稳定裁剪 + 可配置预算；标明是估算）。
-3. 作用域字段（平台 / 机器人身份）—— 仍未做：宿主 payload 只给 session_id，
-   平台需枚举、机器人身份可从 `bot.qq_account` 读；半成品作用域会污染注入隔离。
+3. 作用域字段（平台 / 机器人身份）—— **本轮已落地**：机器人身份取宿主
+   `bot.qq_account`（v7）；平台用「配置声明 + 宿主流列表探测」（v8），
+   宿主零改动。
 4. 任务监督器细粒度状态 —— 本轮补了 last_success / heartbeat / next_retry + 退避，
    仍缺 `waiting` 状态。

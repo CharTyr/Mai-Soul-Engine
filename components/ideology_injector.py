@@ -17,7 +17,12 @@ from ..models.ideology_model import get_or_create_spectrum, query_active_traits_
 from ..models.self_reflection import DELIVERY_HOOK_APPLIED, mark_snapshot_delivery_state
 from ..prompts.ideology_prompts import build_ideology_prompt
 from ..utils.runtime_mode import resolve_runtime_mode
-from ..utils.stream_kind import STREAM_KIND_PRIVATE, STREAM_KIND_UNKNOWN, resolve_stream_kind
+from ..utils.stream_kind import (
+    STREAM_KIND_PRIVATE,
+    STREAM_KIND_UNKNOWN,
+    resolve_stream_kind,
+    resolve_stream_scope,
+)
 from ..utils.host_prompt_items import (
     append_block_to_first_system,
     extract_latest_user_text,
@@ -910,10 +915,14 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
     if not is_replyer_view:
         # 配对锚点只能由 Planner 的 before_request 落：replyer 也落会造出
         # 第二条快照，让「同会话多快照」的歧义判定永远为真。
+        # 作用域字段：平台由**宿主流列表**探测（配置声明平台列表），探测不到留空。
+        # 缓存命中时这次调用几乎零成本（TTL 5 分钟）。
+        _kind, scope_platform = await resolve_stream_scope(plugin, stream_id)
         snapshot_id = maybe_write_injection_snapshot(
             plugin, session_id, stream_id, selected, spectrum_dict, mood_lines, selection_mode,
             context_lines=context_lines,
             bot_identity=await _resolve_cached_bot_identity(plugin),
+            platform=scope_platform,
         )
     if snapshot_id:
         # INJECTION_SNAPSHOT_TODO: 这里只能确认「已交回宿主」。

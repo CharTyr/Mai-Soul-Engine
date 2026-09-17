@@ -225,3 +225,107 @@ def test_unknown_kind_allows_with_private_enabled(soul_db: Any, tmp_path: Any) -
 
     # 放行了（光谱未初始化时会 continue，但不应带 skip 语义）——只断言没有因类型被拦
     assert isinstance(result, dict)
+
+
+# ─── 平台探测（作用域字段；宿主零改动前提下唯一诚实解）─────────────────
+
+
+class _PlatformChat:
+    """按平台返回不同流列表的宿主 chat 能力。"""
+
+    def __init__(self, by_platform: dict[str, list[str]]) -> None:
+        self.by_platform = by_platform
+        self.probed: list[str] = []
+
+    async def get_group_streams(self, platform: str = "qq") -> Any:
+        self.probed.append(platform)
+        return [s for s in self.by_platform.get(platform, []) if s.endswith("-group")]
+
+    async def get_private_streams(self, platform: str = "qq") -> Any:
+        self.probed.append(platform)
+        return [s for s in self.by_platform.get(platform, []) if s.endswith("-private")]
+
+
+def _plugin_with_platforms(chat: Any, platforms: list[str] | None) -> Any:
+    plugin_cfg = SimpleNamespace(platforms=platforms) if platforms is not None else SimpleNamespace()
+    return SimpleNamespace(ctx=SimpleNamespace(chat=chat), config=SimpleNamespace(plugin=plugin_cfg))
+
+
+def test_resolve_scope_reports_platform_from_host_lists() -> None:
+    """平台来自**宿主流列表**（按配置逐平台探测），不是从 session_id 猜的。"""
+    sk = _fresh()
+    chat = _PlatformChat({"discord": ["dc-77-group"], "qq": ["qq-1-group"]})
+
+    kind, platform = asyncio.run(sk.resolve_stream_scope(_plugin_with_platforms(chat, ["discord", "qq"]), "dc-77-group"))
+    assert (kind, platform) == ("group", "discord")
+
+    kind2, platform2 = asyncio.run(sk.resolve_stream_scope(_plugin_with_platforms(chat, ["discord", "qq"]), "qq-1-group"))
+    assert (kind2, platform2) == ("group", "qq")
+
+
+def test_resolve_scope_platform_is_empty_when_unknown() -> None:
+    """探测不到 → 空串（未知）。**不编造**平台。"""
+    sk = _fresh()
+    chat = _PlatformChat({"qq": ["qq-1-group"]})
+    kind, platform = asyncio.run(sk.resolve_stream_scope(_plugin_with_platforms(chat, ["qq"]), "nope-9-group"))
+    assert kind == "unknown" and platform == ""
+
+
+def test_resolve_scope_uses_default_platform_when_unconfigured() -> None:
+    """没配置平台时用宿主默认 ``qq``；配置列表决定**探测范围**。"""
+    sk = _fresh()
+    chat = _PlatformChat({"qq": ["qq-5-group"]})
+
+    kind, platform = asyncio.run(sk.resolve_stream_scope(_plugin_with_platforms(chat, None), "qq-5-group"))
+    assert (kind, platform) == ("group", "qq")
+
+    # 只声明 discord → 不去探测 qq，因此判定为未知（宁可未知也不越界猜）
+    sk.clear_stream_kind_cache()
+    kind2, platform2 = asyncio.run(sk.resolve_stream_scope(_plugin_with_platforms(chat, ["discord"]), "qq-5-group"))
+    assert (kind2, platform2) == ("unknown", "")
+
+
+def test_resolve_scope_survives_one_platform_failing() -> None:
+    """单个平台探测失败不能拖垮其余平台。"""
+    sk = _fresh()
+
+    class _Flaky(_PlatformChat):
+        async def get_group_streams(self, platform: str = "qq") -> Any:
+            if platform == "discord":
+                raise RuntimeError("discord 不支持")
+            return await super().get_group_streams(platform)
+
+    chat = _Flaky({"qq": ["qq-3-group"]})
+    kind, platform = asyncio.run(sk.resolve_stream_scope(_plugin_with_platforms(chat, ["discord", "qq"]), "qq-3-group"))
+    assert (kind, platform) == ("group", "qq")
+
+
+def test_stream_scope_is_cached_with_platform() -> None:
+    """缓存要连平台一起缓存（否则第二次调用平台就丢了）。"""
+    sk = _fresh()
+    chat = _PlatformChat({"qq": ["qq-9-group"]})
+    plugin = _plugin_with_platforms(chat, ["qq"])
+
+    asyncio.run(sk.resolve_stream_scope(plugin, "qq-9-group"))
+    before = len(chat.probed)
+    _kind, platform = asyncio.run(sk.resolve_stream_scope(plugin, "qq-9-group"))
+    assert platform == "qq"
+    assert len(chat.probed) == before, "第二次调用没有走缓存"
+
+
+def test_snapshot_records_platform_scope_field(soul_db: Any) -> None:
+    """快照必须记录平台（作用域字段）；缺失时留空，不编造。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    snap = sr.create_injection_snapshot(
+        "group-A", "sess-1", '["t"]', "{}", "{}", "tag_hit",
+        bot_identity="qq:12345", platform="discord",
+    )
+    stored = sr.get_injection_snapshot(snap)
+    assert stored is not None
+    assert stored.platform == "discord"
+    assert stored.bot_identity == "qq:12345"
+
+    snap2 = sr.create_injection_snapshot("group-A", "sess-2", "[]", "{}", "{}", "spectrum_only")
+    stored2 = sr.get_injection_snapshot(snap2)
+    assert stored2 is not None and stored2.platform == ""

@@ -109,6 +109,7 @@ def maybe_write_injection_snapshot(
     selection_mode: str,
     context_lines: list[str] | None = None,
     bot_identity: str = "",
+    platform: str = "",
 ) -> str:
     """仅 ``[self_reflection].enabled`` 时落注入快照，返回 snapshot_id（否则空串）。
 
@@ -119,6 +120,9 @@ def maybe_write_injection_snapshot(
 
     ``bot_identity``：宿主 ``bot.qq_account``（权威来源）。同一条 session_id
     在换机器人后可能指向不同人格，快照不带身份就无法判断归属。
+
+    ``platform``：由宿主流列表**探测**得出（见 ``utils/stream_kind.py``）。
+    同一 session_id 可能存在于多个平台，不带平台无法区分归属；探不到留空。
     """
     if not plugin.config.self_reflection.enabled:
         return ""
@@ -143,6 +147,7 @@ def maybe_write_injection_snapshot(
             context_fingerprint=fingerprint,
             context_json=context_json,
             bot_identity=bot_identity,
+            platform=platform,
         )
     except Exception:
         logger.exception("[SelfReflection] 写注入快照失败")

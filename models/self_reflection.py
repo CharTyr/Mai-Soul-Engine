@@ -98,6 +98,8 @@ class InjectionSnapshot:
     pairing_ambiguous: bool = False
     # 作用域：这条快照属于哪个机器人（宿主 bot.qq_account；取不到为空串）
     bot_identity: str = ""
+    # 作用域：平台（按配置声明的平台列表**探测宿主流列表**得出；探不到为空串）
+    platform: str = ""
 
 
 @dataclass
@@ -151,12 +153,16 @@ def create_injection_snapshot(
     context_fingerprint: str = "",
     context_json: str = "[]",
     bot_identity: str = "",
+    platform: str = "",
 ) -> str:
     """落一条注入快照，返回 snapshot_id。仅在 [self_reflection].enabled 时调用。
 
     ``context_json`` 是该轮的触发上文，随快照一起落库，保证并发轮次互不覆盖。
     ``bot_identity`` 是宿主 ``bot.qq_account``——作用域字段之一，用于回答
     「这条记录属于哪个机器人」。取不到时留空（不编造）。
+
+    ``platform`` 同样是作用域字段：同一 session_id 可能存在于多个平台，
+    不带平台无法区分归属。由宿主流列表探测得出（不猜字符串）。
     """
     conn = _get_conn()
     snapshot_id = uuid.uuid4().hex
@@ -164,8 +170,8 @@ def create_injection_snapshot(
         """INSERT INTO soul_injection_snapshots
            (snapshot_id, stream_id, session_id, created_at, trait_ids_json,
             spectrum_json, mood_json, selection_mode, context_fingerprint,
-            context_json, delivery_state, bot_identity)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            context_json, delivery_state, bot_identity, platform)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             snapshot_id,
             stream_id,
@@ -179,6 +185,7 @@ def create_injection_snapshot(
             context_json,
             DELIVERY_SELECTED,
             str(bot_identity or ""),
+            str(platform or ""),
         ),
     )
     conn.commit()
@@ -578,6 +585,7 @@ def _row_to_snapshot(row) -> InjectionSnapshot:
             row["pairing_ambiguous"] if "pairing_ambiguous" in row.keys() else 0
         ),
         bot_identity=(row["bot_identity"] if "bot_identity" in row.keys() else ""),
+        platform=(row["platform"] if "platform" in row.keys() else ""),
     )
 
 
