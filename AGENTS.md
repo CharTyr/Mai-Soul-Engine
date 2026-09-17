@@ -282,8 +282,8 @@ OBSERVE 不改写 / 评价异步批量有 dead zone / weight<1 / strengthened tr
 
 | 文件 | 职责 |
 |------|------|
-| `models/self_reflection.py` | 3 表 dataclass + CRUD（含 `cleanup_expired_pending` TTL/上限、`claim_snapshot_for_response` FIFO 认领 + 陈旧窗口、`mark_snapshot_delivery_state` 投递阶段） |
-| `components/reflection_capture.py` | 两个 OBSERVE hook 委托 + context 缓存 + snapshot 守卫。**懒导入 models 避开预存循环导入** |
+| `models/self_reflection.py` | 3 表 dataclass + CRUD（含 `cleanup_expired_pending` TTL/上限、`claim_snapshot_for_response` **内容证据优先**认领 + 陈旧窗口 + 歧义标记、`mark_snapshot_delivery_state` 投递阶段） |
+| `components/reflection_capture.py` | 两个 OBSERVE hook 委托 + context 缓存 + **回复触发尾行缓存**（配对内容证据；TTL 30min，卸载时清）+ snapshot 守卫。**懒导入 models 避开预存循环导入** |
 | `components/reflection_evaluator.py` | 评价协程 + 批量 LLM + 相关性门槛 + self_observation 种子 + 批次归一化 |
 | `components/reflection_feedback.py` | 双路反馈：光谱修正（dead zone）+ planner 摘要聚合 |
 | `components/reflection_command.py` | `/soul_reflect [N]` 管理员查看 |
@@ -320,7 +320,7 @@ DB 列就地重命名，数值保留但**语义已变**（原 economic=60 现被
 - `config_template.toml` — 脱敏模板（示例 ID 用 `12345678`）；真实配置在本地 `config.toml`
 - `utils/` — `data_dir.py`（宿主 data_dir 解析 + backup 迁移）、`host_persona.py`（人设快照）、`host_config.py`（`config.get` 裸值归一）、`host_prompt_items.py`（`items` 契约适配/合并）、`runtime_resolution.py`（群 stream：get_stream → open_session）、`runtime_mode.py`（三模式闸门）、`task_supervisor.py`（任务存活监督）、`stream_kind.py`（会话类型显式判定）、`notify.py`（通知发送 + 失败入队）、`spectrum_utils.py`（命令文本/模式闸门）、`card_render.py`、`token_budget.py`（token 预算：保守估算 + 稳定裁剪，顺序即优先级）
 - `tools/` — `replay.py`（**离线回放**：候选/接纳/注入/配对四阶段全走**真实代码路径**，输出可复现记录并逐条标注「LLM 是固定 fixture」；**不得把 fixture 输出当真实模型表现**）
-- `tests/` — 约 **569** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；覆盖宿主契约、快照配对、种子保留、槽位恢复、操作租约与队列、卸载隔离、通知 outbox、运行模式与命令闸门、候选校验、任务监督、会话类型、迁移盘点、**迁移鲁棒性**（WAL / 损坏库 / 中断 / 重复）、**平台探测**、**隐私与保留期**、**离线回放** 等
+- `tests/` — 约 **597** 项（宿主根 `uv run pytest plugins/CharTyr_Mai-Soul-Engine/tests/ -q`）；覆盖宿主契约、快照配对（**含内容证据/弃权规则**）、种子保留、槽位恢复、操作租约与队列、卸载隔离、通知 outbox、运行模式与命令闸门、候选校验、任务监督、会话类型、迁移盘点、**迁移鲁棒性**（WAL / 损坏库 / 中断 / 重复）、**平台探测**、**隐私与保留期**、**离线回放** 等
   - **加新迁移必须登记**到 `tests/test_migration_robustness.py` 的 `_MIGRATION_ARTIFACTS`（表 + 列）：不登记测试会**明确报错**，而不是悄悄测不着（本轮栽过两次）
 
 ## 开发与验证
