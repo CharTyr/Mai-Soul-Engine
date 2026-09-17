@@ -31,13 +31,15 @@ __all__ = [
 
 # 盘点时统计行数的表（缺失的表记为 None，不报错）
 _TRACKED_TABLES: tuple[str, ...] = (
-    "soul_spectrum",
+    "soul_ideology_spectrum",
     "soul_crystallized_traits",
     "soul_thought_seeds",
     "soul_fermentation_inputs",
     "soul_context_slices",
     "soul_mood_state",
     "soul_thought_edges",
+    "soul_evolution_history",
+    "soul_group_evolution",
     "soul_injection_snapshots",
     "soul_pending_reflections",
     "soul_self_reflections",
@@ -60,6 +62,7 @@ class DatabaseInventory:
     spectrum_initialized: bool | None = None
     trait_enabled_count: int | None = None
     seed_counts_by_status: dict[str, int] = field(default_factory=dict)
+    seed_status_by_id: dict[str, str] = field(default_factory=dict)
     last_activity: str = ""
     error: str = ""
     section_errors: list[str] = field(default_factory=list)
@@ -72,7 +75,7 @@ class DatabaseInventory:
             "soul_thought_seeds",
             "soul_crystallized_traits",
             "soul_self_reflections",
-            "soul_spectrum",
+            "soul_ideology_spectrum",
         ):
             if (counts.get(table) or 0) > 0:
                 return True
@@ -175,10 +178,10 @@ def inventory_database(path: str | Path) -> DatabaseInventory:
                     inv.table_counts[table] = None
 
         def _read_spectrum() -> None:
-            if not _table_exists(conn, "soul_spectrum"):
+            if not _table_exists(conn, "soul_ideology_spectrum"):
                 return
             row = conn.execute(
-                "SELECT * FROM soul_spectrum WHERE scope_id = 'global'"
+                "SELECT * FROM soul_ideology_spectrum WHERE scope_id = 'global'"
             ).fetchone()
             if row is None:
                 inv.spectrum_initialized = None
@@ -204,12 +207,28 @@ def inventory_database(path: str | Path) -> DatabaseInventory:
                 "SELECT status, COUNT(*) AS cnt FROM soul_thought_seeds GROUP BY status"
             ).fetchall()
             inv.seed_counts_by_status = {r["status"] or "?": int(r["cnt"]) for r in rows}
+            detail = conn.execute(
+                "SELECT seed_id, status FROM soul_thought_seeds"
+            ).fetchall()
+            inv.seed_status_by_id = {
+                r["seed_id"]: (r["status"] or "") for r in detail
+            }
 
         def _read_last_activity() -> None:
-            if not _table_exists(conn, "soul_history"):
-                return
-            row = conn.execute("SELECT MAX(created_at) AS last FROM soul_history").fetchone()
-            inv.last_activity = (row["last"] or "") if row is not None else ""
+            """最近演化时间（列名在不同表里是 timestamp，用 SELECT * 取值）。"""
+            if _table_exists(conn, "soul_evolution_history"):
+                rows = conn.execute(
+                    "SELECT MAX(timestamp) AS last FROM soul_evolution_history"
+                ).fetchone()
+                if rows is not None and rows["last"]:
+                    inv.last_activity = str(rows["last"])
+                    return
+            if _table_exists(conn, "soul_group_evolution"):
+                rows = conn.execute(
+                    "SELECT MAX(last_analyzed) AS last FROM soul_group_evolution"
+                ).fetchone()
+                if rows is not None and rows["last"]:
+                    inv.last_activity = str(rows["last"])
 
         _section("schema 版本", _read_schema_version)
         _section("迁移记录", _read_migrations)
@@ -236,11 +255,52 @@ class MigrationPreview:
         "建议先确认哪份含真实历史，再用它作为权威目录。"
     )
 
+    def lineage_notes(self) -> list[str]:
+        """谱系观察：某份候选是不是另一份的"后续状态"。
+
+        只描述事实，**不选源**。它回答的是"这两份是两条独立历史，还是一前一后"。
+        """
+        notes: list[str] = []
+        readable = [c for c in self.candidates if c.readable and c.seed_status_by_id]
+        for i, a in enumerate(readable):
+            for b in readable[i + 1:]:
+                a_ids, b_ids = set(a.seed_status_by_id), set(b.seed_status_by_id)
+                if not a_ids or not b_ids:
+                    continue
+                if a_ids < b_ids:
+                    later, earlier = b, a
+                elif b_ids < a_ids:
+                    later, earlier = a, b
+                else:
+                    if a_ids == b_ids:
+                        changed = sum(
+                            1 for sid, st in a.seed_status_by_id.items()
+                            if b.seed_status_by_id.get(sid) != st
+                        )
+                        if changed:
+                            notes.append(
+                                f"{a.path} 与 {b.path} 的种子集合完全相同，"
+                                f"但有 {changed} 个种子状态不同：是同一批数据的两次快照。"
+                            )
+                    continue
+
+                changed = sum(
+                    1 for sid, st in earlier.seed_status_by_id.items()
+                    if later.seed_status_by_id.get(sid, st) != st
+                )
+                notes.append(
+                    f"{later.path} 包含 {earlier.path} 的全部 {len(earlier.seed_status_by_id)} 个种子"
+                    f"（其中 {changed} 个状态已变化），看起来是它的**后续状态**；"
+                    f"另一份是较早的快照。"
+                )
+        return notes
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "note": self.note,
             "decision_required": self.decision_required,
             "warnings": self.warnings,
+            "lineage_notes": self.lineage_notes(),
             "candidates": [asdict(c) for c in self.candidates],
         }
 
@@ -319,6 +379,12 @@ def _format_text(preview: MigrationPreview) -> str:
         if c.last_activity:
             lines.append(f"  最近活动: {c.last_activity}")
         lines.append(f"  含实质数据: {'是' if c.has_substantive_data else '否'}")
+
+    notes = preview.lineage_notes()
+    if notes:
+        lines.append("")
+        lines.append("--- 谱系观察（不是选源建议）---")
+        lines.extend(f"· {n}" for n in notes)
 
     if preview.warnings:
         lines.append("")

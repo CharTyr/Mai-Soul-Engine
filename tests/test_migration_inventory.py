@@ -207,3 +207,125 @@ def test_cli_does_not_modify_candidates(tmp_path: Path, capsys: Any) -> None:
     _inv().main([str(db), "--json"])
 
     assert _digest(db) == before
+
+
+def test_tracked_table_names_match_real_schema(tmp_path: Path) -> None:
+    """盘点表名单必须与真实 schema 一致。
+
+    写错表名不会报错，只会安静地显示「—」，看起来像"这张表没数据"——
+    实际是工具根本没找到它。这条测试就是防这个。
+    """
+    inv_mod = _inv()
+    db = _make_db(tmp_path / "soul.db")
+
+    inv = inv_mod.inventory_database(db)
+    missing = [
+        table for table, count in inv.table_counts.items()
+        if count is None and table not in ("soul_seed_operations", "soul_notifications")
+    ]
+
+    assert not missing, f"盘点表名与实际 schema 不符（显示为「—」）：{missing}"
+
+
+def test_spectrum_state_is_read_from_real_table(tmp_path: Path) -> None:
+    """能读到真实光谱表的状态（表名/列名写错会静默变 None）。"""
+    conn_mod = _import_soul_submodule("models._conn")
+    db = _make_db(tmp_path / "soul.db")
+    conn_mod.init_db(db)
+    conn = conn_mod._get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO soul_ideology_spectrum (scope_id, initialized) "
+        "VALUES ('global', 1)"
+    )
+    conn.commit()
+    conn_mod.close_db()
+
+    inv = _inv().inventory_database(db)
+
+    assert inv.spectrum_initialized is True
+    assert (inv.table_counts.get("soul_ideology_spectrum") or 0) == 1
+
+
+# ─── 谱系观察（只描述，不选源） ──────────────────────────────────────
+
+
+def _add_seed(path: Path, seed_id: str, status: str) -> None:
+    conn_mod = _import_soul_submodule("models._conn")
+    conn_mod.init_db(path)
+    conn = conn_mod._get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO soul_thought_seeds (seed_id, stream_id, seed_type, event, "
+        "intensity, confidence, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (seed_id, "qq-1", "t", "e", 0.5, 0.5, status, "2026-01-01T00:00:00"),
+    )
+    conn.commit()
+    conn_mod.close_db()
+
+
+def test_lineage_detects_later_snapshot(tmp_path: Path) -> None:
+    """A 的种子是 B 的子集 → 报告 B 是后续状态（只描述事实）。"""
+    a = _make_db(tmp_path / "a.db")
+    b = _make_db(tmp_path / "b.db")
+    _add_seed(a, "s1", "pending")
+    _add_seed(b, "s1", "rejected")
+    _add_seed(b, "s2", "pending")
+
+    notes = _inv().build_migration_preview([a, b]).lineage_notes()
+
+    assert any("后续状态" in n for n in notes)
+    assert any("b.db" in n and "a.db" in n for n in notes)
+
+
+def test_lineage_notes_do_not_choose_a_source(tmp_path: Path) -> None:
+    """谱系观察里不得出现"选/推荐"这类选源措辞。"""
+    a = _make_db(tmp_path / "a.db")
+    b = _make_db(tmp_path / "b.db")
+    _add_seed(a, "s1", "pending")
+    _add_seed(b, "s1", "rejected")
+    _add_seed(b, "s2", "pending")
+
+    preview = _inv().build_migration_preview([a, b])
+
+    for n in preview.lineage_notes():
+        assert "推荐" not in n and "应该选" not in n and "建议选" not in n
+    assert preview.decision_required is True
+
+
+def test_lineage_reports_same_set_different_status(tmp_path: Path) -> None:
+    """种子集合相同但状态不同 → 说明是同一批数据的两次快照。"""
+    a = _make_db(tmp_path / "a.db")
+    b = _make_db(tmp_path / "b.db")
+    _add_seed(a, "s1", "pending")
+    _add_seed(b, "s1", "rejected")
+
+    notes = _inv().build_migration_preview([a, b]).lineage_notes()
+
+    assert any("两次快照" in n for n in notes)
+
+
+def test_lineage_silent_when_unrelated(tmp_path: Path) -> None:
+    """两份互不相干的种子集合 → 不做谱系断言（避免误导）。"""
+    a = _make_db(tmp_path / "a.db")
+    b = _make_db(tmp_path / "b.db")
+    _add_seed(a, "s1", "pending")
+    _add_seed(b, "s9", "pending")
+
+    notes = _inv().build_migration_preview([a, b]).lineage_notes()
+
+    assert notes == []
+
+
+def test_lineage_present_in_json_and_text(tmp_path: Path, capsys: Any) -> None:
+    """谱系观察在 JSON 与文本报告里都出现。"""
+    a = _make_db(tmp_path / "a.db")
+    b = _make_db(tmp_path / "b.db")
+    _add_seed(a, "s1", "pending")
+    _add_seed(b, "s1", "rejected")
+    _add_seed(b, "s2", "pending")
+
+    _inv().main([str(a), str(b), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["lineage_notes"]
+
+    _inv().main([str(a), str(b)])
+    assert "谱系观察" in capsys.readouterr().out
