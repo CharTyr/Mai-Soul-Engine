@@ -349,7 +349,9 @@ cd /path/to/Maibot
 - 可选能力默认关：**Notion**、**思维阁**、**@API**（`api.enabled` 默认 False）、**自我评价反馈回路**（`[self_reflection].enabled`）、**发酵**（`[thought_cabinet].fermentation_enabled`）；**P1 三观生长**受 `[worldview].p1_enabled` 控制。
 - **`plugin.mode = "off"`（schema 默认）**：不学习、不注入、不改人格；`observe` 只学习并生成候选（不注入、不改人格、接纳类命令被拒）；`apply` 才真正注入并允许改写人格。**`mode` 未显式设置时不隐式放行**：仅当旧配置 `enabled=true` 且 `mode` 为空字符串才映射为 `observe`，否则按 schema 默认 `off`（pydantic 会补齐默认值，所以「旧配置没写 mode」实际落在 `off`）。
 - **候选优先**：内化 LLM 的输出先过 `thought/candidate.py` 结构化校验，无效候选（空观点 / 数值无法解析 / 越界 / 类型错误）**拒绝且不写任何人格状态**，返回结构化原因；越界不静默 clamp。`spectrum_impact` 是 `spectrum_deltas` 的历史别名，仍须支持。**未知光谱轴 = 拒绝**（早期实现是「告警后丢弃」，已改）；**证据引用必须来自本次输入**（白名单精确匹配或输入全文子串），并校验来源范围与身份边界；**模型不得自选 `global` 作用域**——全局变化只能走显式 `/soul_promote_global`。
-- **内化幂等**：LLM 调用前先 `claim_seed_operation` 拿租约（`models/operations.py`），同一颗种子并发批准/崩后重试只施加一次光谱影响；终结时操作结果与种子终态在同一事务提交。
+- **内化幂等**：LLM 调用前先 `claim_seed_operation` 拿租约（`models/operations.py`），同一颗种子并发批准/崩后重试只施加一次光谱影响；终结时操作结果与种子终态在同一事务提交。**终结失败不得直接标 `failed`——走有界重试**（管理员的批准意图不能丢）。LLM 调用必须移出事务；提交时重验所有权 / 种子状态 / 运行模式，校验不过整笔回滚。
+- **演化批次必须同一事务**：光谱 + 群切片 + 情绪 + **游标推进**包成**同一个 COMMIT**，否则重放批次会重复施加影响。`models/p1.py` 的 `get_or_create_mood` / `save_mood` / `upsert_context_slice` 带 `commit=False`——**它们内部的 `conn.commit()` 会提前结束外层事务，把回滚变成空操作**（本轮查了一轮的根因），**别再往事务里放不带 `commit=False` 的写函数**。
+- **`/soul_reset` 必须严格确认**：确认串**整串精确匹配**（`disconfirm` 之类不算确认）、确认状态绑定**操作者 + 会话**（同群他人不得替他补确认）、有效期 300s、执行前**重新鉴权 + 重新查运行模式**；提示文案必须写明重置范围（全局）。**含糊请求不得默认解释为全局重置**。
 - **种子保留只碰终态**：`approved`/`rejected`/`expired`/`internalized` 才可回收，`pending`/`fermenting` 不得删（发酵中是在途工作，删了会连发酵输入一起丢）。
 - **槽位恢复**：重新启用 trait 时若其槽已被别的启用 trait 占用，**让出自己的槽号**（不挤走现占用者），避免撞 `cabinet_slot_no` 部分唯一索引。
 - **`local_first_evolution`（默认 true）**：开=内化观点写来源群、只影响该群，要全局须显式 `/soul_promote_global`（单群输入不足以改写 bot 的全局人格）；关=观点直接写全局（旧行为，可切回）。`/soul_health` 显示当前作用域。
