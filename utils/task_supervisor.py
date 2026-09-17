@@ -37,6 +37,8 @@ STATUS_FAILED = "failed"
 
 # 默认重启上限：连续异常结束超过该次数即判 failed，等人工介入。
 DEFAULT_MAX_RESTARTS = 5
+BACKOFF_BASE_SECONDS = 5.0     # 首次重启延迟
+BACKOFF_MAX_SECONDS = 300.0    # 退避上限（5 分钟）
 
 # 一次运行稳定持续超过该时长后崩溃，视为新的偶发事故而非"连续崩溃"
 HEALTHY_RUN_SECONDS = 3600.0
@@ -52,6 +54,9 @@ class TaskState:
     last_death_reason: str = ""
     last_change_at: float = field(default_factory=time.time)
     started_at: float = 0.0
+    last_success_at: float = 0.0    # 最近一次「确实干成了活」
+    next_retry_at: float = 0.0      # 退避后的下次重启时刻
+    heartbeat_at: float = 0.0       # 最近一次心跳（循环每轮打点）
 
 
 class TaskSupervisor:
@@ -96,12 +101,23 @@ class TaskSupervisor:
         return all(s.status != STATUS_FAILED for s in self._states.values())
 
     def describe(self) -> str:
-        """给看板用的一行汇总。"""
-        parts = [
-            f"{s.name}={s.status}" + (f"(重启{s.restart_count})" if s.restart_count else "")
-            for s in self._states.values()
-        ]
-        return "后台任务: " + " ".join(parts)
+        """给看板用的一行汇总（含最后成功时间与下次重试时刻）。"""
+        import datetime as _dt
+
+        def _fmt(ts: float) -> str:
+            return _dt.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M:%S") if ts else "—"
+
+        parts = []
+        for s in self._states.values():
+            line = f"{s.name}={s.status}"
+            if s.restart_count:
+                line += f"(重启{s.restart_count})"
+            if s.last_success_at:
+                line += f" 最后成功={_fmt(s.last_success_at)}"
+            if s.status == STATUS_RESTARTING and s.next_retry_at:
+                line += f" 下次重试={_fmt(s.next_retry_at)}"
+            parts.append(line)
+        return "后台任务: " + " | ".join(parts)
 
     # ── 状态迁移 ───────────────────────────────────────────────────
 
@@ -139,6 +155,35 @@ class TaskSupervisor:
             else STATUS_RESTARTING
         )
         state.last_change_at = current
+        state.next_retry_at = current + self.restart_delay(name)
+
+    def restart_delay(self, name: str) -> float:
+        """指数退避：5s → 10s → 20s …（上限 5 分钟）。
+
+        连环崩溃时不该每 5 秒就猛撞一次；退避给外部依赖（DB/网络）恢复时间。
+        """
+        state = self.state_of(name)
+        n = max(1, state.restart_count)
+        return min(BACKOFF_BASE_SECONDS * (2 ** (n - 1)), BACKOFF_MAX_SECONDS)
+
+    def note_success(self, name: str, *, now: float | None = None) -> None:
+        """任务**确实完成了一轮工作**时打点（不是「还活着」，是「干成了」）。"""
+        state = self.state_of(name)
+        t = time.time() if now is None else float(now)
+        state.last_success_at = t
+        state.heartbeat_at = t
+
+    def note_heartbeat(self, name: str, *, now: float | None = None) -> None:
+        """循环每轮打点（用于判断任务是否卡死，与「干成了」区分）。"""
+        state = self.state_of(name)
+        state.heartbeat_at = time.time() if now is None else float(now)
+
+    def ready_to_restart(self, name: str, *, now: float | None = None) -> bool:
+        """退避是否已到期（到期才允许重启）。"""
+        state = self.state_of(name)
+        if not state.next_retry_at:
+            return True
+        return (time.time() if now is None else float(now)) >= state.next_retry_at
 
     def reset(self, name: str) -> None:
         """清空某任务的重启计数（例如配置变更后由操作者重新启用）。"""

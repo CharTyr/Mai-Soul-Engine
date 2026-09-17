@@ -83,6 +83,9 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         self._wv_service: WorldviewService | None = None
         # /soul_reset 二次确认：{session_id: timestamp}
         self._reset_confirm_ts: dict[str, float] = {}
+        # 任务巡检：崩溃不必等配置热更就能被发现（见 _supervise_background_tasks）
+        self._supervisor_task: asyncio.Task | None = None
+        self._unloading = False
 
     # ===== 后台任务管理 =====
 
@@ -128,16 +131,7 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         """
         desired = self._compute_desired_tasks(self.config)
 
-        # 每个任务 (desired_key, 属性名, 循环方法名)
-        task_entries: list[tuple[str, str, str]] = [
-            ("evolution", "_evolution_task", "_evolution_loop"),
-            ("notion", "_notion_sync_task", "_notion_sync_loop"),
-            ("reflection", "_self_reflection_task", "_self_reflection_loop"),
-            ("fermentation", "_fermentation_task", "_fermentation_loop"),
-            ("internalization", "_internalization_task", "_internalization_loop"),
-        ]
-
-        for key, attr_name, loop_attr in task_entries:
+        for key, attr_name, loop_attr in self._TASK_ENTRIES:
             current = getattr(self, attr_name)
             action = self._task_action(current, desired[key])
 
@@ -186,6 +180,104 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
             setattr(self, attr_name, asyncio.create_task(loop_fn()))
             self._task_supervisor.note_started(key)
             logger.info("[Mai-Soul-Engine] %s 任务已启动", attr_name)
+
+    # 巡检间隔（秒）：任务崩溃后最多这么久被发现
+    SUPERVISOR_INTERVAL_SECONDS = 30.0
+
+    _TASK_ENTRIES: list[tuple[str, str, str]] = [
+        ("evolution", "_evolution_task", "_evolution_loop"),
+        ("notion", "_notion_sync_task", "_notion_sync_loop"),
+        ("reflection", "_self_reflection_task", "_self_reflection_loop"),
+        ("fermentation", "_fermentation_task", "_fermentation_loop"),
+        ("internalization", "_internalization_task", "_internalization_loop"),
+    ]
+
+    async def _supervise_background_tasks(self) -> None:
+        """**一次巡检**：发现意外结束的任务 → 记死亡 → 退避到期后重启。
+
+        与 `_reconcile_background_tasks` 的分工：那个是「配置驱动的对账」
+        （只在加载/热更时跑），这个是「时间驱动的巡检」——任务崩溃不会等
+        配置热更才发生，没有巡检就会一直假绿。
+
+        卸载期间（``_unloading``）**禁止重新拉起任务**。
+        """
+        if self._unloading:
+            return
+
+        desired = self._compute_desired_tasks(self.config)
+
+        for key, attr_name, loop_attr in self._TASK_ENTRIES:
+            current = getattr(self, attr_name)
+
+            if current is not None and not current.done():
+                continue  # 还活着
+
+            if current is not None and current.done():
+                # 意外结束（非我们主动 cancel）→ 记录死亡，退避后由后续巡检重启
+                reason = "任务提前结束"
+                if current.cancelled():
+                    reason = "任务被取消"
+                else:
+                    try:
+                        exc = current.exception()
+                        if exc is not None:
+                            reason = f"{type(exc).__name__}: {exc}"
+                    except asyncio.InvalidStateError:
+                        pass
+                self._task_supervisor.note_death(key, reason=reason)
+                setattr(self, attr_name, None)
+                logger.warning(
+                    "[Mai-Soul-Engine] 巡检发现 %s 意外结束（%s），将按退避重试",
+                    attr_name, reason,
+                )
+                continue
+
+            if not desired[key]:
+                continue
+            if not self._task_supervisor.start_allowed(key):
+                continue
+            if not self._task_supervisor.ready_to_restart(key):
+                continue  # 退避未到期
+
+            loop_fn = getattr(self, loop_attr)
+            setattr(self, attr_name, asyncio.create_task(loop_fn()))
+            self._task_supervisor.note_started(key)
+            logger.info("[Mai-Soul-Engine] 巡检已拉起 %s", attr_name)
+
+    async def _supervisor_loop(self) -> None:
+        """周期巡检循环（自身崩溃不拖垮插件）。"""
+        while True:
+            try:
+                await asyncio.sleep(self.SUPERVISOR_INTERVAL_SECONDS)
+                await self._supervise_background_tasks()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — 巡检自身异常必须吞掉后继续
+                logger.exception("[Mai-Soul-Engine] 任务巡检异常（继续下一轮）")
+
+    async def _stop_all_background_tasks(self) -> None:
+        """停止所有后台任务（卸载用；测试也用它收尾）。"""
+        for _key, attr_name, _loop in self._TASK_ENTRIES:
+            task = getattr(self, attr_name)
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 — 收尾时不应再抛
+                logger.debug("[Mai-Soul-Engine] %s 停止时异常（已忽略）", attr_name)
+            setattr(self, attr_name, None)
+        if self._supervisor_task is not None:
+            self._supervisor_task.cancel()
+            try:
+                await self._supervisor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                logger.debug("[Mai-Soul-Engine] 巡检任务停止时异常（已忽略）")
+            self._supervisor_task = None
 
     async def on_load(self) -> None:
         """插件加载：初始化数据库、执行旧版迁移、启动周期任务。"""
@@ -260,6 +352,11 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         except Exception as e:  # noqa: BLE001 — 补发失败不影响启动
             logger.warning("[Mai-Soul-Engine] 启动补发通知失败: %s: %s", type(e).__name__, e)
 
+        # 任务巡检：崩溃不必等配置热更才被发现（这里是唯一的自动恢复入口）
+        self._unloading = False
+        if self._supervisor_task is None or self._supervisor_task.done():
+            self._supervisor_task = asyncio.create_task(self._supervisor_loop())
+
     async def on_unload(self) -> None:
         """插件卸载：取消周期任务、清模块级状态、关闭数据库。
 
@@ -267,6 +364,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         「重启后状态诡异」的常见来源（库没关 → 连接泄漏；状态没清 → 旧冷却
         串到新实例），而失败原因必须留在日志里，不能无声跳过。
         """
+        # 先挡住巡检：否则这里刚 cancel，巡检又把任务拉起来（卸载期最典型的竞态）
+        self._unloading = True
 
         async def _step(label: str, fn: Any) -> None:
             try:
@@ -295,6 +394,9 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
                 )
             finally:
                 setattr(self, attr_name, None)
+
+        # 巡检先停：它是唯一会重新拉起任务的地方
+        await _step("停止任务巡检", lambda: _cancel_task("_supervisor_task"))
 
         for attr_name in (
             "_evolution_task",
