@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -85,8 +86,11 @@ def enqueue_notification(
     now = _dt_to_str(datetime.now())
     key = str(dedupe_key or "").strip()
     if not key:
-        # 无去重键时退化为按内容去重，避免同一文本重复堆积
-        key = f"auto:{abs(hash((stream_id, text)))}"
+        # 无去重键时退化为按内容去重。必须用**稳定哈希**：
+        # Python 的 hash() 受 PYTHONHASHSEED 影响、每个进程都不同，
+        # 用它做键会让插件重启后同一条通知被重复入队（去重形同虚设）。
+        digest = hashlib.sha256(f"{stream_id}\x00{text}".encode("utf-8")).hexdigest()[:24]
+        key = f"auto:{digest}"
 
     existing = conn.execute(
         "SELECT notification_id FROM soul_notifications WHERE dedupe_key = ?",

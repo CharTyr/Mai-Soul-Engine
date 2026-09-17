@@ -241,3 +241,41 @@ def test_drain_one_failure_does_not_block_others(soul_db: Any) -> None:
 
     assert stats["sent"] == 1
     assert stats["retry"] == 1
+
+
+def test_auto_dedupe_key_is_stable_across_processes(soul_db: Any) -> None:
+    """没有显式 dedupe_key 时，兜底键必须跨进程稳定。
+
+    旧实现用 `abs(hash((stream_id, text)))` —— Python 的 hash 受 PYTHONHASHSEED
+    影响，每个进程都不同，重启后同一条通知会被重复入队，去重形同虚设。
+    """
+    import hashlib
+    from pathlib import Path as _Path
+
+    source = _Path(_ntf().__file__).read_text()
+    assert "abs(hash(" not in source, "不得使用受 PYTHONHASHSEED 影响的 hash()"
+    assert "sha256" in source
+
+    # 同样的输入在两个独立进程里必须算出同一个键
+    import subprocess
+    import sys
+
+    code = (
+        "import hashlib;"
+        "print(hashlib.sha256('qq:p:1\\x00同一段文本'.encode('utf-8')).hexdigest()[:24])"
+    )
+    outs = {
+        subprocess.run([sys.executable, "-c", code], capture_output=True, text=True).stdout.strip()
+        for _ in range(2)
+    }
+    assert len(outs) == 1, "键必须跨进程稳定"
+
+
+def test_auto_key_dedupes_within_process(soul_db: Any) -> None:
+    """兜底键仍能正常去重。"""
+    ntf = _ntf()
+    a = ntf.enqueue_notification("", "qq:p:1", "同一段文本")
+    b = ntf.enqueue_notification("", "qq:p:1", "同一段文本")
+
+    assert a == b
+    assert ntf.count_notifications() == 1

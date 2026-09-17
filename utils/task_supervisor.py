@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 
 __all__ = [
+    "HEALTHY_RUN_SECONDS",
     "TASK_NAMES",
     "TaskState",
     "TaskSupervisor",
@@ -31,6 +32,9 @@ STATUS_FAILED = "failed"
 # 默认重启上限：连续异常结束超过该次数即判 failed，等人工介入。
 DEFAULT_MAX_RESTARTS = 5
 
+# 一次运行稳定持续超过该时长后崩溃，视为新的偶发事故而非"连续崩溃"
+HEALTHY_RUN_SECONDS = 3600.0
+
 
 @dataclass
 class TaskState:
@@ -41,6 +45,7 @@ class TaskState:
     restart_count: int = 0
     last_death_reason: str = ""
     last_change_at: float = field(default_factory=time.time)
+    started_at: float = 0.0
 
 
 class TaskSupervisor:
@@ -94,11 +99,13 @@ class TaskSupervisor:
 
     # ── 状态迁移 ───────────────────────────────────────────────────
 
-    def note_started(self, name: str) -> None:
-        """任务已启动（含重启成功）。"""
+    def note_started(self, name: str, *, started_at: float | None = None) -> None:
+        """任务已启动（含重启成功）。记录启动时刻，用于判断是否为「长期稳定后偶发崩溃」。"""
         state = self.state_of(name)
         state.status = STATUS_RUNNING
-        state.last_change_at = time.time()
+        now = time.time()
+        state.started_at = now if started_at is None else float(started_at)
+        state.last_change_at = now
 
     def note_stopped(self, name: str) -> None:
         """任务被**主动**停止（配置关闭/卸载）——不计入异常重启。"""
@@ -106,9 +113,18 @@ class TaskSupervisor:
         state.status = STATUS_STOPPED
         state.last_change_at = time.time()
 
-    def note_death(self, name: str, *, reason: str = "") -> None:
-        """任务**意外**结束（异常或提前 return）。"""
+    def note_death(self, name: str, *, reason: str = "", now: float | None = None) -> None:
+        """任务**意外**结束（异常或提前 return）。
+
+        若这次运行已经稳定持续了 ``HEALTHY_RUN_SECONDS`` 以上，视为**新的偶发事故**，
+        重启计数重新从 1 开始——否则一个每几天崩一次的任务会在几个月后被永久判
+        failed（这与"连续崩溃"是两码事）。短时间内的连环崩溃照旧累积。
+        """
         state = self.state_of(name)
+        current = time.time() if now is None else float(now)
+        ran_for = current - state.started_at if state.started_at else 0.0
+        if ran_for >= HEALTHY_RUN_SECONDS:
+            state.restart_count = 0
         state.restart_count += 1
         state.last_death_reason = str(reason)[:300]
         state.status = (
@@ -116,7 +132,7 @@ class TaskSupervisor:
             if state.restart_count >= self._max_restarts
             else STATUS_RESTARTING
         )
-        state.last_change_at = time.time()
+        state.last_change_at = current
 
     def reset(self, name: str) -> None:
         """清空某任务的重启计数（例如配置变更后由操作者重新启用）。"""

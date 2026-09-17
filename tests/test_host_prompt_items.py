@@ -265,3 +265,51 @@ def test_extract_user_texts_supports_legacy_messages() -> None:
         {"role": "user", "content": "旧二"},
     ]
     assert adapter.extract_user_texts(legacy, 6) == ["旧一", "旧二"]
+
+
+# ─── 热路径：只复制被改的部分，不做深拷贝 ────────────────────────────
+
+
+def test_untouched_parts_are_not_deep_copied() -> None:
+    """未改动的 part 必须保持**同一对象**（证明没有深拷贝整个提示项）。
+
+    planner 的 items 里可能有历史消息甚至 base64 图片；注入在热路径上，
+    深拷贝整个提示项等于每次请求白复制一大块数据。
+    """
+    hpi = _import_soul_submodule("utils.host_prompt_items")
+
+    image_part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    text_part = {"type": "text", "text": "宿主原始 system"}
+    items = [
+        {"item_type": "system", "meta": {}, "parts": [image_part, text_part]},
+    ]
+    original_system = items[0]
+    original_parts = original_system["parts"]
+
+    merged, strategy = hpi.append_block_to_first_system({"items": items}, "注入块")
+
+    assert strategy == hpi.STRATEGY_APPENDED
+    out_parts = merged["items"][0]["parts"]
+    # 图片 part 原样复用（同一对象）
+    assert out_parts[0] is image_part
+    # 被改的文本 part 是新对象，原对象不被污染
+    assert out_parts[1] is not text_part
+    assert text_part["text"] == "宿主原始 system"
+    # 宿主的 items / parts 容器也没被改动
+    assert original_system["parts"] is original_parts
+    assert len(original_parts) == 2
+
+
+def test_input_kwargs_are_not_mutated() -> None:
+    """入参 kwargs 与其中的 items 列表都不得被原地修改。"""
+    hpi = _import_soul_submodule("utils.host_prompt_items")
+
+    items = [{"item_type": "system", "meta": {}, "parts": [{"type": "text", "text": "S"}]}]
+    kwargs = {"items": items, "item_schema_version": 1}
+
+    merged, _ = hpi.append_block_to_first_system(kwargs, "块")
+
+    assert kwargs["items"] is items
+    assert items[0]["parts"][0]["text"] == "S"
+    assert merged is not kwargs
+    assert merged["item_schema_version"] == 1

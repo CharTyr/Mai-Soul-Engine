@@ -122,28 +122,46 @@ def extract_latest_user_text(kwargs: dict[str, Any]) -> str:
 
 
 def _append_to_item(item: dict, block: str) -> dict:
-    """把 block 追加到 item 的最后一个文本 part 上（无文本 part 时新增一个）。"""
-    new_item = copy.deepcopy(item)
-    parts = new_item.get("parts")
-    if not isinstance(parts, list):
-        parts = []
-        new_item["parts"] = parts
+    """把 block 追加到 item 的最后一个文本 part 上（无文本 part 时新增一个）。
 
-    for part in reversed(parts):
+    **只复制必要结构**（顶层 dict + parts 列表 + 被改的那一个 part），不做深拷贝：
+    这里的 item 可能带着历史消息甚至 base64 图片，而注入跑在 planner 热路径上，
+    深拷贝整个提示项等于每次请求都白复制一大块数据。
+    """
+    new_item = dict(item)
+    parts = item.get("parts")
+    if not isinstance(parts, list):
+        new_item["parts"] = [
+            {"type": "text", "text": DYNAMIC_LAYER_MARKER.lstrip() + block.lstrip()}
+        ]
+        return new_item
+
+    new_parts = list(parts)
+    for index in range(len(new_parts) - 1, -1, -1):
+        part = new_parts[index]
         if isinstance(part, dict) and str(part.get("type", "")).lower() == "text":
             existing = part.get("text")
-            part["text"] = (existing if isinstance(existing, str) else "") + DYNAMIC_LAYER_MARKER + block.lstrip()
+            new_parts[index] = {
+                **part,
+                "text": (existing if isinstance(existing, str) else "")
+                + DYNAMIC_LAYER_MARKER
+                + block.lstrip(),
+            }
+            new_item["parts"] = new_parts
             return new_item
 
-    parts.append({"type": "text", "text": DYNAMIC_LAYER_MARKER.lstrip() + block.lstrip()})
+    new_parts.append({"type": "text", "text": DYNAMIC_LAYER_MARKER.lstrip() + block.lstrip()})
+    new_item["parts"] = new_parts
     return new_item
 
 
 def _append_to_message(message: dict, block: str) -> dict:
-    """旧 messages 形状：追加到 content 末尾。"""
-    new_message = copy.deepcopy(message)
-    content = new_message.get("content")
-    new_message["content"] = (content if isinstance(content, str) else "") + DYNAMIC_LAYER_MARKER + block.lstrip()
+    """旧 messages 形状：追加到 content 末尾（同样只复制顶层）。"""
+    new_message = dict(message)
+    content = message.get("content")
+    new_message["content"] = (
+        (content if isinstance(content, str) else "") + DYNAMIC_LAYER_MARKER + block.lstrip()
+    )
     return new_message
 
 

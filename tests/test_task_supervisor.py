@@ -214,3 +214,40 @@ def test_reset_clears_failed_state() -> None:
 
     assert s.start_allowed("evolution") is True
     assert s.state_of("evolution").restart_count == 0
+
+
+# ─── 长时间稳定运行后的偶发崩溃不应累积 ─────────────────────────────
+
+
+def test_healthy_run_resets_failure_streak() -> None:
+    """任务稳定跑了很久才崩一次 → 视为新的偶发事故，不累积重启次数。
+
+    否则一个每几天崩一次的任务，几个月后会被永久判 failed——
+    这跟"连续崩溃"是两码事，不能混为一谈。
+    """
+    s = _sup().TaskSupervisor(max_restarts=3)
+
+    # 第一次崩溃后重启，随后"稳定运行"了 2 小时再崩
+    s.note_started("evolution")
+    s.note_death("evolution", reason="偶发1")
+    assert s.state_of("evolution").restart_count == 1
+
+    s.note_started("evolution", started_at=1000.0)
+    s.note_death("evolution", reason="偶发2", now=1000.0 + 7200)
+
+    assert s.state_of("evolution").restart_count == 1, "稳定运行后的崩溃应重新计数"
+    assert s.state_of("evolution").status == "restarting"
+
+
+def test_rapid_repeated_crashes_still_accumulate() -> None:
+    """短时间内连续崩溃 → 照旧累积，直到判 failed。"""
+    s = _sup().TaskSupervisor(max_restarts=2)
+
+    s.note_started("evolution", started_at=0.0)
+    s.note_death("evolution", reason="快速崩1", now=5.0)
+    s.note_started("evolution", started_at=5.0)
+    s.note_death("evolution", reason="快速崩2", now=10.0)
+
+    assert s.state_of("evolution").restart_count == 2
+    assert s.state_of("evolution").status == "failed"
+    assert s.start_allowed("evolution") is False

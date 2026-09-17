@@ -28,6 +28,7 @@ from ._conn import _dt_to_str, _get_conn, _str_to_dt
 
 # 投递阶段（T04）：区分「已选中」「已交回宿主」「已确认进入最终请求」
 DELIVERY_SELECTED = "selected"
+SNAPSHOT_MAX_CLAIM_AGE_SECONDS = 1800
 DELIVERY_HOOK_APPLIED = "hook_applied"
 DELIVERY_FINAL_VERIFIED = "final_request_verified"
 DELIVERY_UNVERIFIED = "unverified"
@@ -39,6 +40,7 @@ SNAPSHOT_DELIVERY_STATES = (
 )
 
 __all__ = [
+    "SNAPSHOT_MAX_CLAIM_AGE_SECONDS",
     "DELIVERY_FINAL_VERIFIED",
     "DELIVERY_HOOK_APPLIED",
     "DELIVERY_SELECTED",
@@ -174,15 +176,26 @@ def create_injection_snapshot(
     return snapshot_id
 
 
-def claim_snapshot_for_response(session_id: str, reply_message_id: str = "") -> InjectionSnapshot | None:
+def claim_snapshot_for_response(
+    session_id: str,
+    reply_message_id: str = "",
+    max_age_seconds: int = SNAPSHOT_MAX_CLAIM_AGE_SECONDS,
+) -> InjectionSnapshot | None:
     """为一条回复认领注入快照（FIFO，1:1 归属）。
 
     规则：
       1. 同一 ``reply_message_id`` 若已认领过快照 → 复用（replyer 重试属同一轮）。
-      2. 否则取该 session **最旧的未认领**快照并标记认领。
+      2. 否则取该 session **最旧的未认领且不过期**快照并标记认领。
       3. 无可认领快照 → 返回 None（合法降级：评估只基于 response 文本）。
 
-    旧实现取「最新一条」快照，同会话两轮并发时会张冠李戴（回复 A 配上快照 B）。
+    为什么 FIFO 而不是"最新一条"：旧实现取最新，同会话两轮并发时会把轮次 A 的
+    回复配到轮次 B 的快照上——trait 归属和触发上文一起串味。
+
+    为什么有 ``max_age_seconds``：宿主 planner/after_response 两个 payload 之间
+    **没有关联 id**（已核对宿主源码），所以配对只能是启发式。若某一轮生成失败、
+    after_response 没触发，它的快照会滞留；没有窗口限制的话，它会去配很久以后
+    另一轮的回复。超过窗口的快照不再被认领（返回 None = 合法降级），
+    但保留在表里可审计。
     """
     conn = _get_conn()
     if reply_message_id:
@@ -195,11 +208,13 @@ def claim_snapshot_for_response(session_id: str, reply_message_id: str = "") -> 
         if row:
             return _row_to_snapshot(row)
 
+    cutoff = _dt_to_str(datetime.now() - timedelta(seconds=int(max_age_seconds)))
     row = conn.execute(
         "SELECT * FROM soul_injection_snapshots "
         "WHERE session_id = ? AND (consumed_at IS NULL OR consumed_at = '') "
+        "AND created_at >= ? "
         "ORDER BY created_at ASC, rowid ASC LIMIT 1",
-        (session_id,),
+        (session_id, cutoff),
     ).fetchone()
     if not row:
         return None

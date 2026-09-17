@@ -142,3 +142,49 @@ def test_invalid_delivery_state_rejected(soul_db: Any) -> None:
     sid = _mk_snapshot(sr, "sess-8", ["trait-A"], ["触发"])
     assert sr.mark_snapshot_delivery_state(sid, "made_up_state") is False
     assert sr.get_injection_snapshot(sid).delivery_state == "selected"
+
+
+def test_stale_snapshot_is_not_claimed(soul_db: Any) -> None:
+    """滞留过久的快照不再被认领（宿主两个 payload 之间没有关联 id）。
+
+    没有这个窗口，某一轮生成失败留下的快照会去配很久以后另一轮的回复。
+    """
+    import asyncio
+    from datetime import datetime, timedelta
+
+    sr = _import_soul_submodule("models.self_reflection")
+    conn_mod = _import_soul_submodule("models._conn")
+
+    old_id = sr.create_injection_snapshot(
+        stream_id="s", session_id="sess",
+        trait_ids_json="[]", spectrum_json="{}", mood_json="{}",
+        selection_mode="spectrum_only",
+    )
+    # 手工把 created_at 推到窗口之外
+    stale = (datetime.now() - timedelta(seconds=sr.SNAPSHOT_MAX_CLAIM_AGE_SECONDS + 60))
+    conn = conn_mod._get_conn()
+    conn.execute(
+        "UPDATE soul_injection_snapshots SET created_at = ? WHERE snapshot_id = ?",
+        (conn_mod._dt_to_str(stale), old_id),
+    )
+    conn.commit()
+
+    assert sr.claim_snapshot_for_response("sess", "m-old") is None
+    # 仍然留在表里（可审计），只是不再参与配对
+    assert sr.get_injection_snapshot(old_id) is not None
+
+
+def test_fresh_snapshot_is_claimed_normally(soul_db: Any) -> None:
+    """窗口内的快照照常被认领（窗口不能把正常配对挡掉）。"""
+    sr = _import_soul_submodule("models.self_reflection")
+
+    fresh_id = sr.create_injection_snapshot(
+        stream_id="s", session_id="sess2",
+        trait_ids_json="[]", spectrum_json="{}", mood_json="{}",
+        selection_mode="tag_hit",
+    )
+
+    claimed = sr.claim_snapshot_for_response("sess2", "m-new")
+
+    assert claimed is not None
+    assert claimed.snapshot_id == fresh_id
