@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .host_config import fetch_config_value
+
 logger = logging.getLogger(__name__)
 
 # ── module-level cache ──────────────────────────────────────────────
@@ -58,28 +60,10 @@ def invalidate_host_persona_cache() -> None:
 
 
 async def _do_fetch(plugin: Any) -> HostPersonaSnapshot:
-    personality = ""
-    reply_style = ""
-
-    # personality.personality
-    try:
-        result = await plugin.ctx.call_capability(
-            "config.get", key="personality.personality", default="",
-        )
-        if isinstance(result, dict) and result.get("success"):
-            personality = str(result.get("value", "") or "").strip()
-    except (RuntimeError, ValueError, OSError, AttributeError):
-        pass
-
-    # personality.reply_style
-    try:
-        result = await plugin.ctx.call_capability(
-            "config.get", key="personality.reply_style", default="",
-        )
-        if isinstance(result, dict) and result.get("success"):
-            reply_style = str(result.get("value", "") or "").strip()
-    except (RuntimeError, ValueError, OSError, AttributeError):
-        pass
+    # config.get 在 SDK 2.x 会被解包成裸值（详见 utils.host_config），
+    # 旧的 dict+success 判断会把人设静默丢空。
+    personality = await fetch_config_value(plugin.ctx, "personality.personality")
+    reply_style = await fetch_config_value(plugin.ctx, "personality.reply_style")
 
     raw = {"personality": personality, "reply_style": reply_style}
 

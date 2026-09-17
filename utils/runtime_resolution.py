@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .host_config import fetch_config_value
 from .spectrum_utils import chat_config_to_stream_id, parse_chat_id
 
 logger = logging.getLogger(__name__)
@@ -133,23 +134,12 @@ def _extract_session_id(result: Any) -> str:
 
 
 async def _resolve_host_bot_account_id(plugin: Any) -> str:
-    # Accept both SDK 2.x unwrapped values and legacy result envelopes.
-    try:
-        result = await plugin.ctx.call_capability(
-            "config.get",
-            key="bot.qq_account",
-            default="",
-        )
-    except (RuntimeError, ValueError, OSError, AttributeError):
-        return ""
+    """读取宿主 bot QQ 号。
 
-    if isinstance(result, str):
-        return result.strip()
-    if isinstance(result, dict):
-        if "success" in result and not result.get("success"):
-            return ""
-        return str(result.get("value", "") or "").strip()
-    return ""
+    config.get 在 SDK 2.x 会被解包成**裸值**，旧的 success/value 判断会静默丢空
+    （取不到身份 → bot 自发言混入演化）。归一逻辑见 ``utils.host_config``。
+    """
+    return await fetch_config_value(plugin.ctx, "bot.qq_account")
 
 
 async def resolve_host_bot_self_ids(plugin: Any) -> list[str]:

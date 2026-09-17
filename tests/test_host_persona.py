@@ -93,6 +93,45 @@ def test_fetch_host_persona_failure_tolerant() -> None:
     assert snap.reply_style_text == ""
 
 
+def test_fetch_host_persona_unwrapped_bare_value() -> None:
+    """SDK 2.x 解包后 config.get 返回裸字符串 → 必须能读到人设。
+
+    旧实现要求 dict + success，裸值被丢弃，人设基底静默变空（内化时等于没有基底）。
+    """
+    hp = _import_soul_submodule("utils.host_persona")
+    hp.invalidate_host_persona_cache()
+
+    class Ctx:
+        _call_count = 0
+
+        async def call_capability(self, capability: str, **kwargs):
+            self._call_count += 1
+            if self._call_count == 1:
+                return "温柔体贴的大姐姐"
+            return "每句带语气词"
+
+    snap = asyncio.run(hp.fetch_host_persona(SimpleNamespace(ctx=Ctx())))
+
+    assert snap.source == "config.get"
+    assert snap.personality_text == "温柔体贴的大姐姐"
+    assert snap.reply_style_text == "每句带语气词"
+
+
+def test_fetch_host_persona_unwrapped_empty_marks_empty() -> None:
+    """裸空串 → source='empty'（不是伪造的 config.get）。"""
+    hp = _import_soul_submodule("utils.host_persona")
+    hp.invalidate_host_persona_cache()
+
+    class Ctx:
+        async def call_capability(self, capability: str, **kwargs):
+            return ""
+
+    snap = asyncio.run(hp.fetch_host_persona(SimpleNamespace(ctx=Ctx())))
+
+    assert snap.source == "empty"
+    assert snap.personality_text == ""
+
+
 def test_format_persona_for_prompt_empty() -> None:
     """Empty snapshot → empty string."""
     hp = _import_soul_submodule("utils.host_persona")
