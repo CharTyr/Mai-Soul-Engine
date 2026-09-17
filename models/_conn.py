@@ -27,7 +27,7 @@ __all__ = [
     "init_db",
 ]
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -181,7 +181,11 @@ _CREATE_SQL = [
         spectrum_json TEXT DEFAULT '{}',
         mood_json TEXT DEFAULT '{}',
         selection_mode TEXT DEFAULT '',
-        context_fingerprint TEXT DEFAULT ''
+        context_fingerprint TEXT DEFAULT '',
+        context_json TEXT DEFAULT '[]',
+        consumed_at TEXT DEFAULT '',
+        consumed_by_reply TEXT DEFAULT '',
+        delivery_state TEXT DEFAULT 'selected'
     )
     """,
     """
@@ -392,6 +396,43 @@ def _run_migrations() -> None:
         except Exception as e:
             _record_migration_failed(2, "v2_cabinet_slot_no", str(e))
             raise
+
+    if current < 3:
+        _record_migration_start(3, "v3_snapshot_pairing_and_delivery")
+        try:
+            _run_v3_migration()
+            _record_migration_success(3, "v3_snapshot_pairing_and_delivery")
+            _set_schema_version(3)
+        except Exception as e:
+            _record_migration_failed(3, "v3_snapshot_pairing_and_delivery", str(e))
+            raise
+
+
+def _run_v3_migration() -> None:
+    """Version 3：注入快照配对与投递态。
+
+    为 ``soul_injection_snapshots`` 增补：
+    - ``context_json``：触发上文随快照落库（此前放在 session 键的内存缓存里，
+      同会话并发两轮会互相顶掉）
+    - ``consumed_at`` / ``consumed_by_reply``：回复认领标记，保证一条快照
+      只被一条回复消费（FIFO 认领，同一 reply 重试可复用）
+    - ``delivery_state``：selected → hook_applied → final_request_verified /
+      unverified，区分「已选中」「已交回宿主」「已确认进入最终请求」
+    """
+    for column, ddl in (
+        ("context_json", "TEXT DEFAULT '[]'"),
+        ("consumed_at", "TEXT DEFAULT ''"),
+        ("consumed_by_reply", "TEXT DEFAULT ''"),
+        ("delivery_state", "TEXT DEFAULT 'selected'"),
+    ):
+        if not _has_column("soul_injection_snapshots", column):
+            _add_column("soul_injection_snapshots", column, ddl)
+    conn = _get_conn()
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshot_claim "
+        "ON soul_injection_snapshots(session_id, consumed_at, created_at)"
+    )
+    conn.commit()
 
 
 def _run_v1_migration() -> None:

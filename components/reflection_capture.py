@@ -53,15 +53,18 @@ _context_cache: dict[str, tuple[list[str], float]] = {}
 _context_cache_lock = _threading.Lock()
 
 
-def cache_session_context(session_id: str, prompt_items: list[dict]) -> None:
+def cache_session_context(session_id: str, prompt_items: list[dict]) -> list[str]:
     """从 before_request 的宿主提示项提取最近用户消息，缓存供 after_response 用。
 
     after_response payload 不含触发消息，故在此缓存。空 session_id 不缓存。
     形状差异（Context Item / 旧 messages）由 ``utils.host_prompt_items`` 处理。
     sanitize_text 在锁外执行（含正则替换，列表极长时避免阻塞事件循环）。
+
+    Returns:
+        本次缓存的上下文行（供调用方随注入快照一起落库；同会话并发时以快照为准）。
     """
     if not session_id:
-        return
+        return []
     # 锁外：提取 + 脱敏（CPU 密集，不需要锁保护）
     lines: list[str] = []
     for content in extract_user_texts(prompt_items, _CONTEXT_MAX_LINES):
@@ -76,6 +79,7 @@ def cache_session_context(session_id: str, prompt_items: list[dict]) -> None:
             for k, _ in sorted_items[: len(sorted_items) // 2]:
                 _context_cache.pop(k, None)
         _context_cache[session_id] = (lines, time.time())
+    return lines
 
 
 def take_cached_context(session_id: str) -> list[str]:
@@ -103,10 +107,14 @@ def maybe_write_injection_snapshot(
     spectrum_dict: dict,
     mood_lines: list[str],
     selection_mode: str,
+    context_lines: list[str] | None = None,
 ) -> str:
     """仅 ``[self_reflection].enabled`` 时落注入快照，返回 snapshot_id（否则空串）。
 
-    防表膨胀：调用方无需判断 enabled，本函数内部守卫（oracle 修订点 4）。
+    防表膨胀：调用方无需判断 enabled，本函数内部守卫。
+
+    ``context_lines``（本轮触发上文）随快照落库：同会话并发两轮时，
+    放在 session 键缓存里会互相顶掉，回复会配上别人的触发消息。
     """
     if not plugin.config.self_reflection.enabled:
         return ""
@@ -115,6 +123,7 @@ def maybe_write_injection_snapshot(
     fp_src = f"{session_id}|{','.join(trait_ids)}|{selection_mode}"
     fingerprint = hashlib.md5(fp_src.encode()).hexdigest()[:16]
     mood_json = _json.dumps({"lines": mood_lines}, ensure_ascii=False) if mood_lines else "{}"
+    context_json = _json.dumps(list(context_lines), ensure_ascii=False) if context_lines else "[]"
     try:
         from ..models.self_reflection import create_injection_snapshot
 
@@ -126,6 +135,7 @@ def maybe_write_injection_snapshot(
             mood_json=mood_json,
             selection_mode=selection_mode,
             context_fingerprint=fingerprint,
+            context_json=context_json,
         )
     except Exception:
         logger.exception("[SelfReflection] 写注入快照失败")
@@ -157,13 +167,24 @@ async def capture_after_response(plugin, source: str, **kwargs: Any) -> dict[str
     stream_id = session_id or "global"
     try:
         from ..models.self_reflection import (
+            claim_snapshot_for_response,
             create_pending_reflection,
-            get_latest_snapshot_for_session,
         )
 
-        snapshot = get_latest_snapshot_for_session(session_id)
+        # FIFO 认领：同会话并发两轮各认领自己的快照；同一 reply 重试复用同一快照
+        snapshot = claim_snapshot_for_response(session_id, reply_message_id)
         snapshot_id = snapshot.snapshot_id if snapshot else ""
-        context_lines = take_cached_context(session_id)
+        context_lines: list[str] = []
+        if snapshot is not None:
+            try:
+                parsed = _json.loads(snapshot.context_json or "[]")
+                if isinstance(parsed, list):
+                    context_lines = [str(x) for x in parsed if str(x).strip()]
+            except (ValueError, TypeError):
+                context_lines = []
+        if not context_lines:
+            # 兼容旧快照（写入时尚未带 context_json）——空内容是合法降级
+            context_lines = take_cached_context(session_id)
         context_json = _json.dumps(context_lines, ensure_ascii=False) if context_lines else "[]"
         create_pending_reflection(
             stream_id=stream_id,

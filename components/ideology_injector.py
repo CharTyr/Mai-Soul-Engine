@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models.ideology_model import get_or_create_spectrum, query_active_traits_for_injection
+from ..models.self_reflection import DELIVERY_HOOK_APPLIED, mark_snapshot_delivery_state
 from ..prompts.ideology_prompts import build_ideology_prompt
 from ..utils.host_prompt_items import (
     append_block_to_first_system,
@@ -785,11 +786,17 @@ async def inject_ideology(plugin, **kwargs: Any) -> dict[str, Any]:
         await _mark_injected(stream_id, [t.trait_id for t in selected], now_ts)
 
     # ── 9. 自评捕获：缓存上下文 + 落注入快照（仅 self_reflection.enabled）──
-    # 缓存始终使用原始提示项（未注入），保持现有语义
-    cache_session_context(session_id, prompt_items)
-    maybe_write_injection_snapshot(
+    # 上下文同时进快照：同会话并发两轮时以快照为准，session 缓存只作旧数据兜底
+    context_lines = cache_session_context(session_id, prompt_items)
+    snapshot_id = maybe_write_injection_snapshot(
         plugin, session_id, stream_id, selected, spectrum_dict, mood_lines, selection_mode,
+        context_lines=context_lines,
     )
+    if snapshot_id:
+        # INJECTION_SNAPSHOT_TODO: 这里只能确认「已交回宿主」。
+        # 宿主 planner hook 不提供请求后回调，无法从插件侧确认最终请求内容，
+        # 故不写 final_request_verified（那是观测能力，不是自我声明）。
+        mark_snapshot_delivery_state(snapshot_id, DELIVERY_HOOK_APPLIED)
 
     return {
         "success": True,

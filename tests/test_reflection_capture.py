@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import json
+
 import asyncio
 from types import SimpleNamespace
 from typing import Any
@@ -125,8 +127,13 @@ def test_capture_after_response_missing_context_degrades(soul_db: Any) -> None:
     assert pendings[0].context_json == "[]"
 
 
-def test_capture_pairs_with_latest_snapshot(soul_db: Any) -> None:
-    """同 session 多次注入，after_response 配对最近一条 snapshot（oracle 补充测试）。"""
+def test_capture_pairs_with_oldest_unclaimed_snapshot(soul_db: Any) -> None:
+    """同 session 多次注入，after_response 认领**最旧的未认领**快照（FIFO）。
+
+    原测试断言「配对最近一条快照」（写两条 → 配第二条）。该行为在并发下是错的：
+    轮次 A 的回复会配上轮次 B 刚写入的快照，导致评估用错 trait 集合。
+    新契约是 FIFO 认领 + 1:1 归属，故此处按新行为重写。
+    """
     rc = _import_soul_submodule("components.reflection_capture")
     plugin = _plugin_with_self_reflection(enabled=True)
     # 写两条快照，第二条 selection_mode 不同
@@ -135,10 +142,38 @@ def test_capture_pairs_with_latest_snapshot(soul_db: Any) -> None:
     asyncio.run(rc.capture_after_response(plugin, "replyer", response="回复", session_id="sess", reply_message_id="m1"))
     pendings = soul_db.list_pending_reflections(limit=10)
     assert len(pendings) == 1
-    # 配对的应是最近那条（tag_hit）
+    # 认领的是最旧那条（spectrum_only），而不是最近写入的 tag_hit
     snap = soul_db.get_injection_snapshot(pendings[0].snapshot_id)
     assert snap is not None
-    assert snap.selection_mode == "tag_hit"
+    assert snap.selection_mode == "spectrum_only"
+
+    # 第二条回复认领剩下那条 —— 两条互不重叠
+    asyncio.run(rc.capture_after_response(plugin, "replyer", response="回复2", session_id="sess", reply_message_id="m2"))
+    pendings = soul_db.list_pending_reflections(limit=10)
+    assert len(pendings) == 2
+    by_reply = {p.reply_message_id: p for p in pendings}
+    second = soul_db.get_injection_snapshot(by_reply["m2"].snapshot_id)
+    assert second is not None
+    assert second.selection_mode == "tag_hit"
+    first = soul_db.get_injection_snapshot(by_reply["m1"].snapshot_id)
+    assert first.selection_mode == "spectrum_only"
+
+
+def test_capture_uses_context_bound_to_its_snapshot(soul_db: Any) -> None:
+    """触发上下文来自快照本身，不是被后一轮覆盖的 session 缓存。"""
+    rc = _import_soul_submodule("components.reflection_capture")
+    plugin = _plugin_with_self_reflection(enabled=True)
+    rc.maybe_write_injection_snapshot(
+        plugin, "sess-ctx", "g", [], {"sincerity": 50}, [], "spectrum_only",
+        context_lines=["第一轮触发"],
+    )
+    rc.maybe_write_injection_snapshot(
+        plugin, "sess-ctx", "g", [], {"sincerity": 50}, [], "spectrum_only",
+        context_lines=["第二轮触发"],
+    )
+    asyncio.run(rc.capture_after_response(plugin, "replyer", response="回复", session_id="sess-ctx", reply_message_id="m1"))
+    pendings = soul_db.list_pending_reflections(limit=10)
+    assert json.loads(pendings[0].context_json) == ["第一轮触发"]
 
 
 def test_replyer_capture_deduplicates_reply_message_id(soul_db: Any) -> None:

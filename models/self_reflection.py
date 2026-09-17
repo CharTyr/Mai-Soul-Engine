@@ -6,12 +6,15 @@
 - ``soul_pending_reflections``：after_response hook 捕获的待评价回复队列（异步消费）。
 - ``soul_self_reflections``：评价完成后的一致性记录（带偏离轴/原因/关联种子）。
 
-设计要点（见 .slim/deepwork/self-reflection.md oracle 审查）：
+设计要点：
 - snapshot 仅在 ``[self_reflection].enabled=True`` 时写入（防膨胀）。
 - pending 有 TTL/上限 + ``expired`` 状态，防队列堆积静默故障。
-- pending.context_json 可空——after_response payload 不含触发消息，context 从
-  before_request 内存缓存取；空 context 是合法降级路径（评估只基于 response 文本）。
-- 一个 snapshot 可配对多条 pending（planner + replyer，或 replyer 多次重试）→ 1:N。
+- **触发上文随快照落库**（``snapshot.context_json``）：旧实现放在 session 键的内存
+  缓存里，同会话两轮并发会互相顶掉，导致回复配上别人的触发消息。
+- **配对是 FIFO 认领**：``claim_snapshot_for_response`` 取该 session 最旧的未认领
+  快照并标记认领；同一 ``reply_message_id`` 的重试复用同一快照（1:N 仅限同轮重试）。
+- **投递阶段三段可观测**：``selected`` → ``hook_applied`` → ``final_request_verified``；
+  无法确认最终请求时落 ``unverified``，不得当成成功。
 """
 
 from __future__ import annotations
@@ -23,10 +26,28 @@ from typing import Any
 
 from ._conn import _dt_to_str, _get_conn, _str_to_dt
 
+# 投递阶段（T04）：区分「已选中」「已交回宿主」「已确认进入最终请求」
+DELIVERY_SELECTED = "selected"
+DELIVERY_HOOK_APPLIED = "hook_applied"
+DELIVERY_FINAL_VERIFIED = "final_request_verified"
+DELIVERY_UNVERIFIED = "unverified"
+SNAPSHOT_DELIVERY_STATES = (
+    DELIVERY_SELECTED,
+    DELIVERY_HOOK_APPLIED,
+    DELIVERY_FINAL_VERIFIED,
+    DELIVERY_UNVERIFIED,
+)
+
 __all__ = [
+    "DELIVERY_FINAL_VERIFIED",
+    "DELIVERY_HOOK_APPLIED",
+    "DELIVERY_SELECTED",
+    "DELIVERY_UNVERIFIED",
+    "SNAPSHOT_DELIVERY_STATES",
     "InjectionSnapshot",
     "PendingReflection",
     "SelfReflection",
+    "claim_snapshot_for_response",
     "cleanup_expired_pending",
     "cleanup_orphan_snapshots",
     "count_pending_reflections",
@@ -40,6 +61,7 @@ __all__ = [
     "list_recent_reflections",
     "list_unconsumed_reflections_for_correction",
     "mark_reflections_correction_consumed",
+    "mark_snapshot_delivery_state",
     "update_pending_status",
 ]
 
@@ -49,7 +71,12 @@ __all__ = [
 
 @dataclass
 class InjectionSnapshot:
-    """一次 before_request 注入的快照（命中的 trait / 光谱 / 情绪 / 选择模式）。"""
+    """一次 before_request 注入的快照（命中的 trait / 光谱 / 情绪 / 选择模式）。
+
+    ``context_json``：该轮注入时的触发上文，随快照走（不同轮次不互相覆盖）。
+    ``consumed_at`` / ``consumed_by_reply``：被哪条回复认领，保证 1:1 归属。
+    ``delivery_state``：投递阶段（详见 ``SNAPSHOT_DELIVERY_STATES``）。
+    """
 
     snapshot_id: str = ""
     stream_id: str = ""
@@ -60,6 +87,10 @@ class InjectionSnapshot:
     mood_json: str = "{}"
     selection_mode: str = ""
     context_fingerprint: str = ""
+    context_json: str = "[]"
+    consumed_at: str = ""
+    consumed_by_reply: str = ""
+    delivery_state: str = DELIVERY_SELECTED
 
 
 @dataclass
@@ -111,15 +142,20 @@ def create_injection_snapshot(
     mood_json: str,
     selection_mode: str,
     context_fingerprint: str = "",
+    context_json: str = "[]",
 ) -> str:
-    """落一条注入快照，返回 snapshot_id。仅在 [self_reflection].enabled 时调用。"""
+    """落一条注入快照，返回 snapshot_id。仅在 [self_reflection].enabled 时调用。
+
+    ``context_json`` 是该轮的触发上文，随快照一起落库，保证并发轮次互不覆盖。
+    """
     conn = _get_conn()
     snapshot_id = uuid.uuid4().hex
     conn.execute(
         """INSERT INTO soul_injection_snapshots
            (snapshot_id, stream_id, session_id, created_at, trait_ids_json,
-            spectrum_json, mood_json, selection_mode, context_fingerprint)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            spectrum_json, mood_json, selection_mode, context_fingerprint,
+            context_json, delivery_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             snapshot_id,
             stream_id,
@@ -130,10 +166,72 @@ def create_injection_snapshot(
             mood_json,
             selection_mode,
             context_fingerprint,
+            context_json,
+            DELIVERY_SELECTED,
         ),
     )
     conn.commit()
     return snapshot_id
+
+
+def claim_snapshot_for_response(session_id: str, reply_message_id: str = "") -> InjectionSnapshot | None:
+    """为一条回复认领注入快照（FIFO，1:1 归属）。
+
+    规则：
+      1. 同一 ``reply_message_id`` 若已认领过快照 → 复用（replyer 重试属同一轮）。
+      2. 否则取该 session **最旧的未认领**快照并标记认领。
+      3. 无可认领快照 → 返回 None（合法降级：评估只基于 response 文本）。
+
+    旧实现取「最新一条」快照，同会话两轮并发时会张冠李戴（回复 A 配上快照 B）。
+    """
+    conn = _get_conn()
+    if reply_message_id:
+        row = conn.execute(
+            "SELECT * FROM soul_injection_snapshots "
+            "WHERE session_id = ? AND consumed_by_reply = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (session_id, reply_message_id),
+        ).fetchone()
+        if row:
+            return _row_to_snapshot(row)
+
+    row = conn.execute(
+        "SELECT * FROM soul_injection_snapshots "
+        "WHERE session_id = ? AND (consumed_at IS NULL OR consumed_at = '') "
+        "ORDER BY created_at ASC, rowid ASC LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    if not row:
+        return None
+
+    now = _dt_to_str(datetime.now())
+    cursor = conn.execute(
+        "UPDATE soul_injection_snapshots SET consumed_at = ?, consumed_by_reply = ? "
+        "WHERE snapshot_id = ? AND (consumed_at IS NULL OR consumed_at = '')",
+        (now, reply_message_id, row["snapshot_id"]),
+    )
+    conn.commit()
+    if cursor.rowcount != 1:
+        # 并发下被抢走：本次不强行复用，退回无快照降级
+        return None
+    fresh = conn.execute(
+        "SELECT * FROM soul_injection_snapshots WHERE snapshot_id = ?",
+        (row["snapshot_id"],),
+    ).fetchone()
+    return _row_to_snapshot(fresh) if fresh else None
+
+
+def mark_snapshot_delivery_state(snapshot_id: str, state: str) -> bool:
+    """推进注入快照的投递阶段；未知状态拒绝写入。"""
+    if state not in SNAPSHOT_DELIVERY_STATES:
+        return False
+    conn = _get_conn()
+    cursor = conn.execute(
+        "UPDATE soul_injection_snapshots SET delivery_state = ? WHERE snapshot_id = ?",
+        (state, snapshot_id),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
 
 
 def get_latest_snapshot_for_session(session_id: str) -> InjectionSnapshot | None:
@@ -434,6 +532,12 @@ def _row_to_snapshot(row) -> InjectionSnapshot:
         mood_json=row["mood_json"],
         selection_mode=row["selection_mode"],
         context_fingerprint=row["context_fingerprint"],
+        context_json=row["context_json"] if "context_json" in row.keys() else "[]",
+        consumed_at=row["consumed_at"] if "consumed_at" in row.keys() else "",
+        consumed_by_reply=row["consumed_by_reply"] if "consumed_by_reply" in row.keys() else "",
+        delivery_state=(
+            row["delivery_state"] if "delivery_state" in row.keys() else DELIVERY_SELECTED
+        ),
     )
 
 
