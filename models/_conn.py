@@ -27,7 +27,7 @@ __all__ = [
     "init_db",
 ]
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 # ─── 全局连接管理 ───────────────────────────────────────────────────
 
@@ -234,6 +234,20 @@ _CREATE_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS soul_seed_operations (
+        operation_id TEXT PRIMARY KEY,
+        seed_id TEXT NOT NULL,
+        operation_type TEXT DEFAULT 'internalize',
+        status TEXT DEFAULT 'running',
+        attempt INTEGER DEFAULT 1,
+        lease_expires_at TEXT DEFAULT '',
+        result_json TEXT DEFAULT '',
+        error TEXT DEFAULT '',
+        created_at TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS soul_schema_migrations (
         version INTEGER NOT NULL,
         name TEXT NOT NULL,
@@ -406,6 +420,51 @@ def _run_migrations() -> None:
         except Exception as e:
             _record_migration_failed(3, "v3_snapshot_pairing_and_delivery", str(e))
             raise
+
+    if current < 4:
+        _record_migration_start(4, "v4_seed_operation_lease")
+        try:
+            _run_v4_migration()
+            _record_migration_success(4, "v4_seed_operation_lease")
+            _set_schema_version(4)
+        except Exception as e:
+            _record_migration_failed(4, "v4_seed_operation_lease", str(e))
+            raise
+
+
+def _run_v4_migration() -> None:
+    """Version 4：种子操作租约（幂等内化的单赢家认领）。
+
+    并发批准或崩后重试会让同一颗种子被内化两次（光谱影响施加两遍）。
+    该表以「同一 (seed_id, operation_type) 只允许一条 running」的部分唯一索引
+    做单赢家认领；租约过期后可被抢占重试。
+    """
+    conn = _get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS soul_seed_operations (
+            operation_id TEXT PRIMARY KEY,
+            seed_id TEXT NOT NULL,
+            operation_type TEXT DEFAULT 'internalize',
+            status TEXT DEFAULT 'running',
+            attempt INTEGER DEFAULT 1,
+            lease_expires_at TEXT DEFAULT '',
+            result_json TEXT DEFAULT '',
+            error TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_seed_op_running "
+        "ON soul_seed_operations(seed_id, operation_type) WHERE status = 'running'"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_seed_op_status "
+        "ON soul_seed_operations(status, lease_expires_at)"
+    )
+    conn.commit()
 
 
 def _run_v3_migration() -> None:

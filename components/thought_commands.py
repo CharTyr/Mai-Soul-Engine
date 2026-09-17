@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import re
 from typing import Any
@@ -188,15 +189,53 @@ async def handle_seed_approve(plugin: Any, stream_id: str, **kwargs: Any) -> tup
             return True, msg, True
 
     # 旧行为：立即内化（fermentation_enabled=false）
+    # 先认领操作租约：并发批准 / 崩后重试时同一颗种子只能有一个内化在跑，
+    # 且结果只落一次（否则光谱影响会被施加两遍）。
+    from ..models.operations import (
+        claim_seed_operation,
+        finish_seed_operation,
+        release_seed_operation,
+    )
+
+    operation_id = claim_seed_operation(seed_id)
+    if not operation_id:
+        msg = (
+            f"⏳ 种子 {seed_id} 正在处理中（或已内化过），本次跳过。\n"
+            f"若上一次进程中断，租约到期后可重试。"
+        )
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
     engine = InternalizationEngine(plugin)
     dedup_cfg = {
         "enabled": bool(plugin.config.thought_cabinet.auto_dedup_enabled),
         "threshold": float(plugin.config.thought_cabinet.auto_dedup_threshold),
     }
-    result = await engine.internalize_seed(seed, dedup=dedup_cfg)
+    try:
+        result = await engine.internalize_seed(seed, dedup=dedup_cfg)
+    except Exception as exc:  # noqa: BLE001 — 内化异常必须释放租约，否则种子卡死
+        release_seed_operation(operation_id, error=f"{type(exc).__name__}: {exc}")
+        logger.exception("种子 %s 内化异常", seed_id)
+        msg = f"❌ 种子 {seed_id} 内化失败，已释放租约可重试"
+        await plugin.ctx.send.text(msg, stream_id)
+        return True, msg, True
+
+    if not result.get("success"):
+        release_seed_operation(operation_id, error=str(result.get("error") or "内化未成功"))
 
     if result["success"]:
-        manager.mark_seed_status(seed_id, "approved")
+        # 操作结果 + 种子终态同事务提交（重复终结幂等返回 False）
+        finish_seed_operation(
+            operation_id,
+            seed_status="approved",
+            result_json=_json.dumps(
+                {
+                    "trait_id": result.get("trait_id", ""),
+                    "merged": bool(result.get("merged", False)),
+                },
+                ensure_ascii=False,
+            ),
+        )
         impact = result["spectrum_impact"]
         impact_str = ", ".join([f"{k}:{v:+d}" for k, v in impact.items() if v != 0])
         trait_id = result.get("trait_id", "")

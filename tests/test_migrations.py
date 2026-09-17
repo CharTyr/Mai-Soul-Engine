@@ -33,7 +33,7 @@ def _get_im() -> Any:
 def test_fresh_init_schema_version(soul_db: Any) -> None:
     """新库 init_db 后 PRAGMA user_version == CURRENT_SCHEMA_VERSION。"""
     conn_mod = _get_conn_mod()
-    assert conn_mod.CURRENT_SCHEMA_VERSION == 3
+    assert conn_mod.CURRENT_SCHEMA_VERSION == 4
     assert conn_mod._get_schema_version() == conn_mod.CURRENT_SCHEMA_VERSION
 
 

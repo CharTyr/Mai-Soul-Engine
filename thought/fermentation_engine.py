@@ -470,6 +470,20 @@ async def _finalize_fermentation(plugin: Any, seed: Any) -> None:
         "threshold": float(plugin.config.thought_cabinet.auto_dedup_threshold),
     }
 
+    # 单赢家租约：发酵终审可能被多轮循环/并发触发，重复内化会把光谱影响施加两遍
+    from ..models.operations import (
+        claim_seed_operation,
+        finish_seed_operation,
+        release_seed_operation,
+    )
+
+    operation_id = claim_seed_operation(seed.seed_id)
+    if not operation_id:
+        logger.debug(
+            "[Fermentation] 种子 %s 已有内化在跑或已完成，本轮跳过", seed.seed_id,
+        )
+        return
+
     try:
         result = await engine.internalize_seed(
             seed_dict,
@@ -477,11 +491,19 @@ async def _finalize_fermentation(plugin: Any, seed: Any) -> None:
             fermentation_inputs=fermentation_texts,
         )
     except Exception as e:
+        release_seed_operation(operation_id, error=f"{type(e).__name__}: {e}")
         logger.error("[Fermentation] 种子 %s 最终内化异常: %s", seed.seed_id, e, exc_info=True)
         return  # 保持 fermenting 状态，下轮重试
 
     if result.get("success"):
-        mark_seed_internalized(seed.seed_id)
+        # 操作结果 + 种子终态同事务提交
+        finish_seed_operation(
+            operation_id,
+            seed_status="internalized",
+            result_json=json.dumps(
+                {"trait_id": result.get("trait_id", "")}, ensure_ascii=False,
+            ),
+        )
         trait_id = result.get("trait_id", "")
         logger.info(
             "[Fermentation] 种子 %s 发酵内化完成: trait=%s, thought=%s...",
@@ -491,6 +513,7 @@ async def _finalize_fermentation(plugin: Any, seed: Any) -> None:
         if trait_id:
             await _try_notify_admin_fermented(plugin, seed, trait_id)
     else:
+        release_seed_operation(operation_id, error=str(result.get("error") or "unknown"))
         logger.warning(
             "[Fermentation] 种子 %s 发酵内化失败: %s（保持 fermenting，下轮重试）",
             seed.seed_id, result.get("error", "unknown"),
