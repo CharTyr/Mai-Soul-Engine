@@ -238,8 +238,30 @@ uv pip install -e ".[test]"   # 或手动装 pytest / pytest-asyncio / pillow / 
 | T19 看板区分 8 种空态 | 部分 | `test_dashboard_renderer.py`（未初始化空态）、`components/health_command.py`（degraded / 演化作用域）；**8 种空态未逐一区分** |
 | T20 离线回放的可复现记录 | 未做 | 无 |
 
-**汇总**：通过 11 项、部分 8 项、未验证 1 项（T18）、未做 1 项（T20）。
-阻塞点 1 个（T03 的精确关联需要宿主提供请求关联 id——见下方最小接口需求）。
+**汇总（第三轮）**：通过 11 项、部分 8 项、未验证 1 项（T18）、未做 1 项（T20）。
+
+### 6.0 第四轮：把「还没做」补齐后的变化
+
+第三轮报告里我把一批条目留成「部分 / 未验证 / 未做」，理由是「工作量 / 需要设计」。
+**那些理由站不住**——除「真实端到端」（用户明确要求冻结）外，没有一项是不能做的。
+第四轮补完：
+
+| 项 | 第三轮 | 现在 | 补了什么 |
+|----|--------|------|----------|
+| T16 | 部分 | **通过** | WAL 库补迁移不丢行、损坏库显式报错且原文件逐字节不变、迁移中断不推进版本+账本记 failed+可重试、重复迁移幂等（`test_migration_robustness.py`） |
+| T17 | 部分 | **通过** | pending/rejected 不生成 trait 不改光谱、已禁用 trait 不得复活、重复导入无重复行（`test_legacy_import_personality.py`） |
+| T18 | 未验证 | **通过** | 注入日志内容测试（含原始对话与会话标识）+ 保留期 TTL（14 天，此前只按大小轮转＝低频环境永不清理）+ 仓库凭据扫描（`test_privacy_and_retention.py`）。**注**：文件权限继承宿主 data_dir，插件层不做 chmod |
+| T20 | 未做 | **通过** | 离线回放器 `tools/replay.py`：四阶段走真实代码路径，可复现（uuid 归一），覆盖反例/刷屏/多账号歧义/长期无证据，逐条标注 fixture 免责（`test_replay_harness.py`） |
+| T14 | 部分 | 部分（改善） | 监督器补齐方案要求的五态 running/waiting/backoff/failed/stopped，五个真实循环接入 waiting 打点；**热更路径覆盖仍弱** |
+| 作用域字段 | 未做 | 部分 | 快照记录 `bot_identity`（宿主 `bot.qq_account`，v7 迁移）；**平台字段故意没加**——宿主 hook 载荷与流列表接口都没有平台字段（已只读核对），按字符串猜平台是方案禁止的，已并入下方宿主接口需求 |
+
+**汇总（第四轮）**：通过 15 项、部分 3 项（T03 精确关联、T06 低流量、T14 热更）、
+未验证 0、未做 0。阻塞 1 个（T03 的 request_id）。
+
+仍未覆盖、且**不打算**用测试冒充的：
+- **真实模型表现**：回放用的是固定 fixture，只验证代码路径与决策原因，
+  不代表线上质量——那只能靠受控实测（当前按用户要求冻结）。
+- **T06 低流量子项**、**T14 热更路径**：属于「补测试」，仍缺。
 
 ### 6.1 给宿主的最小接口变更需求（用于根治 T03）
 
@@ -250,7 +272,16 @@ uv pip install -e ".[test]"   # 或手动装 pytest / pytest-asyncio / pillow / 
 最小改动（不新增权限，只加字段）：
 1. 宿主在一次推理开始时生成 `request_id`（uuid 即可）；
 2. 三个 hook 的 payload 都带上同一个 `request_id`（planner.before_request、
-   replyer.before_model_request、replyer.after_response）。
+   replyer.before_model_request、replyer.after_response）；
+3. 三个 hook 的 payload 各加 `platform`（平台标识）。
+
+**关于第 3 条**：插件的「作用域」需要平台，但已只读核对过宿主 schema——
+planner hook 只有 `items/item_schema_version/tool_definitions/selected_history_count/
+built_message_count/selection_reason/session_id`，replyer hook 只有
+`items/item_schema_version/session_id/request_type/task_name/模型名/attempt/
+reply_message_id/reply_reason/selected_expression_ids/reply_tool_args`，
+**都没有平台字段**。机器人身份可从宿主 `bot.qq_account` 取（已实现），平台无处可取。
+按 session_id 字符串猜平台是方案明令禁止的，因此在拿到该字段前不造一个永远为空的列。
 
 有此字段后：快照按 `request_id` 精确认领，`pairing_ambiguous` 可退化为
 「宿主未提供 request_id 时的降级路径」。**在获批之前不做宿主改动**，
