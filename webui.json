@@ -1,0 +1,525 @@
+{
+  "schema_version": 2,
+  "required_capabilities": [
+    "declarative_basic"
+  ],
+  "workspace_title": "灵魂引擎",
+  "pages": [
+    {
+      "id": "overview",
+      "title": "运行概览",
+      "placement": "workspace",
+      "icon": "chart",
+      "poll_interval_seconds": 15,
+      "queries": {
+        "overview": {
+          "api": "soul.webui_overview"
+        }
+      },
+      "content": [
+        {
+          "type": "text",
+          "label": "运行模式",
+          "value": {
+            "source": "overview",
+            "field": "mode",
+            "scope": "query"
+          }
+        },
+        {
+          "type": "text",
+          "label": "操作提示",
+          "value": {
+            "source": "overview",
+            "field": "notice",
+            "scope": "query"
+          }
+        },
+        {
+          "type": "grid",
+          "columns": 3,
+          "children": [
+            {
+              "type": "stat",
+              "label": "待审种子",
+              "value": {
+                "source": "overview",
+                "field": "pending",
+                "scope": "query"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "发酵中",
+              "value": {
+                "source": "overview",
+                "field": "fermenting",
+                "scope": "query"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "固化观点",
+              "value": {
+                "source": "overview",
+                "field": "traits",
+                "scope": "query"
+              }
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "label": "后台任务",
+          "value": {
+            "source": "overview",
+            "field": "tasks",
+            "scope": "query"
+          },
+          "columns": [
+            {
+              "field": "name",
+              "label": "任务"
+            },
+            {
+              "field": "status",
+              "label": "状态"
+            }
+          ],
+          "selection": "task"
+        },
+        {
+          "type": "card",
+          "label": "已选任务详情",
+          "when": {
+            "reference": {
+              "scope": "selection",
+              "source": "task",
+              "field": "name"
+            },
+            "operator": "not_empty"
+          },
+          "children": [
+            {
+              "type": "text",
+              "label": "任务",
+              "value": {
+                "scope": "selection",
+                "source": "task",
+                "field": "name"
+              }
+            },
+            {
+              "type": "text",
+              "label": "重启次数",
+              "value": {
+                "scope": "selection",
+                "source": "task",
+                "field": "restart_count"
+              }
+            },
+            {
+              "type": "text",
+              "label": "最近异常",
+              "value": {
+                "scope": "selection",
+                "source": "task",
+                "field": "error"
+              }
+            },
+            {
+              "type": "text",
+              "label": "最近成功",
+              "value": {
+                "scope": "selection",
+                "source": "task",
+                "field": "last_success"
+              }
+            },
+            {
+              "type": "text",
+              "label": "最近心跳",
+              "value": {
+                "scope": "selection",
+                "source": "task",
+                "field": "heartbeat"
+              }
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "label": "已初始化光谱（最多 20 个作用域）",
+          "value": {
+            "source": "overview",
+            "field": "spectra"
+          },
+          "columns": [
+            {
+              "field": "scope",
+              "label": "作用域"
+            },
+            {
+              "field": "summary",
+              "label": "四轴光谱"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "label": "最近 30 条内化操作",
+          "value": {
+            "source": "overview",
+            "field": "operations",
+            "scope": "query"
+          },
+          "columns": [
+            {
+              "field": "seed_id",
+              "label": "种子 ID"
+            },
+            {
+              "field": "status",
+              "label": "内化状态"
+            }
+          ],
+          "selection": "operation"
+        },
+        {
+          "type": "card",
+          "label": "已选操作详情",
+          "when": {
+            "reference": {
+              "scope": "selection",
+              "source": "operation",
+              "field": "operation_id"
+            },
+            "operator": "not_empty"
+          },
+          "children": [
+            {
+              "type": "text",
+              "label": "操作 ID",
+              "value": {
+                "scope": "selection",
+                "source": "operation",
+                "field": "operation_id"
+              }
+            },
+            {
+              "type": "text",
+              "label": "种子 ID",
+              "value": {
+                "scope": "selection",
+                "source": "operation",
+                "field": "seed_id"
+              }
+            },
+            {
+              "type": "text",
+              "label": "状态",
+              "value": {
+                "scope": "selection",
+                "source": "operation",
+                "field": "status"
+              }
+            },
+            {
+              "type": "text",
+              "label": "错误",
+              "value": {
+                "scope": "selection",
+                "source": "operation",
+                "field": "error"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "seeds",
+      "title": "思维种子审批",
+      "placement": "workspace",
+      "icon": "list",
+      "poll_interval_seconds": 0,
+      "queries": {
+        "seeds": {
+          "api": "soul.webui_seeds",
+          "parameters": {
+            "status": {
+              "type": "string",
+              "required": true,
+              "choices": [
+                "all",
+                "pending",
+                "fermenting",
+                "queued"
+              ]
+            }
+          }
+        },
+        "overview": {
+          "api": "soul.webui_overview"
+        }
+      },
+      "actions": {
+        "approve": {
+          "api": "soul.webui_approve",
+          "parameters": {
+            "seed_id": {
+              "type": "string",
+              "required": true,
+              "max_length": 128
+            }
+          },
+          "arguments": {
+            "seed_id": {
+              "source": "seed",
+              "field": "seed_id",
+              "scope": "selection"
+            }
+          },
+          "confirmation": "批准这颗种子进入发酵或后台内化？"
+        },
+        "reject": {
+          "api": "soul.webui_reject",
+          "parameters": {
+            "seed_id": {
+              "type": "string",
+              "required": true,
+              "max_length": 128
+            }
+          },
+          "arguments": {
+            "seed_id": {
+              "source": "seed",
+              "field": "seed_id",
+              "scope": "selection"
+            }
+          },
+          "confirmation": "拒绝这颗种子？审核记录将保留。"
+        }
+      },
+      "content": [
+        {
+          "type": "text",
+          "label": "操作提示",
+          "value": {
+            "source": "overview",
+            "field": "notice",
+            "scope": "query"
+          }
+        },
+        {
+          "type": "text",
+          "value": "点击一行立即打开详情；弹窗顶部显示列表序号和种子 ID，可直接批准或拒绝。推理、证据与上下文默认展开，可按需收起。审批后自动刷新，最多显示最近 200 颗待审／发酵种子。"
+        },
+        {
+          "type": "select",
+          "name": "status",
+          "label": "状态筛选",
+          "value": "all",
+          "options": [
+            {
+              "label": "全部",
+              "value": "all"
+            },
+            {
+              "label": "待审核",
+              "value": "pending"
+            },
+            {
+              "label": "发酵中",
+              "value": "fermenting"
+            },
+            {
+              "label": "内化排队中",
+              "value": "queued"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "label": "待审与发酵种子",
+          "value": {
+            "source": "seeds",
+            "field": "rows",
+            "scope": "query"
+          },
+          "columns": [
+            {
+              "field": "position",
+              "label": "序号"
+            },
+            {
+              "field": "seed_type",
+              "label": "主题"
+            },
+            {
+              "field": "status_label",
+              "label": "状态"
+            }
+          ],
+          "selection": "seed",
+          "detail": "seed_detail"
+        },
+        {
+          "type": "dialog",
+          "label": "种子详情与审批",
+          "children": [
+            {
+              "type": "text",
+              "label": "当前查看的列表序号",
+              "value": {
+                "scope": "selection",
+                "source": "seed",
+                "field": "position"
+              }
+            },
+            {
+              "type": "text",
+              "label": "种子 ID",
+              "value": {
+                "source": "seed",
+                "field": "seed_id",
+                "scope": "selection"
+              }
+            },
+            {
+              "type": "text",
+              "label": "状态",
+              "value": {
+                "source": "seed",
+                "field": "status_label",
+                "scope": "selection"
+              }
+            },
+            {
+              "type": "text",
+              "label": "主题",
+              "value": {
+                "source": "seed",
+                "field": "seed_type",
+                "scope": "selection"
+              }
+            },
+            {
+              "type": "button",
+              "label": "批准种子",
+              "action": "approve",
+              "variant": "primary",
+              "disabled_when": {
+                "reference": {
+                  "source": "seed",
+                  "field": "reviewable",
+                  "scope": "selection"
+                },
+                "operator": "equals",
+                "expected": false
+              },
+              "disabled_reason": "仅 apply 模式可审核尚未入队的待审种子"
+            },
+            {
+              "type": "button",
+              "label": "拒绝种子",
+              "action": "reject",
+              "variant": "danger",
+              "disabled_when": {
+                "reference": {
+                  "source": "seed",
+                  "field": "reviewable",
+                  "scope": "selection"
+                },
+                "operator": "equals",
+                "expected": false
+              },
+              "disabled_reason": "仅 apply 模式可审核尚未入队的待审种子"
+            },
+            {
+              "type": "text",
+              "label": "事件",
+              "value": {
+                "source": "seed",
+                "field": "event",
+                "scope": "selection"
+              }
+            },
+            {
+              "type": "collapsible",
+              "label": "推理、证据与上下文",
+              "children": [
+                {
+                  "type": "text",
+                  "label": "来源会话",
+                  "value": {
+                    "source": "seed",
+                    "field": "stream_id",
+                    "scope": "selection"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "推理",
+                  "value": {
+                    "source": "seed",
+                    "field": "reasoning",
+                    "scope": "selection"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "证据",
+                  "value": {
+                    "source": "seed",
+                    "field": "evidence",
+                    "scope": "selection"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "原始上下文",
+                  "value": {
+                    "source": "seed",
+                    "field": "context",
+                    "scope": "selection"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "潜在影响",
+                  "value": {
+                    "source": "seed",
+                    "field": "impact",
+                    "scope": "selection"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "置信度",
+                  "value": {
+                    "source": "seed",
+                    "field": "confidence",
+                    "scope": "selection"
+                  }
+                },
+                {
+                  "type": "text",
+                  "label": "强度",
+                  "value": {
+                    "source": "seed",
+                    "field": "intensity",
+                    "scope": "selection"
+                  }
+                }
+              ],
+              "default_open": true
+            }
+          ],
+          "name": "seed_detail"
+        }
+      ],
+      "auto_refresh": true
+    }
+  ]
+}

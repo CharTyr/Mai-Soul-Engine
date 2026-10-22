@@ -23,6 +23,7 @@ from maibot_sdk import API, Command, HookHandler, MaiBotPlugin
 from maibot_sdk.types import HookMode, HookOrder, ErrorPolicy
 
 from .plugin_ui_schema import CONFIG_VERSION, MaiSoulEngineConfig
+from .components.webui_api import SoulWebUI
 from .worldview.service import WorldviewConfigView, WorldviewService, config_from_plugin
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 # ─── 插件类 ─────────────────────────────────────────────────────────
 
 
-class MaiSoulEnginePlugin(MaiBotPlugin):
+class MaiSoulEnginePlugin(SoulWebUI, MaiBotPlugin):
     """Mai-Soul-Engine 插件 — 通过聊天塑造 MaiBot 三观。"""
 
     config_model = MaiSoulEngineConfig
@@ -61,7 +62,8 @@ class MaiSoulEnginePlugin(MaiBotPlugin):
         return base_normalized, changed or base_changed or base_normalized != raw_config
 
     def __init__(self) -> None:
-        super().__init__()
+        # 类型协议混入不参与构造，直接初始化 SDK 的组件注册状态。
+        MaiBotPlugin.__init__(self)
         self._plugin_dir: Path = Path(__file__).parent
         self._data_dir: Path = self._plugin_dir / "data"
         self._data_dir_source: str = "plugin_dir"
